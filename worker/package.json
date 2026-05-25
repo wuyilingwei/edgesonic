@@ -1,0 +1,38 @@
+{
+  "name": "edgesonic",
+  "version": "0.1.0",
+  "description": "Serverless Subsonic-compatible music streaming on Cloudflare Workers",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:local": "wrangler d1 execute edgesonic-db --local --file",
+    "db:migrate:remote": "wrangler d1 execute edgesonic-db --file",
+    "db:seed": "npx tsx scripts/seed.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wuyilingwei/edgesonic.git"
+  },
+  "keywords": [
+    "subsonic",
+    "cloudflare-workers",
+    "music",
+    "serverless"
+  ],
+  "author": "wuyilingwei",
+  "license": "ALE-1.1 AND GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/wuyilingwei/edgesonic/issues"
+  },
+  "homepage": "https://github.com/wuyilingwei/edgesonic#readme",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260524.1",
+    "typescript": "^6.0.3",
+    "wrangler": "^4.94.0"
+  },
+  "dependencies": {
+    "hono": "^4.12.22"
+  }
+}
