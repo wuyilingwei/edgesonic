@@ -1,0 +1,13 @@
+{
+  "name": "edgesonic-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["worker", "web"],
+  "scripts": {
+    "dev:worker": "npm run dev -w worker",
+    "dev:web": "npm run dev -w web",
+    "build:web": "npm run build -w web",
+    "typecheck": "npm run typecheck -w worker",
+    "deploy": "npm run build:web && npm run deploy -w worker"
+  }
+}
