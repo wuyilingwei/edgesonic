@@ -1,0 +1,33 @@
+name = "edgesonic"
+main = "src/index.ts"
+compatibility_date = "2025-05-24"
+compatibility_flags = ["nodejs_compat"]
+account_id = "df4481f3ce1fa0394b4617442a97d147"
+
+# Routes — deploy to custom domain
+routes = [
+  { pattern = "edgesonic.wuyilingwei.com", custom_domain = true }
+]
+
+# Static Assets (Vue frontend)
+[assets]
+directory = "../web/dist"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "edgesonic-db"
+database_id = "b91ba5a7-08c4-4887-a439-e1d226dcd8e6"
+
+# KV Namespace
+[[kv_namespaces]]
+binding = "KV"
+id = "83b4b384134a4402ba1e7adc26d5539f"
+
+# R2 Bucket
+[[r2_buckets]]
+binding = "MUSIC_BUCKET"
+bucket_name = "edgesonic-music"
+
+[observability]
+enabled = true
