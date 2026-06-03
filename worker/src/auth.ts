@@ -13,17 +13,207 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { md5 } from "./utils/md5";
-import { createQueries } from "./db/queries";
 import type { User } from "./types/entities";
+
+// ============================================================================
+// Path Classification
+// ============================================================================
 
 const NO_AUTH_PATHS = new Set([
   "/rest/ping",
   "/rest/getLicense",
   "/rest/getOpenSubsonicExtensions",
+  "/rest/loginWeb",
 ]);
 
+const GUEST_ALLOWED_PATHS = new Set([
+  "/rest/stream",
+  "/rest/getCoverArt",
+  "/rest/getArtists",
+  "/rest/getArtist",
+  "/rest/getAlbum",
+  "/rest/getSong",
+  "/rest/getIndexes",
+  "/rest/getMusicFolders",
+  "/rest/getGenres",
+  "/rest/getSongsByGenre",
+  "/rest/getAlbumList2",
+  "/rest/search3",
+]);
+
+const BROWSER_ONLY_PATHS = new Set([
+  "/rest/getStorageSources",
+  "/rest/addStorageSource",
+  "/rest/deleteStorageSource",
+  "/rest/getUsers",
+  "/rest/createUser",
+  "/rest/updateUser",
+  "/rest/deleteUser",
+  "/rest/getUser",
+  "/rest/getPermissions",
+  "/rest/updatePermission",
+  "/rest/upload",
+  "/rest/download",
+  "/rest/getCredentials",
+  "/rest/createCredential",
+  "/rest/deleteCredential",
+  "/rest/getSessions",
+  "/rest/revokeSession",
+]);
+
+// ============================================================================
+// SHA-256 Hash (for master password verification)
+// ============================================================================
+async function sha256(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hash))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+// ============================================================================
+// Subsonic Credential Lookup
+// ============================================================================
+async function findSubsonicCredential(
+  db: D1Database,
+  kv: KVNamespace,
+  username: string,
+  token: string,
+  salt: string,
+): Promise<string | null> {
+  // 1. Check subsonic_credentials table
+  const creds = await db
+    .prepare("SELECT password FROM subsonic_credentials WHERE username = ?")
+    .bind(username)
+    .all<{ password: string }>();
+
+  for (const cred of creds.results) {
+    if (md5(cred.password + salt) === token) {
+      // Update last_used
+      await db
+        .prepare("UPDATE subsonic_credentials SET last_used = ? WHERE username = ? AND password = ?")
+        .bind(Math.floor(Date.now() / 1000), username, cred.password)
+        .run();
+      return cred.password;
+    }
+  }
+
+  // 2. Check active sessions (session token as Subsonic password)
+  const sessions = await db
+    .prepare("SELECT token FROM sessions WHERE username = ? AND expires_at > ?")
+    .bind(username, Math.floor(Date.now() / 1000))
+    .all<{ token: string }>();
+
+  for (const sess of sessions.results) {
+    if (md5(sess.token + salt) === token) {
+      return sess.token; // session token used as credential
+    }
+  }
+
+  // 3. Also try KV cache for sessions (faster lookup)
+  const kvSessionToken = await kv.get(`session:${username}`);
+  if (kvSessionToken && md5(kvSessionToken + salt) === token) {
+    return kvSessionToken;
+  }
+
+  return null;
+}
+
+// ============================================================================
+// User Lookup (by username)
+// ============================================================================
+async function lookupUser(db: D1Database, username: string): Promise<User | null> {
+  return db
+    .prepare("SELECT username, master_password AS password, level, enabled FROM users WHERE username = ?")
+    .bind(username)
+    .first<User>();
+}
+
+// ============================================================================
+// Web Login Handler
+// ============================================================================
+export const webLoginRoutes = new Hono();
+
+webLoginRoutes.post("/rest/loginWeb", async (c) => {
+  const db = c.env.DB;
+  const kv = c.env.KV;
+
+  let body: { username?: string; password?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: "Invalid JSON body" }, 400);
+  }
+
+  const { username, password } = body;
+  if (!username || !password) {
+    return c.json({ ok: false, error: "Missing username or password" }, 400);
+  }
+
+  const user = await lookupUser(db, username);
+  if (!user || !user.enabled) {
+    return c.json({ ok: false, error: "Invalid credentials" }, 401);
+  }
+
+  // Verify master password (SHA-256)
+  const hash = await sha256(password);
+  if (hash !== user.password) {
+    return c.json({ ok: false, error: "Invalid credentials" }, 401);
+  }
+
+  // Create session
+  const sessionId = crypto.randomUUID();
+  const sessionToken = crypto.randomUUID().replace(/-/g, "");
+  const expiresAt = Math.floor(Date.now() / 1000) + 86400; // 24 hours
+  const userAgent = c.req.header("User-Agent") || "";
+
+  await db
+    .prepare(
+      "INSERT INTO sessions (id, username, token, user_agent, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .bind(sessionId, username, sessionToken, userAgent, expiresAt, Math.floor(Date.now() / 1000))
+    .run();
+
+  // Cache session in KV for fast lookup
+  await kv.put(`session:${username}`, sessionToken, { expirationTtl: 86400 });
+
+  return c.json({
+    ok: true,
+    username,
+    level: user.level,
+    sessionToken,
+    expiresAt,
+  });
+});
+
+webLoginRoutes.post("/rest/logoutWeb", async (c) => {
+  const db = c.env.DB;
+  const kv = c.env.KV;
+
+  let body: { sessionToken?: string; username?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: "Invalid JSON" }, 400);
+  }
+
+  if (body.sessionToken) {
+    await db.prepare("DELETE FROM sessions WHERE token = ?").bind(body.sessionToken).run();
+  }
+  if (body.username) {
+    await kv.delete(`session:${body.username}`);
+  }
+
+  return c.json({ ok: true });
+});
+
+// ============================================================================
+// Main Auth Middleware (Subsonic API)
+// ============================================================================
 export const authMiddleware = createMiddleware<{
   Bindings: Env;
   Variables: { user: User };
@@ -39,6 +229,7 @@ export const authMiddleware = createMiddleware<{
   const token = q.t;
   const salt = q.s;
   const apiKey = q.apiKey;
+  const guestToken = q.guestToken;
   const db = c.env.DB;
   const kv = c.env.KV;
 
@@ -48,39 +239,86 @@ export const authMiddleware = createMiddleware<{
     });
   }
 
-  const queries = createQueries(db);
-  const user = await queries.getUser(username);
-
-  if (!user) {
+  const user = await lookupUser(db, username);
+  if (!user || !user.enabled) {
     return c.text(subsonicError(40, "Wrong username or password"), 401, {
       "Content-Type": "application/xml; charset=UTF-8",
     });
   }
 
+  // --- Authenticate ---
+  let authenticated = false;
+
   if (apiKey) {
+    // API Key authentication (via KV)
     const storedUser = await kv.get(`apikey:${apiKey}`);
-    if (storedUser !== username) {
-      return c.text(subsonicError(40, "Wrong username or password"), 401, {
-        "Content-Type": "application/xml; charset=UTF-8",
-      });
+    if (storedUser === username) {
+      authenticated = true;
     }
   } else if (token && salt) {
-    const expected = md5(user.password + salt);
-    if (expected !== token) {
-      return c.text(subsonicError(40, "Wrong username or password"), 401, {
+    // Subsonic token auth: try multiple credential sources
+    // 1. Subsonic credentials + sessions
+    const cred = await findSubsonicCredential(db, kv, username, token, salt);
+    if (cred) {
+      authenticated = true;
+    }
+  }
+
+  if (!authenticated) {
+    return c.text(subsonicError(40, "Wrong username or password"), 401, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+
+  // --- Guest (Level 0) Access Control ---
+  if (user.level === 0) {
+    if (guestToken) {
+      const tokenData = await db
+        .prepare("SELECT * FROM guest_tokens WHERE token = ? AND expires_at > ?")
+        .bind(guestToken, Math.floor(Date.now() / 1000))
+        .first();
+      if (!tokenData) {
+        return c.text(subsonicError(50, "Guest access denied or token expired"), 403, {
+          "Content-Type": "application/xml; charset=UTF-8",
+        });
+      }
+    } else if (GUEST_ALLOWED_PATHS.has(path)) {
+      const guestPerm = await db
+        .prepare("SELECT enabled FROM user_permissions WHERE level = 0 AND permission = 'browse'")
+        .first<{ enabled: number }>();
+      if (!guestPerm || !guestPerm.enabled) {
+        return c.text(subsonicError(50, "Guest access is disabled"), 403, {
+          "Content-Type": "application/xml; charset=UTF-8",
+        });
+      }
+    } else {
+      return c.text(subsonicError(50, "Guest access not permitted"), 403, {
         "Content-Type": "application/xml; charset=UTF-8",
       });
     }
-  } else {
-    return c.text(subsonicError(40, "Missing authentication"), 401, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
+  }
+
+  // --- Browser-Only Guard ---
+  if (BROWSER_ONLY_PATHS.has(path)) {
+    const userAgent = c.req.header("User-Agent") || "";
+    const isBrowser =
+      /Mozilla|Chrome|Safari|Firefox|Edge/i.test(userAgent) &&
+      !/Subsonic|DSub|Ultrasonic|MusicStash|play:Sub|Symfonium/i.test(userAgent);
+    const webSession = c.req.header("Cookie") || "";
+    if (!isBrowser && !guestToken && !webSession.includes("edgesonic_session")) {
+      return c.text(subsonicError(50, "This endpoint requires browser access"), 403, {
+        "Content-Type": "application/xml; charset=UTF-8",
+      });
+    }
   }
 
   c.set("user", user);
   return next();
 });
 
+// ============================================================================
+// Permission Middleware
+// ============================================================================
 export const permissionMiddleware = (requiredPermission: string) =>
   createMiddleware<{
     Bindings: Env;
@@ -90,13 +328,11 @@ export const permissionMiddleware = (requiredPermission: string) =>
     const db = c.env.DB;
 
     const perm = await db
-      .prepare(
-        "SELECT * FROM user_permissions WHERE level = ? AND permission = ? AND enabled = 1"
-      )
+      .prepare("SELECT enabled, max_rph FROM user_permissions WHERE level = ? AND permission = ?")
       .bind(user.level, requiredPermission)
-      .first<{ max_rph: number }>();
+      .first<{ enabled: number; max_rph: number }>();
 
-    if (!perm) {
+    if (!perm || !perm.enabled) {
       return c.text(subsonicError(50, "Not authorized"), 403, {
         "Content-Type": "application/xml; charset=UTF-8",
       });
@@ -117,6 +353,27 @@ export const permissionMiddleware = (requiredPermission: string) =>
     return next();
   });
 
+// ============================================================================
+// Minimum Level Guard
+// ============================================================================
+export function minLevel(level: number) {
+  return createMiddleware<{
+    Bindings: Env;
+    Variables: { user: User };
+  }>(async (c, next) => {
+    const user = c.get("user");
+    if (user.level < level) {
+      return c.text(subsonicError(50, "Insufficient permissions"), 403, {
+        "Content-Type": "application/xml; charset=UTF-8",
+      });
+    }
+    return next();
+  });
+}
+
+// ============================================================================
+// Subsonic XML Error Helper
+// ============================================================================
 export function subsonicError(code: number, message: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <subsonic-response xmlns="http://subsonic.org/restapi" status="failed" version="1.16.1">
@@ -125,5 +382,10 @@ export function subsonicError(code: number, message: string): string {
 }
 
 function escapeXml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }

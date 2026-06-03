@@ -58,9 +58,11 @@ export interface SongInstance {
   id: string;
   master_id: string;
   source_id: string;
-  original_id: string | null;
+  source_type: string;           // 'original' | 'transcoded' | 'cached' | 'external'
+  source_dedup_key: string | null;
+  parent_instance_id: string | null;
   storage_uri: string;
-  instance_type: number;
+  transcode_profile: string | null;
   suffix: string;
   content_type: string | null;
   bit_rate: number | null;
@@ -88,11 +90,30 @@ export interface Annotation {
 
 export interface User {
   username: string;
-  password: string;
+  password: string;               // aliased from master_password in queries
   level: number;
   enabled: number;
   created_at: number;
   updated_at: number;
+}
+
+export interface Session {
+  id: string;
+  username: string;
+  token: string;
+  user_agent: string | null;
+  ip_address: string | null;
+  expires_at: number;
+  created_at: number;
+}
+
+export interface SubsonicCredential {
+  id: string;
+  username: string;
+  password: string;
+  label: string | null;
+  last_used: number | null;
+  created_at: number;
 }
 
 export interface StorageSource {

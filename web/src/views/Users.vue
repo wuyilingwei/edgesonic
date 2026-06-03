@@ -15,75 +15,113 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { useAuth } from "../api";
+import { useAuth, parseXmlAttrs } from "../api";
 
-const { isAdmin, authFetch } = useAuth();
+const { isAdmin, isSuperAdmin, authFetch, authPost } = useAuth();
 const users = ref<Array<{ username: string; level: number; enabled: boolean }>>([]);
 const showForm = ref(false);
 const form = ref({ username: "", password: "", level: 1 });
+const editingUser = ref("");
+const toast = ref({ show: false, msg: "", type: "success" });
+function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
+
+const levelLabels: Record<number, string> = { 0: "Guest", 1: "User", 2: "Admin", 3: "Super Admin" };
+const levelColors: Record<number, string> = { 0: "badge-red", 1: "badge-green", 2: "badge-blue", 3: "badge-yellow" };
 
 async function load() {
-  const xml = await authFetch("getUsers");
-  const items: typeof users.value = [];
-  const re = /<user\s+([^>]+)\/>/g;
-  let m;
-  while ((m = re.exec(xml))) {
-    items.push({
-      username: m[1].match(/username="([^"]+)"/)?.[1] || "",
-      level: parseInt(m[1].match(/level="(\d+)"/)?.[1] || "0"),
-      enabled: m[1].match(/enabled="(\d+)"/)?.[1] === "1",
-    });
-  }
-  users.value = items;
+  try {
+    const xml = await authFetch("getUsers");
+    users.value = parseXmlAttrs(xml, "user").map((u) => ({
+      username: u.username || "", level: parseInt(u.level || "1"),
+      enabled: u.enabled === "1" || u.enabled === "true",
+    }));
+  } catch { users.value = []; }
 }
 
 async function addUser() {
-  await authFetch("createUser", form.value);
-  showForm.value = false;
-  load();
+  try { await authPost("createUser", form.value); showForm.value = false; form.value = { username: "", password: "", level: 1 }; load(); showToast("User created"); }
+  catch { showToast("Failed to create user", "error"); }
 }
 
-const levelNames = ["Guest", "User", "Admin", "Super Admin"];
+async function updateUser(user: { username: string; level?: number; enabled?: number }) {
+  try { await authPost("updateUser", user); load(); showToast("User updated"); }
+  catch { showToast("Failed to update", "error"); }
+}
+
+async function deleteUser(username: string) {
+  if (!confirm(`Delete user "${username}"?`)) return;
+  try { await authPost("deleteUser", { username }); load(); showToast("User deleted"); }
+  catch { showToast("Failed to delete", "error"); }
+}
+
+function toggleEnabled(u: { username: string; enabled: boolean }) {
+  updateUser({ username: u.username, enabled: u.enabled ? 0 : 1 });
+}
+
+function changeLevel(u: { username: string; level: number }, newLevel: number) {
+  updateUser({ username: u.username, level: newLevel });
+}
 
 onMounted(load);
 </script>
 
 <template>
-  <div>
-    <h1 style="margin-bottom:16px">Users</h1>
-    <button v-if="isAdmin" @click="showForm = !showForm" class="btn">{{ showForm ? "Cancel" : "Add User" }}</button>
-
-    <div v-if="showForm" class="form-panel">
-      <input v-model="form.username" placeholder="Username" />
-      <input v-model="form.password" type="password" placeholder="Password" />
-      <select v-model="form.level">
-        <option :value="1">User</option>
-        <option :value="2">Admin</option>
-        <option :value="3">Super Admin</option>
-      </select>
-      <button @click="addUser" class="btn primary">Save</button>
+  <div class="page">
+    <div class="page-header">
+      <h1 class="page-title">Users</h1>
+      <button v-if="isAdmin" class="btn btn-primary" @click="showForm = !showForm">{{ showForm ? "Cancel" : "+ Add User" }}</button>
     </div>
 
-    <div class="list">
-      <div v-for="u in users" :key="u.username" class="card">
-        <div class="card-title">{{ u.username }} <span class="level">{{ levelNames[u.level] || "Unknown" }}</span></div>
-        <div class="card-meta">{{ u.enabled ? "Active" : "Disabled" }}</div>
+    <div v-if="showForm" class="card" style="margin-bottom:20px; max-width:450px">
+      <div class="card-header"><span class="card-title">New User</span></div>
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div class="form-group"><label class="form-label">Username</label><input v-model="form.username" class="form-input" /></div>
+        <div class="form-group"><label class="form-label">Password</label><input v-model="form.password" type="password" class="form-input" /></div>
+        <div class="form-group">
+          <label class="form-label">Level</label>
+          <select v-model="form.level" class="form-select">
+            <option v-if="isSuperAdmin" :value="3">3 — Super Admin</option>
+            <option :value="2">2 — Admin</option>
+            <option :value="1">1 — User</option>
+            <option :value="0">0 — Guest</option>
+          </select>
+        </div>
+        <button class="btn btn-primary" @click="addUser">Create User</button>
       </div>
-      <p v-if="users.length === 0" class="empty">No users.</p>
     </div>
+
+    <div class="card">
+      <table class="table">
+        <thead><tr><th>Username</th><th>Level</th><th>Status</th><th style="width:120px">Actions</th></tr></thead>
+        <tbody>
+          <tr v-for="u in users" :key="u.username">
+            <td><span class="user-name">{{ u.username }}</span></td>
+            <td>
+              <select v-if="isSuperAdmin" :value="u.level" @change="changeLevel(u, parseInt(($event.target as HTMLSelectElement).value))" class="form-select level-select">
+                <option :value="3">Super Admin</option><option :value="2">Admin</option><option :value="1">User</option><option :value="0">Guest</option>
+              </select>
+              <span v-else :class="['badge', levelColors[u.level] || 'badge-blue']">{{ levelLabels[u.level] || u.level }}</span>
+            </td>
+            <td>
+              <span :class="['badge', u.enabled ? 'badge-green' : 'badge-red']" style="cursor:pointer" @click="toggleEnabled(u)">{{ u.enabled ? "Active" : "Disabled" }}</span>
+            </td>
+            <td>
+              <button v-if="isAdmin" class="btn btn-danger btn-sm" @click="deleteUser(u.username)">Delete</button>
+            </td>
+          </tr>
+          <tr v-if="!users.length"><td colspan="4" style="text-align:center; color:var(--text-muted); padding:24px">No users found.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div v-if="toast.show" :class="['toast', `toast-${toast.type}`]">{{ toast.msg }}</div>
   </div>
 </template>
 
 <style scoped>
-.btn { padding: 8px 16px; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; cursor: pointer; font-size: 13px; margin-bottom: 16px; }
-.btn:hover { background: #30363d; }
-.btn.primary { background: #238636; border-color: #238636; }
-.form-panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; max-width: 400px; }
-.form-panel input, .form-panel select { padding: 8px 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; font-size: 13px; }
-.list { display: flex; flex-direction: column; gap: 8px; }
-.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px; }
-.card-title { font-weight: 600; font-size: 14px; }
-.card-meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
-.level { background: #1f6feb22; color: #58a6ff; padding: 2px 8px; border-radius: 12px; font-size: 11px; margin-left: 8px; }
-.empty { color: #8b949e; font-size: 13px; margin-top: 16px; }
+.page { max-width: 900px; }
+.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.page-title { font-size: 20px; font-weight: 700; }
+.user-name { font-weight: 600; font-size: 13px; }
+.level-select { display: inline-block; width: auto; padding: 4px 8px; font-size: 12px; }
 </style>

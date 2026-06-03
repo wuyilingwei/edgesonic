@@ -15,72 +15,93 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { useAuth } from "../api";
+import { useAuth, parseXmlAttrs } from "../api";
 
-const { isAdmin, authFetch } = useAuth();
-const sources = ref<Array<{ id: string; type: string; base_url: string; enabled: boolean }>>([]);
+const { isAdmin, authFetch, authPost } = useAuth();
+const sources = ref<Array<{ id: string; type: string; base_url: string; username: string; enabled: boolean; lastSync: string }>>([]);
 const showForm = ref(false);
 const form = ref({ type: "webdav", base_url: "", username: "", password: "" });
+const toast = ref({ show: false, msg: "", type: "success" });
+function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
 async function load() {
-  const xml = await authFetch("getStorageSources");
-  // parse sources from XML
-  const items: typeof sources.value = [];
-  const re = /<source\s+([^>]+)\/>/g;
-  let m;
-  while ((m = re.exec(xml))) {
-    const id = m[1].match(/id="([^"]+)"/)?.[1] || "";
-    const type = m[1].match(/type="([^"]+)"/)?.[1] || "";
-    const base = m[1].match(/baseUrl="([^"]+)"/)?.[1] || "";
-    items.push({ id, type, base_url: base, enabled: true });
-  }
-  sources.value = items;
+  try {
+    const xml = await authFetch("getStorageSources");
+    sources.value = parseXmlAttrs(xml, "source").map((s) => ({
+      id: s.id || "", type: s.type || "", base_url: s.baseUrl || "",
+      username: s.username || "", enabled: s.enabled === "1",
+      lastSync: s.lastSync || "Never",
+    }));
+  } catch { sources.value = []; }
 }
 
 async function addSource() {
-  await authFetch("addStorageSource", form.value);
-  showForm.value = false;
-  load();
+  try { await authPost("addStorageSource", form.value); showForm.value = false; load(); showToast("Source added"); }
+  catch { showToast("Failed to add source", "error"); }
+}
+
+async function deleteSource(id: string) {
+  if (!confirm("Delete this source?")) return;
+  try { await authPost("deleteStorageSource", { id }); load(); showToast("Source deleted"); }
+  catch { showToast("Failed to delete", "error"); }
 }
 
 onMounted(load);
 </script>
 
 <template>
-  <div>
-    <h1 style="margin-bottom:16px">Storage Sources</h1>
-    <button v-if="isAdmin" @click="showForm = !showForm" class="btn">{{ showForm ? "Cancel" : "Add Source" }}</button>
-
-    <div v-if="showForm" class="form-panel">
-      <select v-model="form.type">
-        <option value="webdav">WebDAV</option>
-        <option value="subsonic">Subsonic</option>
-      </select>
-      <input v-model="form.base_url" placeholder="Base URL (https://...)" />
-      <input v-model="form.username" placeholder="Username" />
-      <input v-model="form.password" type="password" placeholder="Password" />
-      <button @click="addSource" class="btn primary">Save</button>
+  <div class="page">
+    <div class="page-header">
+      <h1 class="page-title">Storage Sources</h1>
+      <button v-if="isAdmin" class="btn btn-primary" @click="showForm = !showForm">{{ showForm ? "Cancel" : "+ Add Source" }}</button>
     </div>
 
-    <div class="list">
-      <div v-for="s in sources" :key="s.id" class="card">
-        <div class="card-title">{{ s.id }}</div>
-        <div class="card-meta">{{ s.type }} — {{ s.base_url }}</div>
+    <div v-if="showForm" class="card" style="margin-bottom:20px; max-width:500px">
+      <div class="card-header"><span class="card-title">New Source</span></div>
+      <div style="display:flex; flex-direction:column; gap:12px">
+        <div class="form-group">
+          <label class="form-label">Type</label>
+          <select v-model="form.type" class="form-select"><option value="webdav">WebDAV</option><option value="subsonic">Subsonic</option></select>
+        </div>
+        <div class="form-group"><label class="form-label">Base URL</label><input v-model="form.base_url" class="form-input" placeholder="https://..." /></div>
+        <div class="form-group"><label class="form-label">Username</label><input v-model="form.username" class="form-input" /></div>
+        <div class="form-group"><label class="form-label">Password</label><input v-model="form.password" type="password" class="form-input" /></div>
+        <button class="btn btn-primary" @click="addSource">Save Source</button>
       </div>
-      <p v-if="sources.length === 0" class="empty">No external sources configured.</p>
     </div>
+
+    <div class="grid grid-2">
+      <div v-for="s in sources" :key="s.id" class="card source-card">
+        <div class="source-header">
+          <div>
+            <span :class="['badge', s.type === 'webdav' ? 'badge-blue' : 'badge-green']">{{ s.type.toUpperCase() }}</span>
+            <span :class="['badge', s.enabled ? 'badge-green' : 'badge-red']" style="margin-left:6px">{{ s.enabled ? "Active" : "Disabled" }}</span>
+          </div>
+          <button v-if="isAdmin" class="btn btn-danger btn-sm" @click="deleteSource(s.id)">Delete</button>
+        </div>
+        <div class="source-url">{{ s.base_url }}</div>
+        <div class="source-meta">
+          <span v-if="s.username">User: {{ s.username }}</span>
+          <span v-if="s.lastSync !== 'Never'">Last Sync: {{ s.lastSync }}</span>
+          <span v-else class="text-muted">Not synced</span>
+        </div>
+      </div>
+      <div v-if="!sources.length" class="empty-state" style="grid-column:1/-1">
+        <div class="empty-state-icon">☁️</div><div>No external storage sources configured.</div>
+      </div>
+    </div>
+
+    <div v-if="toast.show" :class="['toast', `toast-${toast.type}`]">{{ toast.msg }}</div>
   </div>
 </template>
 
 <style scoped>
-.btn { padding: 8px 16px; background: #21262d; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; cursor: pointer; font-size: 13px; margin-bottom: 16px; }
-.btn:hover { background: #30363d; }
-.btn.primary { background: #238636; border-color: #238636; }
-.form-panel { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; margin-bottom: 16px; display: flex; flex-direction: column; gap: 10px; max-width: 400px; }
-.form-panel input, .form-panel select { padding: 8px 10px; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; color: #c9d1d9; font-size: 13px; }
-.list { display: flex; flex-direction: column; gap: 8px; }
-.card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px 16px; }
-.card-title { font-weight: 600; font-size: 14px; }
-.card-meta { font-size: 12px; color: #8b949e; margin-top: 4px; }
-.empty { color: #8b949e; font-size: 13px; margin-top: 16px; }
+.page { max-width: 1000px; }
+.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.page-title { font-size: 20px; font-weight: 700; }
+.source-card { display: flex; flex-direction: column; gap: 10px; }
+.source-header { display: flex; align-items: center; justify-content: space-between; }
+.source-url { font-size: 13px; color: var(--accent); word-break: break-all; font-family: monospace; }
+.source-meta { display: flex; gap: 16px; font-size: 12px; color: var(--text-secondary); }
+.text-muted { color: var(--text-muted); }
 </style>
