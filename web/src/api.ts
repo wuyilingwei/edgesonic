@@ -55,6 +55,9 @@ export function useAuth() {
 
   const isLoggedIn = computed(() => !!token.value);
   const isAdmin = computed(() => level.value >= 2);
+  const isSuperAdmin = computed(() => level.value >= 3);
+  const isGuest = computed(() => level.value === 0);
+  const isUser = computed(() => level.value >= 1);
 
   function makeSalt() {
     salt.value = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
@@ -62,24 +65,23 @@ export function useAuth() {
   }
 
   async function login(u: string, p: string): Promise<LoginResult> {
-    const s = makeSalt();
-    const t = md5(p + s);
-    const resp = await fetch(`${API_BASE}/ping?u=${encodeURIComponent(u)}&t=${t}&s=${s}&v=1.16.1&c=EdgeSonicWeb`);
-    if (resp.ok) {
-      token.value = t; username.value = u;
-      localStorage.setItem("edgesonic_auth", t);
-      localStorage.setItem("edgesonic_user", u);
-      try {
-        const ur = await authFetch("getUser", { username: u });
-        const lv = parseInt(ur.match(/level="(\d+)"/)?.[1] || "0");
-        level.value = lv;
-        localStorage.setItem("edgesonic_level", String(lv));
-      } catch {}
-      return { ok: true, name: u, level: level.value };
+    // Web login: POST master_password → get session token
+    const resp = await fetch(`${API_BASE}/loginWeb`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: u, password: p }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      token.value = data.sessionToken;
+      username.value = data.username;
+      level.value = data.level;
+      localStorage.setItem("edgesonic_auth", data.sessionToken);
+      localStorage.setItem("edgesonic_user", data.username);
+      localStorage.setItem("edgesonic_level", String(data.level));
+      return { ok: true, name: data.username, level: data.level };
     }
-    const xml = await resp.text();
-    const err = xml.match(/message="([^"]+)"/)?.[1] || "Unknown error";
-    return { ok: false, error: err };
+    return { ok: false, error: data.error || "Login failed" };
   }
 
   function logout() {
@@ -95,9 +97,78 @@ export function useAuth() {
       u: username.value, t: token.value, s, v: "1.16.1", c: "EdgeSonicWeb",
       ...params,
     });
-    const resp = await fetch(`${API_BASE}/${path}?${qs}`);
+    const resp = await fetch(`${API_BASE}/${path}?${qs.toString()}`);
     return resp.text();
   }
 
-  return { token, username, level, salt, isLoggedIn, isAdmin, login, logout, authFetch, makeSalt };
+  async function authPost(path: string, body: unknown): Promise<string> {
+    const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
+    const qs = new URLSearchParams({
+      u: username.value, t: token.value, s, v: "1.16.1", c: "EdgeSonicWeb",
+    });
+    const resp = await fetch(`${API_BASE}/${path}?${qs.toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return resp.text();
+  }
+
+  async function uploadFile(file: File, target: string, path?: string, masterId?: string): Promise<string> {
+    const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
+    const qs = new URLSearchParams({
+      u: username.value, t: token.value, s, v: "1.16.1", c: "EdgeSonicWeb",
+    });
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("target", target);
+    if (path) formData.append("path", path);
+    if (masterId) formData.append("master_id", masterId);
+
+    const resp = await fetch(`${API_BASE}/upload?${qs.toString()}`, {
+      method: "POST",
+      body: formData,
+    });
+    return resp.text();
+  }
+
+  return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
+    login, logout, authFetch, authPost, uploadFile, makeSalt, md5 };
+}
+
+/** Parse XML tag attributes into array of objects */
+export function parseXmlAttrs(xml: string, tag: string): Record<string, string>[] {
+  const items: Record<string, string>[] = [];
+  const re = new RegExp(`<${tag}\\s+([^>]+?)\\s*/?>`, "g");
+  let m;
+  while ((m = re.exec(xml))) {
+    const attrs: Record<string, string> = {};
+    const attrRe = /(\w+)="([^"]*)"/g;
+    let am;
+    while ((am = attrRe.exec(m[1]))) {
+      attrs[am[1]] = am[2];
+    }
+    items.push(attrs);
+  }
+  return items;
+}
+
+/** Extract inner XML of a tag */
+export function parseXmlInner(xml: string, tag: string): string {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i");
+  const m = re.exec(xml);
+  return m ? m[1] : "";
+}
+
+/** Format seconds to mm:ss */
+export function formatDuration(sec: number): string {
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+}
+
+/** Format bytes to human readable */
+export function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }

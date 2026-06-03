@@ -103,7 +103,7 @@ export function createQueries(db: D1Database) {
 
     // Users
     async getUser(username: string): Promise<User | null> {
-      return db.prepare("SELECT * FROM users WHERE username = ? AND enabled = 1").bind(username).first<User>();
+      return db.prepare("SELECT username, master_password AS password, level, enabled, created_at, updated_at FROM users WHERE username = ? AND enabled = 1").bind(username).first<User>();
     },
 
     // Indexes (getIndexes support)
