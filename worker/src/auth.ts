@@ -1,7 +1,10 @@
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { md5 } from "./utils/md5";
+import { getFeature, parseChain } from "./utils/features";
 import type { User } from "./types/entities";
+
+export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 
 // ============================================================================
 // Path Classification
@@ -29,9 +32,13 @@ const GUEST_ALLOWED_PATHS = new Set([
   "/rest/search3",
 ]);
 
-const BROWSER_ONLY_PATHS = new Set([
+// Endpoints reserved for web-session credentials (authMethod === "session").
+// Capability is bound to the credential type, not the User-Agent (DESIGN.md §3.1):
+// subsonic_credentials / apiKey can stream & browse but never touch files or admin.
+const SESSION_ONLY_PATHS = new Set([
   "/rest/getStorageSources",
   "/rest/addStorageSource",
+  "/rest/updateStorageSource",
   "/rest/deleteStorageSource",
   "/rest/getUsers",
   "/rest/createUser",
@@ -47,12 +54,14 @@ const BROWSER_ONLY_PATHS = new Set([
   "/rest/deleteCredential",
   "/rest/getSessions",
   "/rest/revokeSession",
+  "/rest/getFeatures",
+  "/rest/updateFeature",
 ]);
 
 // ============================================================================
 // SHA-256 Hash (for master password verification)
 // ============================================================================
-async function sha256(input: string): Promise<string> {
+export async function sha256(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
   const hash = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(hash))
@@ -69,7 +78,7 @@ async function findSubsonicCredential(
   username: string,
   token: string,
   salt: string,
-): Promise<string | null> {
+): Promise<{ credential: string; kind: "subsonic_cred" | "session" } | null> {
   // 1. Check subsonic_credentials table
   const creds = await db
     .prepare("SELECT password FROM subsonic_credentials WHERE username = ?")
@@ -83,7 +92,7 @@ async function findSubsonicCredential(
         .prepare("UPDATE subsonic_credentials SET last_used = ? WHERE username = ? AND password = ?")
         .bind(Math.floor(Date.now() / 1000), username, cred.password)
         .run();
-      return cred.password;
+      return { credential: cred.password, kind: "subsonic_cred" };
     }
   }
 
@@ -95,14 +104,14 @@ async function findSubsonicCredential(
 
   for (const sess of sessions.results) {
     if (md5(sess.token + salt) === token) {
-      return sess.token; // session token used as credential
+      return { credential: sess.token, kind: "session" };
     }
   }
 
   // 3. Also try KV cache for sessions (faster lookup)
   const kvSessionToken = await kv.get(`session:${username}`);
   if (kvSessionToken && md5(kvSessionToken + salt) === token) {
-    return kvSessionToken;
+    return { credential: kvSessionToken, kind: "session" };
   }
 
   return null;
@@ -121,7 +130,7 @@ async function lookupUser(db: D1Database, username: string): Promise<User | null
 // ============================================================================
 // Web Login Handler
 // ============================================================================
-export const webLoginRoutes = new Hono();
+export const webLoginRoutes = new Hono<{ Bindings: Env }>();
 
 webLoginRoutes.post("/rest/loginWeb", async (c) => {
   const db = c.env.DB;
@@ -201,9 +210,26 @@ webLoginRoutes.post("/rest/logoutWeb", async (c) => {
 // ============================================================================
 export const authMiddleware = createMiddleware<{
   Bindings: Env;
-  Variables: { user: User };
+  Variables: { user: User; authMethod: AuthMethod };
 }>(async (c, next) => {
   const path = new URL(c.req.url).pathname;
+
+  // --- Anti-loop proxy chain guard (DESIGN.md §3.2) ---
+  // Another EdgeSonic proxying us appends its INSTANCE_ID to esChain.
+  const chain = parseChain(c.req.query("esChain") || c.req.header("X-EdgeSonic-Chain"));
+  if (chain.length > 0) {
+    const xmlHeaders = { "Content-Type": "application/xml; charset=UTF-8" };
+    if (chain.includes(c.env.INSTANCE_ID)) {
+      return c.text(subsonicError(50, "Proxy loop detected"), 403, xmlHeaders);
+    }
+    const maxDepth = parseInt(c.env.MAX_PROXY_DEPTH || "3", 10);
+    if (chain.length > maxDepth) {
+      return c.text(subsonicError(50, "Proxy chain too deep"), 403, xmlHeaders);
+    }
+    if (!(await getFeature(c.env, "allow_being_proxied"))) {
+      return c.text(subsonicError(50, "This server does not accept proxied requests"), 403, xmlHeaders);
+    }
+  }
 
   if (NO_AUTH_PATHS.has(path)) {
     return next();
@@ -231,25 +257,24 @@ export const authMiddleware = createMiddleware<{
     });
   }
 
-  // --- Authenticate ---
-  let authenticated = false;
+  // --- Authenticate (records which credential type succeeded) ---
+  let authMethod: AuthMethod | null = null;
 
   if (apiKey) {
     // API Key authentication (via KV)
     const storedUser = await kv.get(`apikey:${apiKey}`);
     if (storedUser === username) {
-      authenticated = true;
+      authMethod = "apikey";
     }
   } else if (token && salt) {
-    // Subsonic token auth: try multiple credential sources
-    // 1. Subsonic credentials + sessions
+    // Subsonic token auth: subsonic_credentials or web session token
     const cred = await findSubsonicCredential(db, kv, username, token, salt);
     if (cred) {
-      authenticated = true;
+      authMethod = cred.kind;
     }
   }
 
-  if (!authenticated) {
+  if (!authMethod) {
     return c.text(subsonicError(40, "Wrong username or password"), 401, {
       "Content-Type": "application/xml; charset=UTF-8",
     });
@@ -257,6 +282,7 @@ export const authMiddleware = createMiddleware<{
 
   // --- Guest (Level 0) Access Control ---
   if (user.level === 0) {
+    authMethod = "guest";
     if (guestToken) {
       const tokenData = await db
         .prepare("SELECT * FROM guest_tokens WHERE token = ? AND expires_at > ?")
@@ -283,21 +309,17 @@ export const authMiddleware = createMiddleware<{
     }
   }
 
-  // --- Browser-Only Guard ---
-  if (BROWSER_ONLY_PATHS.has(path)) {
-    const userAgent = c.req.header("User-Agent") || "";
-    const isBrowser =
-      /Mozilla|Chrome|Safari|Firefox|Edge/i.test(userAgent) &&
-      !/Subsonic|DSub|Ultrasonic|MusicStash|play:Sub|Symfonium/i.test(userAgent);
-    const webSession = c.req.header("Cookie") || "";
-    if (!isBrowser && !guestToken && !webSession.includes("edgesonic_session")) {
-      return c.text(subsonicError(50, "This endpoint requires browser access"), 403, {
-        "Content-Type": "application/xml; charset=UTF-8",
-      });
-    }
+  // --- Session-Only Guard (credential-type gating, replaces UA sniffing) ---
+  // File R/W and admin endpoints are reserved for web-session credentials:
+  // a leaked subsonic_credential or apiKey can never escalate to file access.
+  if (SESSION_ONLY_PATHS.has(path) && authMethod !== "session") {
+    return c.text(subsonicError(50, "This endpoint requires a web session credential"), 403, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
   }
 
   c.set("user", user);
+  c.set("authMethod", authMethod);
   return next();
 });
 

@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
 
+const { t } = useI18n();
 const { login, isLoggedIn } = useAuth();
 const router = useRouter();
 
@@ -19,114 +21,110 @@ async function submit() {
   const result = await login(username.value, password.value);
   loading.value = false;
   if (result.ok) router.push("/");
-  else error.value = result.error || "Login failed";
+  else error.value = result.error || t("login.failed");
 }
 </script>
 
 <template>
-  <div class="login-page">
-    <!-- Background decoration -->
-    <div class="bg-decor">
-      <div class="decor-circle c1"></div>
-      <div class="decor-circle c2"></div>
-      <div class="decor-circle c3"></div>
-    </div>
-
+  <div class="login-view">
     <div class="login-card">
-      <div class="card-icon">♪</div>
-      <h1 class="card-title">EdgeSonic</h1>
-      <p class="card-desc">Serverless Music Streaming</p>
+      <div class="login-header">
+        <div class="login-logo">
+          <span class="logo-bracket">[</span>
+          <span class="logo-text">EDGESONIC</span>
+          <span class="logo-bracket">]</span>
+        </div>
+        <p class="login-subtitle">{{ t("login.subtitle") }}</p>
+      </div>
 
       <form @submit.prevent="submit" class="login-form">
+        <div v-if="error" class="login-error">{{ error }}</div>
+
         <div class="form-group">
-          <label class="form-label">Username</label>
-          <input v-model="username" class="form-input" placeholder="Enter your username" autocomplete="username" />
+          <label class="form-label">{{ t("login.username") }}</label>
+          <input v-model="username" class="form-input" autocomplete="username" :disabled="loading" />
         </div>
         <div class="form-group">
-          <label class="form-label">Password</label>
-          <input v-model="password" type="password" class="form-input" placeholder="Enter your password" autocomplete="current-password" />
+          <label class="form-label">{{ t("login.password") }}</label>
+          <input v-model="password" type="password" class="form-input" autocomplete="current-password" :disabled="loading" />
         </div>
 
-        <button type="submit" class="btn btn-primary login-btn" :disabled="loading || !username || !password">
-          <span v-if="loading" class="spinner"></span>
-          <span v-else>Sign In</span>
+        <button type="submit" class="btn-primary login-btn" :disabled="loading || !username || !password">
+          {{ loading ? t("login.submitting") : t("login.submit") }}
         </button>
-
-        <p v-if="error" class="error-msg">{{ error }}</p>
       </form>
+
+      <div class="corner corner-tl"></div>
+      <div class="corner corner-tr"></div>
+      <div class="corner corner-bl"></div>
+      <div class="corner corner-br"></div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.login-page {
-  display: flex; align-items: center; justify-content: center;
-  min-height: 100vh; background: var(--bg-primary);
-  position: relative; overflow: hidden;
+.login-view {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-primary);
+  background-image:
+    linear-gradient(var(--color-border-subtle) 1px, transparent 1px),
+    linear-gradient(90deg, var(--color-border-subtle) 1px, transparent 1px);
+  background-size: 64px 64px;
+  padding: 1rem;
 }
-.bg-decor { position: absolute; inset: 0; pointer-events: none; }
-.decor-circle {
-  position: absolute; border-radius: 50%;
-  opacity: 0.06; background: var(--accent);
-}
-.c1 { width: 600px; height: 600px; top: -200px; right: -150px; }
-.c2 { width: 400px; height: 400px; bottom: -100px; left: -100px; }
-.c3 { width: 200px; height: 200px; top: 50%; left: 60%; }
 
 .login-card {
-  position: relative; z-index: 1;
-  width: 380px; padding: 36px 32px;
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  position: relative;
+  width: 100%;
+  max-width: 400px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 2px;
 }
-.card-icon {
-  width: 48px; height: 48px; margin: 0 auto 16px;
-  border-radius: 12px; background: var(--accent-bg);
-  color: var(--accent); font-size: 24px;
-  display: flex; align-items: center; justify-content: center;
-}
-.card-title {
-  text-align: center; font-size: 22px; font-weight: 700;
-  color: var(--text-primary); margin-bottom: 4px;
-  letter-spacing: -0.5px;
-}
-.card-desc {
-  text-align: center; font-size: 13px; color: var(--text-muted);
-  margin-bottom: 28px;
-}
-.login-form { display: flex; flex-direction: column; gap: 16px; }
-.form-label {
-  display: block; font-size: 12px; font-weight: 600;
-  color: var(--text-secondary); margin-bottom: 6px;
-  text-transform: uppercase; letter-spacing: 0.5px;
-}
-.form-input {
-  width: 100%; padding: 10px 14px;
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text-primary); font-size: 14px;
-  outline: none; transition: border-color 0.2s;
-}
-.form-input:focus { border-color: var(--accent); }
-.form-input::placeholder { color: var(--text-muted); }
 
-.login-btn {
-  width: 100%; padding: 12px; margin-top: 4px;
-  justify-content: center; font-size: 15px; border-radius: 8px;
+.login-header {
+  padding: 2rem 2rem 1rem;
+  text-align: center;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
-.spinner {
-  width: 18px; height: 18px;
-  border: 2px solid rgba(255,255,255,0.3);
-  border-top-color: #fff; border-radius: 50%;
-  animation: spin 0.6s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
 
-.error-msg {
-  text-align: center; font-size: 13px; color: var(--danger);
-  margin-top: 4px;
+.login-logo {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-accent-primary);
+  letter-spacing: 0.15em;
+  margin-bottom: 0.5rem;
 }
+.logo-bracket { color: var(--color-text-muted); }
+
+.login-subtitle {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+}
+
+.login-form {
+  padding: 1.5rem 2rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.login-error {
+  background: rgba(248, 81, 73, 0.12);
+  border: 1px solid rgba(248, 81, 73, 0.4);
+  color: var(--color-status-error);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  padding: 0.5rem 0.75rem;
+  border-radius: 2px;
+}
+
+.login-btn { width: 100%; margin-top: 0.5rem; }
 </style>

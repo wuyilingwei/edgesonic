@@ -9,6 +9,11 @@ routes = [
   { pattern = "edgesonic.wuyilingwei.com", custom_domain = true }
 ]
 
+# Instance identity (anti-loop chain marker, docs/DESIGN.md §3.2)
+[vars]
+INSTANCE_ID = "9b83869d-397a-42b4-af9b-ea11b2a90504"
+MAX_PROXY_DEPTH = "3"
+
 # Static Assets (Vue frontend)
 [assets]
 directory = "../web/dist"

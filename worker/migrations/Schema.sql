@@ -40,6 +40,7 @@ CREATE TABLE storage_sources (
   base_url TEXT NOT NULL,
   username TEXT,
   password TEXT,
+  root_path TEXT NOT NULL DEFAULT '',    -- path inside the remote; effective URL = base_url + root_path
   last_sync INTEGER,
   enabled INTEGER DEFAULT 1,
   created_at INTEGER DEFAULT (unixepoch()),
@@ -352,20 +353,3 @@ CREATE INDEX idx_transcode_jobs_status ON transcode_jobs(status);
 --   → Server finds session by token → verifies → streams audio in browser
 -- ============================================================================
 
--- ============================================================
--- Playlists
--- ============================================================
-CREATE TABLE playlists (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  owner TEXT NOT NULL,
-  public INTEGER DEFAULT 0,
-  created_at INTEGER DEFAULT (unixepoch()),
-  updated_at INTEGER DEFAULT (unixepoch())
-);
-
-CREATE TABLE playlist_songs (
-  playlist_id TEXT NOT NULL,
-  song_id TEXT NOT NULL,
-  position INTEGER NOT NULL
-);
