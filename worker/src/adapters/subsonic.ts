@@ -17,7 +17,14 @@ import type { StorageAdapter, StreamResult } from "./index";
 import { parseStorageUri, getSourceCredentials } from "./index";
 import { md5 } from "../utils/md5";
 
-export function createSubsonicAdapter(db: D1Database): StorageAdapter {
+export interface SubsonicAdapterOptions {
+  // Anti-loop chain (DESIGN.md §3.2): IDs of every EdgeSonic hop so far.
+  // Our own INSTANCE_ID is appended before forwarding upstream.
+  instanceId?: string;
+  incomingChain?: string[];
+}
+
+export function createSubsonicAdapter(db: D1Database, opts: SubsonicAdapterOptions = {}): StorageAdapter {
   return {
     async stream(uri: string, range?: string): Promise<StreamResult> {
       const { path } = parseStorageUri(uri);
@@ -28,11 +35,16 @@ export function createSubsonicAdapter(db: D1Database): StorageAdapter {
 
       const salt = generateSalt(6);
       const token = md5(creds.password + salt);
+      const chain = [...(opts.incomingChain ?? []), ...(opts.instanceId ? [opts.instanceId] : [])];
       const sep = path.includes("?") ? "&" : "?";
-      const fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${path}${sep}u=${encodeURIComponent(creds.username)}&t=${token}&s=${salt}&v=1.16.1&c=EdgeSonic`;
+      let fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${path}${sep}u=${encodeURIComponent(creds.username)}&t=${token}&s=${salt}&v=1.16.1&c=EdgeSonic`;
+      if (chain.length > 0) {
+        fullUrl += `&esChain=${encodeURIComponent(chain.join(","))}`;
+      }
 
       const headers: Record<string, string> = {};
       if (range) headers["Range"] = range;
+      if (chain.length > 0) headers["X-EdgeSonic-Chain"] = chain.join(",");
 
       const resp = await fetch(fullUrl, { headers });
       return {

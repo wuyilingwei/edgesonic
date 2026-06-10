@@ -14,258 +14,244 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useRouter, useRoute } from "vue-router";
+import { useI18n } from "vue-i18n";
 import { useAuth } from "./api";
+import PlayerBar from "./components/PlayerBar.vue";
+import { usePlayerStore } from "./stores/player";
 
 const router = useRouter();
 const route = useRoute();
-const { isLoggedIn, username, level, isSuperAdmin, logout } = useAuth();
+const { t } = useI18n();
+const { isLoggedIn, username, level, logout } = useAuth();
+const player = usePlayerStore();
 
-const levelLabels: Record<number, string> = { 0: "Guest", 1: "User", 2: "Admin", 3: "Super Admin" };
+const menuOpen = ref(false);
+watch(() => route.path, () => { menuOpen.value = false; });
 
-const navItems = computed(() => {
-  const items: Array<{ label: string; path: string; icon: string; minLevel: number }> = [
-    { label: "Dashboard", path: "/", icon: "◉", minLevel: 0 },
-    { label: "Files", path: "/files", icon: "♫", minLevel: 0 },
-    { label: "Transcoder", path: "/transcoder", icon: "⇄", minLevel: 0 },
-    { label: "Sources", path: "/sources", icon: "☁", minLevel: 2 },
-    { label: "Users", path: "/users", icon: "👥", minLevel: 2 },
-    { label: "Permissions", path: "/permissions", icon: "🔐", minLevel: 3 },
+const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
+const levelLabel = computed(() => levelKeys[level.value] ? t(`app.levels.${levelKeys[level.value]}`) : String(level.value));
+
+interface NavItem { label: string; path: string; minLevel: number; }
+interface NavGroup { label: string; items: NavItem[]; }
+
+const groups = computed<NavGroup[]>(() => {
+  const defs: NavGroup[] = [
+    {
+      label: t("app.groups.library"),
+      items: [
+        { label: t("app.menu.dashboard"), path: "/", minLevel: 0 },
+        { label: t("app.menu.library"), path: "/library", minLevel: 0 },
+      ],
+    },
+    {
+      label: t("app.groups.management"),
+      items: [
+        { label: t("app.menu.files"), path: "/files", minLevel: 2 },
+        { label: t("app.menu.sources"), path: "/sources", minLevel: 2 },
+        { label: t("app.menu.users"), path: "/users", minLevel: 2 },
+        { label: t("app.menu.settings"), path: "/settings", minLevel: 3 },
+        { label: t("app.menu.transcoder"), path: "/transcoder", minLevel: 2 },
+      ],
+    },
   ];
-  return items.filter((i) => level.value >= i.minLevel);
+  return defs
+    .map((g) => ({ ...g, items: g.items.filter((i) => level.value >= i.minLevel) }))
+    .filter((g) => g.items.length > 0);
 });
 
-function navigate(path: string) {
-  router.push(path);
-}
-
 function doLogout() {
+  player.clear();
   logout();
   router.push("/login");
 }
 </script>
 
 <template>
-  <div class="app">
-    <!-- Sidebar -->
-    <aside v-if="route.path !== '/login'" class="sidebar">
-      <div class="sidebar-header">
-        <div class="logo">
-          <span class="logo-icon">♪</span>
-          <span class="logo-text">EdgeSonic</span>
-        </div>
+  <!-- 未登录：全屏渲染（Login） -->
+  <router-view v-if="!isLoggedIn" />
+
+  <!-- 登录后框架：NavBar + Sidebar + Main + PlayerBar -->
+  <div v-else class="shell">
+    <nav class="navbar">
+      <button class="hamburger" @click="menuOpen = !menuOpen">☰</button>
+      <router-link to="/" class="nav-logo">
+        <span class="logo-bracket">[</span>
+        <span class="logo-text">EDGESONIC</span>
+        <span class="logo-bracket">]</span>
+      </router-link>
+
+      <div class="nav-links">
+        <router-link to="/" class="nav-link" :class="{ active: route.path === '/' }">
+          <span class="link-prefix">// </span>{{ t("app.menu.dashboard") }}
+        </router-link>
+        <router-link to="/library" class="nav-link" :class="{ active: route.path.startsWith('/library') }">
+          <span class="link-prefix">// </span>{{ t("app.menu.library") }}
+        </router-link>
       </div>
 
-      <nav class="nav">
-        <div v-for="item in navItems" :key="item.path"
-          :class="['nav-item', { active: route.path === item.path }]"
-          @click="navigate(item.path)">
-          <span class="nav-icon">{{ item.icon }}</span>
-          <span class="nav-label">{{ item.label }}</span>
-        </div>
-      </nav>
+      <div class="nav-user">
+        <span class="nav-username">{{ username }}</span>
+        <span class="status-badge" :class="level >= 3 ? 'warning' : level >= 2 ? 'info' : 'muted'">{{ levelLabel }}</span>
+        <button class="btn-secondary btn-sm" @click="doLogout">{{ t("app.logout") }}</button>
+      </div>
+      <div class="nav-scanline"></div>
+    </nav>
 
-      <div class="sidebar-footer">
-        <div class="user-info">
-          <div class="avatar">{{ username?.charAt(0)?.toUpperCase() || "?" }}</div>
-          <div class="user-detail">
-            <div class="user-name">{{ username || "Guest" }}</div>
-            <div class="user-level">{{ levelLabels[level] || "Unknown" }}</div>
-          </div>
-        </div>
-        <button v-if="isLoggedIn" class="logout-btn" title="Logout" @click="doLogout">⏻</button>
+    <div class="sidebar-overlay" :class="{ open: menuOpen }" @click="menuOpen = false"></div>
+
+    <aside class="sidebar" :class="{ open: menuOpen }">
+      <div v-for="g in groups" :key="g.label" class="nav-group">
+        <div class="nav-group-label">{{ g.label }}</div>
+        <router-link
+          v-for="item in g.items"
+          :key="item.path"
+          :to="item.path"
+          class="side-link"
+          :class="{ active: item.path === '/' ? route.path === '/' : route.path.startsWith(item.path) }"
+        >
+          {{ item.label }}
+        </router-link>
       </div>
     </aside>
 
-    <!-- Main Content -->
-    <main :class="{ 'full-width': route.path === '/login' }">
-      <div v-if="route.path !== '/login'" class="topbar">
-        <div class="breadcrumb">
-          <span class="bc-item">{{ route.meta?.title || route.path?.substring(1) || "Dashboard" }}</span>
-        </div>
-      </div>
-      <div class="content">
-        <router-view />
-      </div>
+    <main class="main">
+      <router-view />
     </main>
+
+    <PlayerBar />
   </div>
 </template>
 
 <style>
-/* === Reset & Base === */
-*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
-:root {
-  --bg-primary: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #21262d;
-  --border: #30363d;
-  --text-primary: #e6edf3;
-  --text-secondary: #8b949e;
-  --text-muted: #6e7681;
-  --accent: #58a6ff;
-  --accent-bg: rgba(88, 166, 255, 0.1);
-  --success: #3fb950;
-  --danger: #f85149;
-  --warning: #d29922;
-  --radius: 8px;
+@import "./assets/palette.css";
+
+/* === App shell === */
+.shell { min-height: 100vh; }
+
+/* --- NavBar (fixed, 60px) --- */
+.navbar {
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 200;
+  height: var(--nav-h);
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0 1.5rem;
+  background: rgba(10, 10, 11, 0.92);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--color-border-subtle);
 }
-body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", Roboto, sans-serif;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-size: 14px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
+.nav-scanline {
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--color-accent-dim), transparent);
+  animation: pulse 4s ease-in-out infinite;
+  pointer-events: none;
+}
+.nav-logo {
+  display: flex; align-items: center; gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--color-accent-primary);
+  flex-shrink: 0;
+}
+.logo-bracket { color: var(--color-text-muted); }
+.nav-links { display: flex; gap: 1.25rem; flex: 1; }
+.nav-link {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-secondary);
+  transition: color 0.2s;
+}
+.nav-link:hover, .nav-link.active { color: var(--color-accent-primary); }
+.link-prefix { color: var(--color-text-muted); }
+.nav-user { display: flex; align-items: center; gap: 0.7rem; flex-shrink: 0; }
+.nav-username {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-text-primary);
+  letter-spacing: 0.05em;
+  max-width: 140px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hamburger {
+  display: none;
+  color: var(--color-text-primary);
+  font-size: 1.1rem;
+  width: 32px; height: 32px;
 }
 
-/* === Layout === */
-.app { display: flex; min-height: 100vh; }
-
-/* === Sidebar === */
+/* --- Sidebar (240px) --- */
 .sidebar {
-  width: 240px; min-width: 240px;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column;
-  position: sticky; top: 0; height: 100vh;
+  position: fixed;
+  top: var(--nav-h);
+  bottom: var(--player-h);
+  left: 0;
+  width: var(--sidebar-w);
+  z-index: 150;
+  overflow-y: auto;
+  padding: 1.25rem 0.9rem;
+  background: var(--color-bg-secondary);
+  border-right: 1px solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  transition: transform 0.25s ease;
 }
-.sidebar-header {
-  padding: 20px 20px 16px;
-  border-bottom: 1px solid var(--border);
+.nav-group { display: flex; flex-direction: column; gap: 2px; }
+.nav-group-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.2em;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  padding: 0 0.6rem 0.4rem;
 }
-.logo { display: flex; align-items: center; gap: 10px; }
-.logo-icon { font-size: 22px; color: var(--accent); }
-.logo-text { font-size: 18px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.5px; }
-
-.nav { flex: 1; padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
-.nav-item {
-  display: flex; align-items: center; gap: 12px;
-  padding: 10px 12px; border-radius: 6px;
-  cursor: pointer; color: var(--text-secondary);
-  transition: all 0.15s; font-size: 14px; font-weight: 500;
-  user-select: none;
-}
-.nav-item:hover { background: var(--bg-tertiary); color: var(--text-primary); }
-.nav-item.active {
-  background: var(--accent-bg); color: var(--accent);
-  box-shadow: inset 3px 0 0 var(--accent);
-}
-.nav-icon { font-size: 16px; width: 20px; text-align: center; }
-.nav-label { flex: 1; }
-
-.sidebar-footer {
-  padding: 12px 16px; border-top: 1px solid var(--border);
-  display: flex; align-items: center; gap: 10px;
-}
-.user-info { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
-.avatar {
-  width: 34px; height: 34px; border-radius: 50%;
-  background: var(--accent); color: #fff;
-  display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: 14px; flex-shrink: 0;
-}
-.user-detail { min-width: 0; }
-.user-name { font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.user-level { font-size: 11px; color: var(--text-muted); }
-.logout-btn {
-  background: none; border: 1px solid var(--border); color: var(--text-secondary);
-  width: 32px; height: 32px; border-radius: 6px; cursor: pointer;
-  font-size: 14px; display: flex; align-items: center; justify-content: center;
+.side-link {
+  display: block;
+  padding: 0.45rem 0.6rem;
+  font-size: var(--fs-md);
+  color: var(--color-text-secondary);
+  border-left: 2px solid transparent;
+  border-radius: 0 2px 2px 0;
   transition: all 0.15s;
 }
-.logout-btn:hover { background: var(--bg-tertiary); color: var(--danger); border-color: var(--danger); }
-
-/* === Main Area === */
-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-main.full-width { width: 100%; }
-.topbar {
-  height: 52px; padding: 0 28px;
-  display: flex; align-items: center;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-secondary);
-  position: sticky; top: 0; z-index: 10;
+.side-link:hover { color: var(--color-text-primary); background: var(--color-bg-tertiary); }
+.side-link.active {
+  color: var(--color-accent-primary);
+  background: var(--color-accent-dim);
+  border-left-color: var(--color-accent-primary);
 }
-.breadcrumb { display: flex; align-items: center; gap: 6px; }
-.bc-item { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.content { flex: 1; padding: 24px 28px; overflow-y: auto; }
-
-/* === Shared Components === */
-.card {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  background: var(--color-bg-overlay);
 }
-.card-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 16px;
+
+/* --- Main content --- */
+.main {
+  margin-left: var(--sidebar-w);
+  padding: calc(var(--nav-h) + 1.5rem) 1.75rem calc(var(--player-h) + 1.5rem);
+  min-height: 100vh;
 }
-.card-title { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 
-.btn {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 8px 16px; border-radius: 6px;
-  font-size: 13px; font-weight: 500; cursor: pointer;
-  border: 1px solid var(--border); background: var(--bg-tertiary);
-  color: var(--text-primary); transition: all 0.15s;
+/* --- Responsive: ≤960px 侧栏收起为汉堡 --- */
+@media (max-width: 960px) {
+  .hamburger { display: inline-flex; align-items: center; justify-content: center; }
+  .nav-links { display: none; }
+  .sidebar { transform: translateX(-100%); bottom: 0; box-shadow: 8px 0 40px rgba(0, 0, 0, 0.6); }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-overlay.open { display: block; }
+  .main { margin-left: 0; padding-left: 1rem; padding-right: 1rem; }
 }
-.btn:hover { background: #30363d; }
-.btn-primary { background: #238636; border-color: #238636; color: #fff; }
-.btn-primary:hover { background: #2ea043; }
-.btn-danger { background: transparent; border-color: var(--danger); color: var(--danger); }
-.btn-danger:hover { background: rgba(248, 81, 73, 0.1); }
-.btn-sm { padding: 4px 10px; font-size: 12px; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-.form-input, .form-select {
-  padding: 8px 12px; background: var(--bg-primary);
-  border: 1px solid var(--border); border-radius: 6px;
-  color: var(--text-primary); font-size: 13px; outline: none;
-  transition: border-color 0.15s; width: 100%;
-}
-.form-input:focus, .form-select:focus { border-color: var(--accent); }
-.form-input::placeholder { color: var(--text-muted); }
-.form-select { cursor: pointer; }
-
-.form-group { display: flex; flex-direction: column; gap: 6px; }
-.form-label { font-size: 12px; font-weight: 500; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; }
-.form-row { display: flex; gap: 12px; align-items: flex-end; }
-
-.badge {
-  display: inline-flex; align-items: center;
-  padding: 2px 8px; border-radius: 12px;
-  font-size: 11px; font-weight: 600;
-}
-.badge-blue { background: var(--accent-bg); color: var(--accent); }
-.badge-green { background: rgba(63, 185, 80, 0.15); color: var(--success); }
-.badge-red { background: rgba(248, 81, 73, 0.15); color: var(--danger); }
-.badge-yellow { background: rgba(210, 153, 34, 0.15); color: var(--warning); }
-
-.empty-state {
-  text-align: center; padding: 40px 20px;
-  color: var(--text-muted); font-size: 13px;
-}
-.empty-state-icon { font-size: 36px; margin-bottom: 12px; }
-
-.table { width: 100%; border-collapse: collapse; }
-.table th, .table td { padding: 10px 14px; text-align: left; border-bottom: 1px solid var(--border); font-size: 13px; }
-.table th { font-weight: 600; color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-.table tr:hover td { background: var(--bg-tertiary); }
-
-.grid { display: grid; gap: 16px; }
-.grid-2 { grid-template-columns: repeat(2, 1fr); }
-.grid-3 { grid-template-columns: repeat(3, 1fr); }
-.grid-4 { grid-template-columns: repeat(4, 1fr); }
-@media (max-width: 1200px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 768px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
-
-.toast {
-  position: fixed; bottom: 24px; right: 24px; z-index: 100;
-  padding: 12px 20px; border-radius: 8px; font-size: 13px;
-  animation: slideIn 0.3s ease;
-}
-.toast-success { background: #238636; color: #fff; }
-.toast-error { background: var(--danger); color: #fff; }
-@keyframes slideIn { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 </style>

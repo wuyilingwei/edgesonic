@@ -15,8 +15,10 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 
+const { t } = useI18n();
 const { isAdmin, isSuperAdmin, authFetch, authPost } = useAuth();
 const users = ref<Array<{ username: string; level: number; enabled: boolean }>>([]);
 const showForm = ref(false);
@@ -25,8 +27,8 @@ const editingUser = ref("");
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
-const levelLabels: Record<number, string> = { 0: "Guest", 1: "User", 2: "Admin", 3: "Super Admin" };
-const levelColors: Record<number, string> = { 0: "badge-red", 1: "badge-green", 2: "badge-blue", 3: "badge-yellow" };
+const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
+const levelColors: Record<number, string> = { 0: "muted", 1: "success", 2: "info", 3: "warning" };
 
 async function load() {
   try {
@@ -39,19 +41,19 @@ async function load() {
 }
 
 async function addUser() {
-  try { await authPost("createUser", form.value); showForm.value = false; form.value = { username: "", password: "", level: 1 }; load(); showToast("User created"); }
-  catch { showToast("Failed to create user", "error"); }
+  try { await authPost("createUser", form.value); showForm.value = false; form.value = { username: "", password: "", level: 1 }; load(); showToast(t("users.created")); }
+  catch { showToast(t("users.createFailed"), "error"); }
 }
 
 async function updateUser(user: { username: string; level?: number; enabled?: number }) {
-  try { await authPost("updateUser", user); load(); showToast("User updated"); }
-  catch { showToast("Failed to update", "error"); }
+  try { await authPost("updateUser", user); load(); showToast(t("users.updated")); }
+  catch { showToast(t("users.updateFailed"), "error"); }
 }
 
 async function deleteUser(username: string) {
-  if (!confirm(`Delete user "${username}"?`)) return;
-  try { await authPost("deleteUser", { username }); load(); showToast("User deleted"); }
-  catch { showToast("Failed to delete", "error"); }
+  if (!confirm(t("users.deleteConfirm", { name: username }))) return;
+  try { await authPost("deleteUser", { username }); load(); showToast(t("users.deleted")); }
+  catch { showToast(t("users.deleteFailed"), "error"); }
 }
 
 function toggleEnabled(u: { username: string; enabled: boolean }) {
@@ -68,50 +70,53 @@ onMounted(load);
 <template>
   <div class="page">
     <div class="page-header">
-      <h1 class="page-title">Users</h1>
-      <button v-if="isAdmin" class="btn btn-primary" @click="showForm = !showForm">{{ showForm ? "Cancel" : "+ Add User" }}</button>
+      <div>
+        <div class="mono-label">{{ t("users.label") }}</div>
+        <h1 class="page-title">{{ t("users.title") }}</h1>
+      </div>
+      <button v-if="isAdmin" :class="showForm ? 'btn-secondary' : 'btn-primary'" @click="showForm = !showForm">{{ showForm ? t("common.cancel") : t("users.add") }}</button>
     </div>
 
-    <div v-if="showForm" class="card" style="margin-bottom:20px; max-width:450px">
-      <div class="card-header"><span class="card-title">New User</span></div>
-      <div style="display:flex; flex-direction:column; gap:12px">
-        <div class="form-group"><label class="form-label">Username</label><input v-model="form.username" class="form-input" /></div>
-        <div class="form-group"><label class="form-label">Password</label><input v-model="form.password" type="password" class="form-input" /></div>
+    <div v-if="showForm" class="card" style="margin-bottom:1.25rem; max-width:450px">
+      <div class="card-header"><span class="card-title">{{ t("users.newUser") }}</span></div>
+      <div style="display:flex; flex-direction:column; gap:0.8rem">
+        <div class="form-group"><label class="form-label">{{ t("users.username") }}</label><input v-model="form.username" class="form-input" /></div>
+        <div class="form-group"><label class="form-label">{{ t("users.password") }}</label><input v-model="form.password" type="password" class="form-input" /></div>
         <div class="form-group">
-          <label class="form-label">Level</label>
+          <label class="form-label">{{ t("users.level") }}</label>
           <select v-model="form.level" class="form-select">
-            <option v-if="isSuperAdmin" :value="3">3 — Super Admin</option>
-            <option :value="2">2 — Admin</option>
-            <option :value="1">1 — User</option>
-            <option :value="0">0 — Guest</option>
+            <option v-if="isSuperAdmin" :value="3">3 — {{ t("users.levels.super") }}</option>
+            <option :value="2">2 — {{ t("users.levels.admin") }}</option>
+            <option :value="1">1 — {{ t("users.levels.user") }}</option>
+            <option :value="0">0 — {{ t("users.levels.guest") }}</option>
           </select>
         </div>
-        <button class="btn btn-primary" @click="addUser">Create User</button>
+        <button class="btn-primary" @click="addUser">{{ t("users.create") }}</button>
       </div>
+      <div class="corner corner-tl"></div>
+      <div class="corner corner-br"></div>
     </div>
 
-    <div class="card">
-      <table class="table">
-        <thead><tr><th>Username</th><th>Level</th><th>Status</th><th style="width:120px">Actions</th></tr></thead>
-        <tbody>
-          <tr v-for="u in users" :key="u.username">
-            <td><span class="user-name">{{ u.username }}</span></td>
-            <td>
-              <select v-if="isSuperAdmin" :value="u.level" @change="changeLevel(u, parseInt(($event.target as HTMLSelectElement).value))" class="form-select level-select">
-                <option :value="3">Super Admin</option><option :value="2">Admin</option><option :value="1">User</option><option :value="0">Guest</option>
-              </select>
-              <span v-else :class="['badge', levelColors[u.level] || 'badge-blue']">{{ levelLabels[u.level] || u.level }}</span>
-            </td>
-            <td>
-              <span :class="['badge', u.enabled ? 'badge-green' : 'badge-red']" style="cursor:pointer" @click="toggleEnabled(u)">{{ u.enabled ? "Active" : "Disabled" }}</span>
-            </td>
-            <td>
-              <button v-if="isAdmin" class="btn btn-danger btn-sm" @click="deleteUser(u.username)">Delete</button>
-            </td>
-          </tr>
-          <tr v-if="!users.length"><td colspan="4" style="text-align:center; color:var(--text-muted); padding:24px">No users found.</td></tr>
-        </tbody>
-      </table>
+    <div class="table-wrap" style="--grid-cols: 1.5fr 1fr 1fr auto">
+      <div class="table-header">
+        <span>{{ t("users.colUsername") }}</span><span>{{ t("users.colLevel") }}</span><span>{{ t("users.colStatus") }}</span><span>{{ t("users.colActions") }}</span>
+      </div>
+      <div v-for="u in users" :key="u.username" class="table-row">
+        <span class="user-name">{{ u.username }}</span>
+        <span>
+          <select v-if="isSuperAdmin" :value="u.level" @change="changeLevel(u, parseInt(($event.target as HTMLSelectElement).value))" class="form-select level-select">
+            <option :value="3">{{ t("users.levels.super") }}</option><option :value="2">{{ t("users.levels.admin") }}</option><option :value="1">{{ t("users.levels.user") }}</option><option :value="0">{{ t("users.levels.guest") }}</option>
+          </select>
+          <span v-else :class="['status-badge', levelColors[u.level] || 'info']">{{ levelKeys[u.level] ? t(`users.levels.${levelKeys[u.level]}`) : u.level }}</span>
+        </span>
+        <span>
+          <span :class="['status-badge', u.enabled ? 'success' : 'error']" style="cursor:pointer" @click="toggleEnabled(u)">{{ u.enabled ? t("users.active") : t("users.disabled") }}</span>
+        </span>
+        <span>
+          <button v-if="isAdmin" class="btn-danger btn-sm" @click="deleteUser(u.username)">{{ t("common.delete") }}</button>
+        </span>
+      </div>
+      <div v-if="!users.length" class="empty-state">{{ t("users.noUsers") }}</div>
     </div>
 
     <div v-if="toast.show" :class="['toast', `toast-${toast.type}`]">{{ toast.msg }}</div>
@@ -120,8 +125,6 @@ onMounted(load);
 
 <style scoped>
 .page { max-width: 900px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-.page-title { font-size: 20px; font-weight: 700; }
-.user-name { font-weight: 600; font-size: 13px; }
-.level-select { display: inline-block; width: auto; padding: 4px 8px; font-size: 12px; }
+.user-name { font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-sm); color: var(--color-text-primary); letter-spacing: 0.05em; }
+.level-select { display: inline-block; width: auto; padding: 0.25rem 0.5rem; font-size: var(--fs-sm); }
 </style>

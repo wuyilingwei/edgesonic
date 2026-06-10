@@ -69,8 +69,9 @@ filesRoutes.post("/rest/upload", permissionMiddleware("upload"), async (c) => {
     });
   }
 
-  // Create song instance record
-  const masterId = formData.get("master_id") as string;
+  // Create song instance record (and the master/album/artist chain it requires —
+  // song_instances.master_id is a FK, an orphan master_id fails the whole insert)
+  let masterId = (formData.get("master_id") as string) || "";
   const sourceId = target === "webdav"
     ? (await db.prepare("SELECT id FROM storage_sources WHERE type = 'webdav' AND enabled = 1 LIMIT 1").first<{ id: string }>())?.id || "webdav"
     : "r2-local";
@@ -78,11 +79,41 @@ filesRoutes.post("/rest/upload", permissionMiddleware("upload"), async (c) => {
   const suffix = fileName.split(".").pop() || "bin";
 
   const instanceId = crypto.randomUUID().substring(0, 12);
+  const stmts: D1PreparedStatement[] = [];
 
-  await db.prepare(
-    `INSERT INTO song_instances (id, master_id, source_id, storage_uri, suffix, content_type, size, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(instanceId, masterId || instanceId, sourceId, storageUri, suffix, file.type, file.size, now, now).run();
+  if (masterId) {
+    const exists = await db.prepare("SELECT id FROM song_masters WHERE id = ?").bind(masterId).first();
+    if (!exists) masterId = "";
+  }
+  if (!masterId) {
+    const title = fileName.replace(/\.[^.]+$/, "");
+    masterId = crypto.randomUUID().substring(0, 12);
+    stmts.push(
+      db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name) VALUES ('unknown-artist', 'Unknown Artist', 'unknown artist')"),
+      db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name) VALUES ('uploads', 'Uploads', 'uploads')"),
+      db.prepare(
+        `INSERT INTO song_masters (id, album_id, artist_id, title, created_at, updated_at)
+         VALUES (?, 'uploads', 'unknown-artist', ?, ?, ?)`
+      ).bind(masterId, title, now, now),
+    );
+  }
+
+  stmts.push(
+    db.prepare(
+      `INSERT INTO song_instances (id, master_id, source_id, storage_uri, suffix, content_type, size, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).bind(instanceId, masterId, sourceId, storageUri, suffix, file.type, file.size, now, now),
+  );
+
+  try {
+    await db.batch(stmts);
+  } catch (e) {
+    // Roll back the stored object so a failed insert doesn't leave an orphan
+    if (target !== "webdav") await env.MUSIC_BUCKET.delete(r2Key);
+    return c.text(subsonicError(0, `Upload record failed: ${e instanceof Error ? e.message : String(e)}`), 500, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
 
   return c.text(
     subsonicOK({

@@ -54,12 +54,13 @@ export async function getSourceCredentials(
   const source = await db
     .prepare("SELECT * FROM storage_sources WHERE type = ? AND enabled = 1 LIMIT 1")
     .bind(scheme)
-    .first<{ base_url: string; username: string | null; password: string | null }>();
+    .first<{ base_url: string; username: string | null; password: string | null; root_path: string | null }>();
 
   if (!source) return null;
+  const root = (source.root_path || "").replace(/^\/+|\/+$/g, "");
   return {
     username: source.username || "",
     password: source.password || "",
-    baseUrl: source.base_url,
+    baseUrl: source.base_url.replace(/\/+$/, "") + (root ? `/${root}` : ""),
   };
 }

@@ -15,29 +15,33 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
+import { useI18n } from "vue-i18n";
 
+const { t } = useI18n();
 const inputFile = ref<File | null>(null);
 const outputFormat = ref("mp3");
 const bitrate = ref(192);
 const status = ref("");
+const statusErr = ref(false);
 const log = ref<string[]>([]);
 
 function addLog(msg: string) { log.value.push(msg); if (log.value.length > 50) log.value.shift(); }
 
 async function transcode() {
-  if (!inputFile.value) { status.value = "Select a file first"; return; }
-  status.value = "Loading FFmpeg WASM...";
+  if (!inputFile.value) { status.value = t("transcoder.selectFirst"); statusErr.value = true; return; }
+  status.value = t("transcoder.loadingWasm");
+  statusErr.value = false;
   addLog(`Loading FFmpeg WASM for ${inputFile.value.name}`);
 
   try {
-    const { createFFmpeg, fetchFile } = await import("@ffmpeg/ffmpeg");
-    const ffmpeg = createFFmpeg({ log: true });
-    ffmpeg.setLogger(({ type, message }) => addLog(`[${type}] ${message}`));
+    const { FFmpeg } = await import("@ffmpeg/ffmpeg");
+    const ffmpeg = new FFmpeg();
+    ffmpeg.on("log", ({ type, message }) => addLog(`[${type}] ${message}`));
 
     await ffmpeg.load();
     addLog("FFmpeg WASM loaded ✓");
 
-    ffmpeg.FS("writeFile", "input", await fetchFile(inputFile.value));
+    await ffmpeg.writeFile("input", new Uint8Array(await inputFile.value.arrayBuffer()));
     addLog(`Input loaded: ${(inputFile.value.size / 1024 / 1024).toFixed(1)} MB`);
 
     const args = ["-i", "input"];
@@ -49,22 +53,23 @@ async function transcode() {
     else if (outputFormat.value === "ogg") args.push("-b:a", `${bitrate.value}k`, "output.ogg");
 
     addLog(`Running: ffmpeg ${args.join(" ")}`);
-    await ffmpeg.run(...args);
+    await ffmpeg.exec(args);
 
     const outName = `output.${outputFormat.value}`;
-    const data = ffmpeg.FS("readFile", outName);
+    const data = (await ffmpeg.readFile(outName)) as Uint8Array;
     addLog(`Complete: ${(data.length / 1024).toFixed(1)} KB`);
 
-    const blob = new Blob([data.buffer], { type: `audio/${outputFormat.value === "mp3" ? "mpeg" : outputFormat.value}` });
+    const blob = new Blob([data as BlobPart], { type: `audio/${outputFormat.value === "mp3" ? "mpeg" : outputFormat.value}` });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
     a.download = `${inputFile.value.name.replace(/\.[^.]+$/, "")}.${outputFormat.value}`;
     a.click();
     URL.revokeObjectURL(url);
-    status.value = "Done! Download started.";
+    status.value = t("transcoder.done");
   } catch (err: unknown) {
-    status.value = "Transcoding failed";
+    status.value = t("transcoder.failed");
+    statusErr.value = true;
     addLog(`ERROR: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
@@ -89,14 +94,20 @@ const formats = [
 
 <template>
   <div class="page">
-    <div class="page-header"><h1 class="page-title">Transcoder</h1><span class="badge badge-blue">FFmpeg WASM</span></div>
+    <div class="page-header">
+      <div>
+        <div class="mono-label">{{ t("transcoder.label") }}</div>
+        <h1 class="page-title">{{ t("transcoder.title") }}</h1>
+      </div>
+      <span class="status-badge info">FFMPEG WASM</span>
+    </div>
 
     <div class="grid grid-2">
       <div class="card">
-        <div class="card-header"><span class="card-title">Source</span></div>
-        <div style="display:flex; flex-direction:column; gap:16px">
+        <div class="card-header"><span class="card-title">{{ t("transcoder.source") }}</span></div>
+        <div style="display:flex; flex-direction:column; gap:1rem">
           <div class="form-group">
-            <label class="form-label">Input File</label>
+            <label class="form-label">{{ t("transcoder.inputFile") }}</label>
             <input type="file" accept="audio/*" class="form-input" @change="onFileChange" />
           </div>
           <div v-if="inputFile" class="file-info">
@@ -104,33 +115,37 @@ const formats = [
             <span class="file-size">{{ (inputFile.size / 1024 / 1024).toFixed(1) }} MB</span>
           </div>
         </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
       </div>
 
       <div class="card">
-        <div class="card-header"><span class="card-title">Output Settings</span></div>
-        <div style="display:flex; flex-direction:column; gap:16px">
+        <div class="card-header"><span class="card-title">{{ t("transcoder.outputSettings") }}</span></div>
+        <div style="display:flex; flex-direction:column; gap:1rem">
           <div class="form-group">
-            <label class="form-label">Format</label>
+            <label class="form-label">{{ t("transcoder.format") }}</label>
             <select v-model="outputFormat" class="form-select">
               <option v-for="f in formats" :key="f.value" :value="f.value">{{ f.label }} — {{ f.desc }}</option>
             </select>
           </div>
           <div v-if="['mp3', 'aac', 'opus', 'ogg'].includes(outputFormat)" class="form-group">
-            <label class="form-label">Bitrate: {{ bitrate }} kbps</label>
-            <input type="range" v-model="bitrate" min="32" max="512" step="16" style="width:100%" />
-            <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--text-muted)"><span>32</span><span>512</span></div>
+            <label class="form-label">{{ t("transcoder.bitrate", { n: bitrate }) }}</label>
+            <input type="range" v-model="bitrate" min="32" max="512" step="16" class="bitrate-range" />
+            <div class="range-marks"><span>32</span><span>512</span></div>
           </div>
-          <button class="btn btn-primary" @click="transcode" :disabled="!inputFile">Start Transcoding</button>
-          <span v-if="status" :class="['status', { error: status.includes('fail') }]">{{ status }}</span>
+          <button class="btn-primary" @click="transcode" :disabled="!inputFile">{{ t("transcoder.start") }}</button>
+          <span v-if="status" :class="['status', { error: statusErr }]">{{ status }}</span>
         </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
       </div>
     </div>
 
     <div class="card log-panel">
-      <div class="card-header"><span class="card-title">Log</span></div>
+      <div class="card-header"><span class="card-title">{{ t("transcoder.log") }}</span></div>
       <div class="log-box">
         <div v-for="(l, i) in log" :key="i" class="log-line">{{ l }}</div>
-        <div v-if="!log.length" class="log-empty">Transcoding log will appear here...</div>
+        <div v-if="!log.length" class="log-empty">{{ t("transcoder.logEmpty") }}</div>
       </div>
     </div>
   </div>
@@ -138,15 +153,32 @@ const formats = [
 
 <style scoped>
 .page { max-width: 1000px; }
-.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
-.page-title { font-size: 20px; font-weight: 700; }
-.file-info { display: flex; gap: 12px; padding: 8px; background: var(--bg-primary); border-radius: 6px; font-size: 13px; }
-.file-name { color: var(--text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-size { color: var(--text-muted); }
-.status { font-size: 13px; color: var(--success); }
-.status.error { color: var(--danger); }
-.log-panel { margin-top: 16px; }
-.log-box { max-height: 240px; overflow-y: auto; background: var(--bg-primary); border-radius: 4px; padding: 10px; font-family: monospace; font-size: 12px; }
-.log-line { color: var(--text-secondary); padding: 2px 0; border-bottom: 1px solid rgba(48, 54, 61, 0.3); white-space: pre-wrap; word-break: break-all; }
-.log-empty { color: var(--text-muted); text-align: center; padding: 16px; }
+.file-info {
+  display: flex; gap: 0.8rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.file-name { color: var(--color-text-primary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-size { color: var(--color-text-muted); }
+.bitrate-range { width: 100%; accent-color: var(--color-accent-primary); }
+.range-marks {
+  display: flex; justify-content: space-between;
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted);
+}
+.status { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-status-success); }
+.status.error { color: var(--color-status-error); }
+.log-panel { margin-top: 1rem; }
+.log-box {
+  max-height: 240px; overflow-y: auto;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+  padding: 0.7rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.log-line { color: var(--color-text-secondary); padding: 2px 0; border-bottom: 1px solid var(--color-border-subtle); white-space: pre-wrap; word-break: break-all; }
+.log-empty { font-family: var(--font-mono); color: var(--color-text-muted); text-align: center; padding: 1rem; letter-spacing: 0.1em; }
 </style>

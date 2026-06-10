@@ -20,6 +20,7 @@ import { searchRoutes } from "./endpoints/searching";
 import { mediaRoutes } from "./endpoints/media";
 import { adminRoutes } from "./endpoints/admin";
 import { filesRoutes } from "./endpoints/files";
+import { featuresRoutes } from "./endpoints/features";
 
 export function registerRoutes(app: Hono) {
   app.route("/", pingRoutes);
@@ -28,4 +29,5 @@ export function registerRoutes(app: Hono) {
   app.route("/", mediaRoutes);
   app.route("/", adminRoutes);
   app.route("/", filesRoutes);
+  app.route("/", featuresRoutes);
 }
