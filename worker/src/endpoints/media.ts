@@ -7,6 +7,7 @@ import { createWebDAVAdapter } from "../adapters/webdav";
 import { createSubsonicAdapter } from "../adapters/subsonic";
 import type { StreamResult } from "../adapters/index";
 import { subsonicError } from "../auth";
+import { getFeature, parseChain } from "../utils/features";
 
 export const mediaRoutes = new Hono();
 
@@ -46,9 +47,17 @@ mediaRoutes.get("/rest/stream", async (c) => {
     case "webdav":
       result = await createWebDAVAdapter(env.DB).stream(selected.storage_uri, range);
       break;
-    case "subsonic":
-      result = await createSubsonicAdapter(env.DB).stream(selected.storage_uri, range);
+    case "subsonic": {
+      if (!(await getFeature(env, "enable_subsonic_upstream"))) {
+        return c.text(subsonicError(50, "Subsonic upstream sources are disabled"), 403, { "Content-Type": "application/xml; charset=UTF-8" });
+      }
+      const incomingChain = parseChain(c.req.query("esChain") || c.req.header("X-EdgeSonic-Chain"));
+      result = await createSubsonicAdapter(env.DB, {
+        instanceId: env.INSTANCE_ID,
+        incomingChain,
+      }).stream(selected.storage_uri, range);
       break;
+    }
     default:
       return c.text(subsonicError(0, "Unsupported storage scheme"), 500, { "Content-Type": "application/xml; charset=UTF-8" });
   }

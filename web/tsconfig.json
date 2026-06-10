@@ -5,6 +5,7 @@
     "moduleResolution": "bundler",
     "jsx": "preserve",
     "strict": true,
+    "resolveJsonModule": true,
     "noEmit": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

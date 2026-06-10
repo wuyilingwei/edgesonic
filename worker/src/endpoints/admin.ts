@@ -1,19 +1,20 @@
 import { Hono } from "hono";
 import { createQueries } from "../db/queries";
-import { permissionMiddleware, subsonicError } from "../auth";
+import { permissionMiddleware, subsonicError, sha256 } from "../auth";
 import { subsonicOK } from "../utils/xml";
 
-export const adminRoutes = new Hono();
+export const adminRoutes = new Hono<{ Bindings: Env; Variables: { user: import("../types/entities").User } }>();
 
 adminRoutes.get("/rest/getStorageSources", permissionMiddleware("manage_sources"), async (c) => {
   const db = (c.env as Env).DB;
   const result = await db.prepare("SELECT * FROM storage_sources ORDER BY created_at ASC").all<{
     id: string; type: string; base_url: string; username: string | null;
-    last_sync: number | null; enabled: number;
+    root_path: string | null; last_sync: number | null; enabled: number;
   }>();
   const sources = result.results.map((s) => ({
     _attributes: {
       id: s.id, type: s.type, baseUrl: s.base_url,
+      rootPath: s.root_path ?? "",
       username: s.username ?? "", enabled: String(!!s.enabled),
       lastSync: s.last_sync ? String(s.last_sync) : "0",
     },
@@ -24,7 +25,7 @@ adminRoutes.get("/rest/getStorageSources", permissionMiddleware("manage_sources"
 });
 
 adminRoutes.post("/rest/addStorageSource", permissionMiddleware("manage_sources"), async (c) => {
-  const body = await c.req.json<{ type: string; base_url: string; username?: string; password?: string }>();
+  const body = await c.req.json<{ type: string; base_url: string; username?: string; password?: string; root_path?: string }>();
   if (!body.type || !body.base_url) {
     return c.text(subsonicError(0, "Missing type or base_url"), 400, {
       "Content-Type": "application/xml; charset=UTF-8",
@@ -34,8 +35,42 @@ adminRoutes.post("/rest/addStorageSource", permissionMiddleware("manage_sources"
   const id = crypto.randomUUID().substring(0, 8);
   const now = Math.floor(Date.now() / 1000);
   await db.prepare(
-    "INSERT INTO storage_sources (id, type, base_url, username, password, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-  ).bind(id, body.type, body.base_url, body.username || null, body.password || null, now, now).run();
+    "INSERT INTO storage_sources (id, type, base_url, username, password, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+  ).bind(id, body.type, body.base_url, body.username || null, body.password || null, body.root_path || "", now, now).run();
+  return c.text(subsonicOK({}), 200, { "Content-Type": "application/xml; charset=UTF-8" });
+});
+
+adminRoutes.post("/rest/updateStorageSource", permissionMiddleware("manage_sources"), async (c) => {
+  const body = await c.req.json<{
+    id: string; base_url?: string; username?: string; password?: string;
+    root_path?: string; enabled?: number;
+  }>();
+  if (!body.id) {
+    return c.text(subsonicError(0, "Missing id"), 400, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+  const db = (c.env as Env).DB;
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  if (body.base_url !== undefined) { sets.push("base_url = ?"); binds.push(body.base_url); }
+  if (body.username !== undefined) { sets.push("username = ?"); binds.push(body.username || null); }
+  if (body.password !== undefined && body.password !== "") { sets.push("password = ?"); binds.push(body.password); }
+  if (body.root_path !== undefined) { sets.push("root_path = ?"); binds.push(body.root_path); }
+  if (body.enabled !== undefined) { sets.push("enabled = ?"); binds.push(body.enabled ? 1 : 0); }
+  if (sets.length === 0) {
+    return c.text(subsonicError(0, "Nothing to update"), 400, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+  sets.push("updated_at = ?");
+  binds.push(Math.floor(Date.now() / 1000), body.id);
+  const result = await db.prepare(`UPDATE storage_sources SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+  if (!result.meta.changes) {
+    return c.text(subsonicError(70, "Source not found"), 404, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
   return c.text(subsonicOK({}), 200, { "Content-Type": "application/xml; charset=UTF-8" });
 });
 
@@ -71,8 +106,8 @@ adminRoutes.post("/rest/createUser", permissionMiddleware("manage_users"), async
   const db = (c.env as Env).DB;
   const now = Math.floor(Date.now() / 1000);
   await db.prepare(
-    "INSERT OR REPLACE INTO users (username, password, level, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)"
-  ).bind(body.username, body.password, level, now, now).run();
+    "INSERT OR REPLACE INTO users (username, master_password, level, enabled, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)"
+  ).bind(body.username, await sha256(body.password), level, now, now).run();
   return c.text(subsonicOK({}), 200, { "Content-Type": "application/xml; charset=UTF-8" });
 });
 
@@ -119,8 +154,8 @@ adminRoutes.post("/rest/updateUser", permissionMiddleware("manage_users"), async
 
   if (body.password) {
     await db.prepare(
-      "UPDATE users SET password = ?, updated_at = ? WHERE username = ?"
-    ).bind(body.password, now, body.username).run();
+      "UPDATE users SET master_password = ?, updated_at = ? WHERE username = ?"
+    ).bind(await sha256(body.password), now, body.username).run();
   }
   if (body.level !== undefined) {
     if (body.level < 0 || body.level > 3) {
@@ -354,4 +389,29 @@ adminRoutes.get("/rest/getSessions", async (c) => {
     200,
     { "Content-Type": "application/xml; charset=UTF-8" }
   );
+});
+
+adminRoutes.post("/rest/revokeSession", async (c) => {
+  const body = await c.req.json<{ id?: string }>().catch(() => ({} as { id?: string }));
+  if (!body.id) {
+    return c.text(subsonicError(0, "Missing id"), 400, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+  const db = (c.env as Env).DB;
+  const kv = (c.env as Env).KV;
+  const user = c.get("user");
+  // Users may only revoke their own sessions
+  const row = await db.prepare("SELECT token FROM sessions WHERE id = ? AND username = ?")
+    .bind(body.id, user.username).first<{ token: string }>();
+  if (!row) {
+    return c.text(subsonicError(70, "Session not found"), 404, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+  await db.prepare("DELETE FROM sessions WHERE id = ?").bind(body.id).run();
+  // Drop the KV fast-path cache if it pointed at this token
+  const cached = await kv.get(`session:${user.username}`);
+  if (cached === row.token) await kv.delete(`session:${user.username}`);
+  return c.text(subsonicOK({}), 200, { "Content-Type": "application/xml; charset=UTF-8" });
 });
