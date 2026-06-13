@@ -204,6 +204,54 @@ edgesonicAuthRoutes.post("/auth/credentials/create", permissionMiddleware("manag
   );
 });
 
+// 082 — Rename an existing Subsonic credential's label (e.g. "Pixel" → "DSub
+// on Pixel 9"). Doesn't touch the password or last_used; just lets the user
+// keep their device registry tidy.
+//   - body: { id, label }
+//   - username pinned to the session user — UPDATE WHERE id=? AND username=?
+//     ensures one user can never relabel another user's credential, and
+//     skips the need for a separate "exists & owned" lookup.
+//   - label must be a non-null string ≤200 chars; we allow empty to clear.
+//   - meta.changes === 0 means no row matched → either bogus id or someone
+//     else's credential. Both are surfaced as 404 (consistent with the
+//     sessions/revoke handler above).
+edgesonicAuthRoutes.post("/auth/credentials/update", permissionMiddleware("manage_credentials"), async (c) => {
+  const db = c.env.DB;
+  const user = c.get("user");
+
+  let body: { id?: string; label?: string };
+  try {
+    body = await c.req.json<{ id?: string; label?: string }>();
+  } catch {
+    return c.text(subsonicError(0, "Invalid JSON body"), 400, XML);
+  }
+
+  if (!body.id) {
+    return c.text(subsonicError(0, "Missing credential id"), 400, XML);
+  }
+  if (typeof body.label !== "string") {
+    return c.text(subsonicError(0, "Missing label"), 400, XML);
+  }
+  if (body.label.length > 200) {
+    return c.text(subsonicError(0, "Label too long (max 200 chars)"), 400, XML);
+  }
+
+  const result = await db.prepare(
+    "UPDATE subsonic_credentials SET label = ? WHERE id = ? AND username = ?",
+  ).bind(body.label, body.id, user.username).run();
+
+  if (!result.meta.changes) {
+    return c.text(subsonicError(70, "Credential not found"), 404, XML);
+  }
+
+  return c.text(
+    subsonicOK({
+      credential: { _attributes: { id: body.id, label: body.label } },
+    }),
+    200, XML,
+  );
+});
+
 edgesonicAuthRoutes.post("/auth/credentials/delete", permissionMiddleware("manage_credentials"), async (c) => {
   const db = c.env.DB;
   const user = c.get("user");
