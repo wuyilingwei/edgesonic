@@ -165,6 +165,8 @@
     "browserReadProgress": "正在解析 {processed} / {total}",
     "browserReadDone": "浏览器解析完成，{tagged}/{total} 首已入库",
     "browserReadNothing": "当前目录没有可由浏览器解析的文件",
+    "pendingBadge": "{n} 个文件待解析",
+    "pendingBadgeTitle": "来自增量扫描的 tag_scanned=0 实例 — 点击「浏览器解析」消费此队列",
     "rename": "重命名",
     "moveTo": "移动到",
     "copyTo": "复制到",
@@ -314,6 +316,24 @@
         "clear": "清除",
         "saved": "Last.fm 密钥已保存",
         "cleared": "Last.fm 密钥已清除",
+        "saveFailed": "保存失败"
+      },
+      "scan": {
+        "title": "扫描设置",
+        "desc": "WebDAV 增量扫描节奏 + 浏览器解析队列行为。Cloudflare Cron 每小时触发，若间隔大于 1 小时则在 KV 中比对 last_scan_ts。",
+        "intervalHours": "扫描频率（小时）",
+        "intervalHoursDesc": "0 = 关闭自动扫描；1 = 每次 cron tick 都跑；N>1 = 每 N 小时跑一次。",
+        "etagCheck": "ETag 增量检测",
+        "etagCheckDesc": "命中 (ETag + lastModified + size) 三元组时跳过整个文件。关闭则每次扫描都覆盖现有 instance 并重置 tag_scanned。",
+        "strategy": "元数据重读策略",
+        "strategyAuto": "auto（自动）",
+        "strategyWorker": "worker（Worker 内核）",
+        "strategyBrowser": "browser（浏览器侧）",
+        "strategyDesc": "auto：Worker 处理 mp3/flac/wav，其他后缀走浏览器；worker：仅 Worker；browser：全部浏览器解析。",
+        "browserAuto": "浏览器自动解析",
+        "browserAutoDesc": "Files 页可见时自动消费 pending 列表（每首歌一次 /rest/stream，注意流量）。关闭后需要手动点击「浏览器解析」。",
+        "save": "保存",
+        "saved": "已保存",
         "saveFailed": "保存失败"
       }
     },

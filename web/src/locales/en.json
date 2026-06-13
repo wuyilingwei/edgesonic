@@ -165,6 +165,8 @@
     "browserReadProgress": "Parsing {processed} / {total}",
     "browserReadDone": "Browser read complete, {tagged}/{total} tracks identified",
     "browserReadNothing": "No browser-parseable files in this folder",
+    "pendingBadge": "{n} pending",
+    "pendingBadgeTitle": "tag_scanned=0 instances from the incremental scan — press BROWSER READ to drain",
     "rename": "Rename",
     "moveTo": "Move To",
     "copyTo": "Copy To",
@@ -314,6 +316,24 @@
         "clear": "Clear",
         "saved": "Last.fm key saved",
         "cleared": "Last.fm key cleared",
+        "saveFailed": "Save failed"
+      },
+      "scan": {
+        "title": "Scan Settings",
+        "desc": "WebDAV incremental scan cadence + browser-side metadata queue. The Cloudflare cron ticks hourly; intervals >1 are gated via KV cron:last_scan_ts.",
+        "intervalHours": "Scan interval (hours)",
+        "intervalHoursDesc": "0 = disabled; 1 = run every cron tick; N>1 = run every N hours.",
+        "etagCheck": "ETag incremental check",
+        "etagCheckDesc": "Skip files whose (ETag + lastModified + size) triple matches the stored snapshot. Disable to force a full re-import on every scan.",
+        "strategy": "Tag re-read strategy",
+        "strategyAuto": "auto",
+        "strategyWorker": "worker",
+        "strategyBrowser": "browser",
+        "strategyDesc": "auto: Worker handles mp3/flac/wav, others fall through to the browser; worker: Worker only; browser: always browser.",
+        "browserAuto": "Browser auto-drain",
+        "browserAutoDesc": "When Files page is visible, automatically run BROWSER READ on pending items. Each item costs one /rest/stream download — be careful on cellular.",
+        "save": "Save",
+        "saved": "Saved",
         "saveFailed": "Save failed"
       }
     },
