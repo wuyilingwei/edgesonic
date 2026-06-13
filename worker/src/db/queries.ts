@@ -1,4 +1,4 @@
-import type { Artist, Album, SongMaster, SongInstance, Annotation, User, Playlist, Bookmark, PlayQueue, TranscodeJob } from "../types/entities";
+import type { Artist, Album, SongMaster, SongInstance, Annotation, User, Playlist, Bookmark, PlayQueue, TranscodeJob, InternetRadioStation, PodcastChannel, PodcastEpisode, Share } from "../types/entities";
 
 export function createQueries(db: D1Database) {
   return {
@@ -440,6 +440,32 @@ export function createQueries(db: D1Database) {
       return result.results;
     },
 
+    // 047 — Top songs for a given artist name, ordered by aggregated play_count
+    // across ALL users (catalog-level ranking, mirrors list_albums "frequent").
+    // LIKE match on artist name so we tolerate sort_name / canonical variants
+    // (last.fm uses the same artist param the client supplied).
+    // Ties broken by created_at DESC so newer rips bubble up.
+    async getTopSongsByArtist(
+      artistName: string,
+      limit: number,
+    ): Promise<Array<SongMaster & { artist_name: string | null; album_name: string | null }>> {
+      const result = await db.prepare(
+        `SELECT sm.*, ar.name AS artist_name, al.name AS album_name,
+                COALESCE(SUM(an.play_count), 0) AS total_plays
+         FROM song_masters sm
+         JOIN artists ar ON ar.id = sm.artist_id
+         LEFT JOIN albums al ON al.id = sm.album_id
+         LEFT JOIN annotations an
+           ON an.item_id = sm.id AND an.item_type = 'song'
+         WHERE LOWER(ar.name) = LOWER(?) OR ar.name LIKE ?
+         GROUP BY sm.id
+         ORDER BY total_plays DESC, sm.created_at DESC
+         LIMIT ?`
+      ).bind(artistName, artistName, limit)
+        .all<SongMaster & { artist_name: string | null; album_name: string | null; total_plays: number }>();
+      return result.results;
+    },
+
     // Users
     async getUser(username: string): Promise<User | null> {
       return db.prepare("SELECT username, master_password AS password, level, enabled, created_at, updated_at FROM users WHERE username = ? AND enabled = 1").bind(username).first<User>();
@@ -633,6 +659,94 @@ export function createQueries(db: D1Database) {
       ).bind(opts.username, songIdsJson, currentId, positionMs, changedBy, now).run();
     },
 
+    // ========================================================================
+    // 044 — Sharing
+    // ========================================================================
+    // Each share is owned by one user; cascade deletes wipe entries when the
+    // share or owner is removed. `getSharesForUser(username, isAdmin)` returns
+    // the caller's own shares (or every share when isAdmin=true so the
+    // SuperAdmin Settings view can audit).
+    async getSharesForUser(username: string, isAdmin = false): Promise<Share[]> {
+      if (isAdmin) {
+        const result = await db.prepare(
+          "SELECT * FROM shares ORDER BY updated_at DESC"
+        ).all<Share>();
+        return result.results;
+      }
+      const result = await db.prepare(
+        "SELECT * FROM shares WHERE user_id = ? ORDER BY updated_at DESC"
+      ).bind(username).all<Share>();
+      return result.results;
+    },
+
+    async getShareById(id: string): Promise<Share | null> {
+      return db.prepare("SELECT * FROM shares WHERE id = ?").bind(id).first<Share>();
+    },
+
+    async getShareEntries(shareId: string): Promise<SongMaster[]> {
+      const result = await db.prepare(
+        `SELECT sm.* FROM share_entries se
+         JOIN song_masters sm ON sm.id = se.song_master_id
+         WHERE se.share_id = ? ORDER BY se.position ASC`
+      ).bind(shareId).all<SongMaster>();
+      return result.results;
+    },
+
+    async createShare(opts: {
+      id: string;
+      userId: string;
+      description?: string | null;
+      expiresAt?: number | null;            // unix seconds; null = never expires
+      songIds: string[];                    // ordered target song_master ids
+    }): Promise<void> {
+      const now = Math.floor(Date.now() / 1000);
+      const description = opts.description ?? null;
+      const expiresAt = opts.expiresAt ?? null;
+      const stmts: D1PreparedStatement[] = [
+        db.prepare(
+          `INSERT INTO shares (id, user_id, description, expires_at, view_count, last_visited_at, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 0, NULL, ?, ?)`
+        ).bind(opts.id, opts.userId, description, expiresAt, now, now),
+      ];
+      opts.songIds.forEach((sid, i) => {
+        stmts.push(
+          db.prepare(
+            "INSERT INTO share_entries (share_id, position, song_master_id) VALUES (?, ?, ?)"
+          ).bind(opts.id, i, sid)
+        );
+      });
+      await db.batch(stmts);
+    },
+
+    async updateShareMeta(id: string, patch: {
+      description?: string | null;          // empty string is treated as clear (null)
+      expiresAt?: number | null;            // unix seconds; null = clear
+    }): Promise<void> {
+      const sets: string[] = [];
+      const binds: unknown[] = [];
+      if (patch.description !== undefined) { sets.push("description = ?"); binds.push(patch.description); }
+      if (patch.expiresAt !== undefined) { sets.push("expires_at = ?"); binds.push(patch.expiresAt); }
+      if (sets.length === 0) return;
+      sets.push("updated_at = ?");
+      binds.push(Math.floor(Date.now() / 1000));
+      binds.push(id);
+      await db.prepare(`UPDATE shares SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+    },
+
+    async deleteShare(id: string): Promise<void> {
+      // CASCADE on share_entries handles entries.
+      await db.prepare("DELETE FROM shares WHERE id = ?").bind(id).run();
+    },
+
+    // Atomic +1 + last_visited_at = now. Called by the public /share/:id route
+    // after the existence + expiry checks pass.
+    async incrementShareView(id: string): Promise<void> {
+      const now = Math.floor(Date.now() / 1000);
+      await db.prepare(
+        "UPDATE shares SET view_count = view_count + 1, last_visited_at = ? WHERE id = ?"
+      ).bind(now, id).run();
+    },
+
     // Indexes (getIndexes support). When musicFolderId is provided, restrict to
     // artists that have at least one instance hosted by that source.
     async getArtistIndexes(musicFolderId?: string): Promise<Array<{ letter: string; artists: Artist[] }>> {
@@ -768,6 +882,247 @@ export function createQueries(db: D1Database) {
         ended_at: number | null;
       }>();
       return result.results;
+    },
+
+    // ========================================================================
+    // 045 — Internet Radio Stations
+    // ========================================================================
+    async listRadioStations(): Promise<InternetRadioStation[]> {
+      const result = await db.prepare(
+        "SELECT * FROM internet_radio_stations ORDER BY name ASC"
+      ).all<InternetRadioStation>();
+      return result.results;
+    },
+
+    async getRadioStation(id: string): Promise<InternetRadioStation | null> {
+      return db.prepare("SELECT * FROM internet_radio_stations WHERE id = ?")
+        .bind(id)
+        .first<InternetRadioStation>();
+    },
+
+    async createRadioStation(opts: {
+      id: string;
+      name: string;
+      streamUrl: string;
+      homepageUrl?: string | null;
+      createdBy?: string | null;
+    }): Promise<void> {
+      const now = Math.floor(Date.now() / 1000);
+      await db.prepare(
+        `INSERT INTO internet_radio_stations
+         (id, name, stream_url, homepage_url, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(
+        opts.id,
+        opts.name,
+        opts.streamUrl,
+        opts.homepageUrl ?? null,
+        opts.createdBy ?? null,
+        now,
+        now,
+      ).run();
+    },
+
+    // Partial update. `homepageUrl === null` clears the column; `undefined` skips it.
+    // Returns the number of rows changed (0 = not found).
+    async updateRadioStation(
+      id: string,
+      patch: { name?: string; streamUrl?: string; homepageUrl?: string | null },
+    ): Promise<number> {
+      const sets: string[] = [];
+      const binds: unknown[] = [];
+      if (patch.name !== undefined) { sets.push("name = ?"); binds.push(patch.name); }
+      if (patch.streamUrl !== undefined) { sets.push("stream_url = ?"); binds.push(patch.streamUrl); }
+      if (patch.homepageUrl !== undefined) {
+        sets.push("homepage_url = ?");
+        binds.push(patch.homepageUrl);
+      }
+      if (sets.length === 0) return 0;
+      sets.push("updated_at = ?");
+      binds.push(Math.floor(Date.now() / 1000), id);
+      const result = await db.prepare(
+        `UPDATE internet_radio_stations SET ${sets.join(", ")} WHERE id = ?`
+      ).bind(...binds).run();
+      return Number(result.meta?.changes ?? 0);
+    },
+
+    async deleteRadioStation(id: string): Promise<number> {
+      const result = await db.prepare(
+        "DELETE FROM internet_radio_stations WHERE id = ?"
+      ).bind(id).run();
+      return Number(result.meta?.changes ?? 0);
+    },
+
+    // ========================================================================
+    // 046 — Podcast Channels + Episodes
+    // ========================================================================
+    // RSS sync writes channel meta + UPSERTs episodes by (channel_id, guid).
+    // Subsonic endpoints read these tables; downloadPodcastEpisode mutates
+    // the episode row asynchronously (status: new → downloading → completed).
+
+    async listPodcastChannels(): Promise<PodcastChannel[]> {
+      const result = await db.prepare(
+        "SELECT * FROM podcast_channels ORDER BY created_at DESC"
+      ).all<PodcastChannel>();
+      return result.results;
+    },
+
+    async getPodcastChannel(id: string): Promise<PodcastChannel | null> {
+      return db.prepare("SELECT * FROM podcast_channels WHERE id = ?")
+        .bind(id).first<PodcastChannel>();
+    },
+
+    async getPodcastChannelByUrl(url: string): Promise<PodcastChannel | null> {
+      return db.prepare("SELECT * FROM podcast_channels WHERE url = ?")
+        .bind(url).first<PodcastChannel>();
+    },
+
+    async insertPodcastChannel(opts: { id: string; url: string }): Promise<void> {
+      const now = Math.floor(Date.now() / 1000);
+      await db.prepare(
+        `INSERT INTO podcast_channels (id, url, status, created_at)
+         VALUES (?, ?, 'new', ?)`
+      ).bind(opts.id, opts.url, now).run();
+    },
+
+    // Patch channel meta after RSS parse. `status` decides completed vs error;
+    // error_message is cleared on success so a recovering feed flushes the
+    // previous failure note.
+    async updatePodcastChannel(id: string, patch: {
+      title?: string | null;
+      description?: string | null;
+      imageUrl?: string | null;
+      language?: string | null;
+      status?: "new" | "completed" | "error";
+      errorMessage?: string | null;
+      lastRefreshedAt?: number | null;
+    }): Promise<void> {
+      const sets: string[] = [];
+      const binds: unknown[] = [];
+      if (patch.title !== undefined) { sets.push("title = ?"); binds.push(patch.title); }
+      if (patch.description !== undefined) { sets.push("description = ?"); binds.push(patch.description); }
+      if (patch.imageUrl !== undefined) { sets.push("image_url = ?"); binds.push(patch.imageUrl); }
+      if (patch.language !== undefined) { sets.push("language = ?"); binds.push(patch.language); }
+      if (patch.status !== undefined) { sets.push("status = ?"); binds.push(patch.status); }
+      if (patch.errorMessage !== undefined) { sets.push("error_message = ?"); binds.push(patch.errorMessage); }
+      if (patch.lastRefreshedAt !== undefined) {
+        sets.push("last_refreshed_at = ?");
+        binds.push(patch.lastRefreshedAt);
+      }
+      if (sets.length === 0) return;
+      binds.push(id);
+      await db.prepare(
+        `UPDATE podcast_channels SET ${sets.join(", ")} WHERE id = ?`
+      ).bind(...binds).run();
+    },
+
+    async deletePodcastChannel(id: string): Promise<number> {
+      // FK ON DELETE CASCADE handles podcast_episodes.
+      const result = await db.prepare(
+        "DELETE FROM podcast_channels WHERE id = ?"
+      ).bind(id).run();
+      return Number(result.meta?.changes ?? 0);
+    },
+
+    async listPodcastEpisodes(channelId: string): Promise<PodcastEpisode[]> {
+      const result = await db.prepare(
+        `SELECT * FROM podcast_episodes WHERE channel_id = ?
+         ORDER BY published_at DESC NULLS LAST, created_at DESC`
+      ).bind(channelId).all<PodcastEpisode>();
+      return result.results;
+    },
+
+    async getPodcastEpisode(id: string): Promise<PodcastEpisode | null> {
+      return db.prepare("SELECT * FROM podcast_episodes WHERE id = ?")
+        .bind(id).first<PodcastEpisode>();
+    },
+
+    // Newest episodes across every channel — used by getNewestPodcasts.
+    // Defaults to 20 per Subsonic spec (count parameter overrides).
+    async listNewestEpisodes(count: number): Promise<PodcastEpisode[]> {
+      const result = await db.prepare(
+        `SELECT * FROM podcast_episodes
+         ORDER BY published_at DESC NULLS LAST, created_at DESC
+         LIMIT ?`
+      ).bind(count).all<PodcastEpisode>();
+      return result.results;
+    },
+
+    // UPSERT by (channel_id, guid): existing row updates meta but preserves
+    // status / downloaded_r2_key so an in-flight download isn't reset.
+    async upsertPodcastEpisode(opts: {
+      id: string;
+      channelId: string;
+      guid: string;
+      title?: string | null;
+      description?: string | null;
+      audioUrl?: string | null;
+      publishedAt?: number | null;
+      duration?: number | null;
+      size?: number | null;
+      bitRate?: number | null;
+    }): Promise<void> {
+      const now = Math.floor(Date.now() / 1000);
+      await db.prepare(
+        `INSERT INTO podcast_episodes
+           (id, channel_id, guid, title, description, audio_url,
+            published_at, duration, size, bit_rate, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', ?)
+         ON CONFLICT(channel_id, guid) DO UPDATE SET
+           title       = excluded.title,
+           description = excluded.description,
+           audio_url   = excluded.audio_url,
+           published_at = excluded.published_at,
+           duration    = excluded.duration,
+           size        = excluded.size,
+           bit_rate    = excluded.bit_rate`
+      ).bind(
+        opts.id,
+        opts.channelId,
+        opts.guid,
+        opts.title ?? null,
+        opts.description ?? null,
+        opts.audioUrl ?? null,
+        opts.publishedAt ?? null,
+        opts.duration ?? null,
+        opts.size ?? null,
+        opts.bitRate ?? null,
+        now,
+      ).run();
+    },
+
+    // Used by downloadPodcastEpisode lifecycle. Status `downloading` only sets
+    // status; `completed` updates downloaded_r2_key + clears error_message.
+    async updatePodcastEpisodeStatus(id: string, patch: {
+      status?: "new" | "downloading" | "completed" | "error";
+      downloadedR2Key?: string | null;
+      errorMessage?: string | null;
+      size?: number | null;
+    }): Promise<void> {
+      const sets: string[] = [];
+      const binds: unknown[] = [];
+      if (patch.status !== undefined) { sets.push("status = ?"); binds.push(patch.status); }
+      if (patch.downloadedR2Key !== undefined) {
+        sets.push("downloaded_r2_key = ?");
+        binds.push(patch.downloadedR2Key);
+      }
+      if (patch.errorMessage !== undefined) {
+        sets.push("error_message = ?");
+        binds.push(patch.errorMessage);
+      }
+      if (patch.size !== undefined) { sets.push("size = ?"); binds.push(patch.size); }
+      if (sets.length === 0) return;
+      binds.push(id);
+      await db.prepare(
+        `UPDATE podcast_episodes SET ${sets.join(", ")} WHERE id = ?`
+      ).bind(...binds).run();
+    },
+
+    async deletePodcastEpisode(id: string): Promise<number> {
+      const result = await db.prepare(
+        "DELETE FROM podcast_episodes WHERE id = ?"
+      ).bind(id).run();
+      return Number(result.meta?.changes ?? 0);
     },
   };
 }

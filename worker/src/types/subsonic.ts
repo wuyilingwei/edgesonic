@@ -1,4 +1,4 @@
-import type { Artist, Album, SongMaster, Playlist, Bookmark, PlayQueue } from "./entities";
+import type { Artist, Album, SongMaster, Playlist, Bookmark, PlayQueue, InternetRadioStation, Share, PodcastChannel, PodcastEpisode } from "./entities";
 
 // 035 — Subset of `annotations` row used by Subsonic responses.
 // All three mapXxx functions accept this as an optional 3rd arg so existing
@@ -177,4 +177,159 @@ export function mapPlayQueueDetail(q: PlayQueue, username: string, songs: SongMa
     attrs: mapPlayQueue(q, username),
     entries: songs.map((s) => mapSong(s, s.album_id)),
   };
+}
+
+// 045 — Internet Radio. Subsonic spec: <internetRadioStation id name streamUrl homepageUrl/>.
+// homepageUrl is emitted only when non-empty (back-compat with strict clients).
+export interface SubsonicInternetRadioStation {
+  id: string;
+  name: string;
+  streamUrl: string;
+  homepageUrl?: string;
+}
+
+export function mapInternetRadioStation(r: InternetRadioStation): SubsonicInternetRadioStation {
+  return {
+    id: r.id,
+    name: r.name,
+    streamUrl: r.stream_url,
+    homepageUrl: r.homepage_url ?? undefined,
+  };
+}
+
+// 044 — Sharing. Subsonic <share id url description username created expires
+// lastVisited visitCount> + nested <entry> per shared song.
+// The Subsonic spec expects `url` to be the absolute public URL of the share;
+// we let the endpoint inject it based on the current request's origin since
+// the DB row has no idea what hostname the worker is serving under.
+export interface SubsonicShare {
+  id: string;
+  url: string;                       // absolute https://host/share/<id>
+  description?: string;
+  username: string;
+  created: string;                   // ISO 8601
+  expires?: string;                  // ISO 8601 (omitted when never expires)
+  lastVisited?: string;              // ISO 8601 (omitted before first view)
+  visitCount: number;
+}
+
+export function mapShare(s: Share, publicUrl: string): SubsonicShare {
+  return {
+    id: s.id,
+    url: publicUrl,
+    description: s.description ?? undefined,
+    username: s.user_id,
+    created: formatISODate(s.created_at),
+    expires: s.expires_at !== null ? formatISODate(s.expires_at) : undefined,
+    lastVisited: s.last_visited_at !== null ? formatISODate(s.last_visited_at) : undefined,
+    visitCount: s.view_count,
+  };
+}
+
+// Share detail: share attributes + ordered <entry> array (each entry mirrors mapSong).
+export function mapShareDetail(s: Share, publicUrl: string, songs: SongMaster[]) {
+  return {
+    attrs: mapShare(s, publicUrl),
+    entries: songs.map((song) => mapSong(song, song.album_id)),
+  };
+}
+
+// ============================================================================
+// 046 — Podcasts
+// ----------------------------------------------------------------------------
+// Subsonic spec shapes (subsonic-rest-api-1.16.1.xsd):
+//   <channel id url title description coverArt originalImageUrl status errorMessage>
+//     <episode id streamId channelId title description publishDate status
+//              duration bitRate size suffix contentType isDir=false isVideo=false />*
+//   </channel>
+//
+// coverArt is `pc-{id}` whenever the channel carries an image_url; getCoverArt
+// negotiates the actual asset on demand.
+// ============================================================================
+
+export interface SubsonicPodcastChannel {
+  id: string;
+  url: string;
+  title?: string;
+  description?: string;
+  coverArt?: string;
+  originalImageUrl?: string;
+  status: string;                   // new / completed / error
+  errorMessage?: string;
+}
+
+export interface SubsonicPodcastEpisode {
+  id: string;
+  streamId: string;                 // dual purpose: stream endpoint id
+  channelId: string;
+  title?: string;
+  description?: string;
+  publishDate?: string;             // ISO 8601
+  status: string;                   // new / downloading / completed / error
+  duration?: number;
+  bitRate?: number;
+  size?: number;
+  suffix?: string;
+  contentType?: string;
+  coverArt?: string;
+  isDir: boolean;
+  isVideo: boolean;
+}
+
+export function mapPodcastChannel(c: PodcastChannel): SubsonicPodcastChannel {
+  const hasImage = !!c.image_url;
+  return {
+    id: c.id,
+    url: c.url,
+    title: c.title ?? undefined,
+    description: c.description ?? undefined,
+    coverArt: hasImage ? `pc-${c.id}` : undefined,
+    originalImageUrl: c.image_url ?? undefined,
+    status: c.status,
+    errorMessage: c.error_message ?? undefined,
+  };
+}
+
+export function mapPodcastEpisode(
+  e: PodcastEpisode,
+  channel?: PodcastChannel,
+): SubsonicPodcastEpisode {
+  const audioSuffix = e.audio_url ? guessAudioSuffix(e.audio_url) : undefined;
+  return {
+    id: e.id,
+    streamId: e.id,
+    channelId: e.channel_id,
+    title: e.title ?? undefined,
+    description: e.description ?? undefined,
+    publishDate: e.published_at !== null ? formatISODate(e.published_at) : undefined,
+    status: e.status,
+    duration: e.duration ?? undefined,
+    bitRate: e.bit_rate ?? undefined,
+    size: e.size ?? undefined,
+    suffix: audioSuffix,
+    contentType: contentTypeForSuffix(audioSuffix),
+    coverArt: channel?.image_url ? `pc-${channel.id}` : undefined,
+    isDir: false,
+    isVideo: false,
+  };
+}
+
+function guessAudioSuffix(url: string): string | undefined {
+  const m = /\.([a-z0-9]{2,5})(?:\?|#|$)/i.exec(url);
+  if (!m) return undefined;
+  const s = m[1].toLowerCase();
+  return ["mp3", "m4a", "ogg", "opus", "aac", "wav", "flac"].includes(s) ? s : undefined;
+}
+
+function contentTypeForSuffix(s: string | undefined): string | undefined {
+  switch (s) {
+    case "mp3":  return "audio/mpeg";
+    case "m4a":  return "audio/mp4";
+    case "aac":  return "audio/aac";
+    case "ogg":  return "audio/ogg";
+    case "opus": return "audio/opus";
+    case "wav":  return "audio/wav";
+    case "flac": return "audio/flac";
+    default:     return undefined;
+  }
 }

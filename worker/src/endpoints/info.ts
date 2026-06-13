@@ -263,20 +263,58 @@ infoRoutes.get("/rest/getSimilarSongs", (c) => similarSongsHandler(c, "similarSo
 infoRoutes.get("/rest/getSimilarSongs2", (c) => similarSongsHandler(c, "similarSongs2"));
 
 // ---------------------------------------------------------------------------
-// getTopSongs
+// getTopSongs (047 — local-first, last.fm fallback)
+//
+// Strategy:
+//   1. D1 first: select up to `count` song_masters for this artist ranked by
+//      aggregated annotations.play_count DESC. This always runs, even when
+//      lastfm_api_key is unset.
+//   2. If we got fewer than `count`, ask last.fm for top tracks and reverse-
+//      lookup each one back to a local song_master. Skip rows already in the
+//      local list (dedupe by master id).
+//   3. last.fm being unconfigured is NOT an error here: we silently keep
+//      whatever the D1 step produced. Other last.fm fetch failures degrade
+//      the same way — partial result over no result.
 // ---------------------------------------------------------------------------
-infoRoutes.get("/rest/getTopSongs", (c) => safeRun(c, async () => {
+infoRoutes.get("/rest/getTopSongs", async (c) => {
   const artist = c.req.query("artist");
   if (!artist) return c.text(subsonicError(10, "Required artist parameter is missing"), 200, XML);
 
   const countRaw = parseInt(c.req.query("count") || "50", 10);
   const count = Math.max(1, Math.min(isNaN(countRaw) ? 50 : countRaw, 200));
 
-  const top = await lastfmGetTopTracks(c.env, artist, count);
-  const matched: Array<SongMaster & { artist_name?: string; album_name?: string }> = [];
-  for (const t of top) {
-    const row = await findSongByTitleAndArtist(c.env.DB, t.name, t.artist || artist);
-    if (row) matched.push(row);
+  const queries = createQueries(c.env.DB);
+  // Step 1: local D1 rank.
+  const local = await queries.getTopSongsByArtist(artist, count);
+  const matched: Array<SongMaster & { artist_name?: string | null; album_name?: string | null }> = [
+    ...local,
+  ];
+  const seen = new Set(local.map((s) => s.id));
+
+  // Step 2: top up from last.fm if room remains. Swallow LastfmUnconfigured
+  // (lets the endpoint work in the no-key configuration) and LastfmFetchError
+  // (transient network blip — keep whatever we have).
+  if (matched.length < count) {
+    try {
+      const top = await lastfmGetTopTracks(c.env, artist, count);
+      for (const t of top) {
+        if (matched.length >= count) break;
+        const row = await findSongByTitleAndArtist(c.env.DB, t.name, t.artist || artist);
+        if (row && !seen.has(row.id)) {
+          matched.push(row);
+          seen.add(row.id);
+        }
+      }
+    } catch (e) {
+      if (!(e instanceof LastfmUnconfigured) && !(e instanceof LastfmFetchError)) {
+        // Unexpected failure: surface via safeRun-style error wrapper, but
+        // only when we have NO local rows — otherwise prefer partial result.
+        if (matched.length === 0) {
+          const msg = e instanceof Error ? e.message : String(e);
+          return c.text(subsonicError(0, msg.slice(0, 200)), 200, XML);
+        }
+      }
+    }
   }
 
   return c.text(
@@ -291,4 +329,4 @@ infoRoutes.get("/rest/getTopSongs", (c) => safeRun(c, async () => {
     }),
     200, XML,
   );
-}));
+});

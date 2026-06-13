@@ -19,6 +19,10 @@ import { metadataRoutes } from "./endpoints/metadata";
 import { openSubsonicRoutes } from "./endpoints/opensubsonic";
 import { infoRoutes } from "./endpoints/info";
 import { lyricsRoutes } from "./endpoints/lyrics";
+import { radioRoutes } from "./endpoints/radio";
+import { nowPlayingRoutes } from "./endpoints/now_playing";
+import { podcastsRoutes } from "./endpoints/podcasts";
+import { sharesRoutes } from "./endpoints/shares";
 
 export function registerRoutes(app: Hono) {
   app.route("/", pingRoutes);
@@ -41,4 +45,8 @@ export function registerRoutes(app: Hono) {
   app.route("/", openSubsonicRoutes);
   app.route("/", infoRoutes);
   app.route("/", lyricsRoutes);
+  app.route("/", radioRoutes);
+  app.route("/", nowPlayingRoutes);
+  app.route("/", podcastsRoutes);
+  app.route("/", sharesRoutes);
 }

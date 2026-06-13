@@ -160,22 +160,43 @@ const scrobbleHandler = async (c: import("hono").Context) => {
     return c.text(subsonicError(10, "Required parameter is missing (id)"), 400, XML);
   }
 
-  // submission=true means "actually played" → increment count.
-  // submission=false is "now playing" notification → 047 will handle (KV);
-  // for now ack as OK without writing the DB.
+  // Subsonic spec:
+  //   submission=true  (default) → song actually played to completion: D1 count++
+  //   submission=false           → "now playing" heartbeat
+  // 047: BOTH update KV `now_playing:{username}` so getNowPlaying can surface
+  // the active stream. submission=false only writes KV; submission=true writes
+  // KV *and* the D1 annotations row.
   const submission = parseBool(c.req.query("submission"), true);
-  if (!submission) return c.text(subsonicOK({}), 200, XML);
 
   // time is milliseconds (Subsonic spec). Default to now.
   const times = c.req.queries("time") ?? [];
+  // `c` is the standard Subsonic "client name" parameter (e.g. "DSub").
+  const clientId = c.req.query("c") || "";
   const user = c.get("user") as User;
-  const queries = createQueries((c.env as Env).DB);
+  const env = c.env as Env;
+  const queries = createQueries(env.DB);
   const nowSec = Math.floor(Date.now() / 1000);
 
-  for (let i = 0; i < ids.length; i++) {
-    const ms = times[i] ? parseInt(times[i], 10) : NaN;
-    const playDateSec = Number.isFinite(ms) ? Math.floor(ms / 1000) : nowSec;
-    await queries.scrobbleSong(user.username, ids[i], playDateSec);
+  // KV: the *last* id in the request is the currently-playing track. The
+  // Subsonic protocol allows batched scrobbles but the now-playing notion is
+  // singular per user → take the last entry as the "now" track.
+  const nowSongId = ids[ids.length - 1];
+  try {
+    await env.KV.put(
+      `now_playing:${user.username}`,
+      JSON.stringify({ songId: nowSongId, startedAt: nowSec, clientId }),
+      { expirationTtl: 300 },
+    );
+  } catch {
+    // KV is best-effort: a failure must not block the scrobble ack.
+  }
+
+  if (submission) {
+    for (let i = 0; i < ids.length; i++) {
+      const ms = times[i] ? parseInt(times[i], 10) : NaN;
+      const playDateSec = Number.isFinite(ms) ? Math.floor(ms / 1000) : nowSec;
+      await queries.scrobbleSong(user.username, ids[i], playDateSec);
+    }
   }
   return c.text(subsonicOK({}), 200, XML);
 };
