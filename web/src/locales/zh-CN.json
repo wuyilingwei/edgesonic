@@ -302,6 +302,19 @@
         "save": "保存",
         "saved": "已保存",
         "saveFailed": "保存失败"
+      },
+      "lastfm": {
+        "title": "Last.fm 代理",
+        "desc": "可选功能。粘贴 Last.fm API 密钥以启用 getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs。留空则这些接口返回 Subsonic 错误码 30（未支持），其余功能不受影响。",
+        "label": "API Key",
+        "placeholder": "32 位 Last.fm API 密钥",
+        "setStatus": "已设置",
+        "unsetStatus": "未设置",
+        "save": "保存密钥",
+        "clear": "清除",
+        "saved": "Last.fm 密钥已保存",
+        "cleared": "Last.fm 密钥已清除",
+        "saveFailed": "保存失败"
       }
     },
     "sessions": {

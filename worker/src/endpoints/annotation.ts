@@ -21,8 +21,19 @@ import { Hono } from "hono";
 import { createQueries } from "../db/queries";
 import { permissionMiddleware, subsonicError } from "../auth";
 import { subsonicOK } from "../utils/xml";
-import { mapArtist, mapAlbum, mapSong } from "../types/subsonic";
-import type { User } from "../types/entities";
+import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../types/subsonic";
+import type { User, Annotation } from "../types/entities";
+
+// 035 — local helper (mirrors browsing.ts / searching.ts).
+function liteOf(row: Annotation | undefined): AnnotationLite | undefined {
+  if (!row) return undefined;
+  return {
+    starred: row.starred,
+    starred_at: row.starred_at,
+    rating: row.rating,
+    play_count: row.play_count,
+  };
+}
 
 export const annotationRoutes = new Hono<{
   Bindings: Env;
@@ -193,19 +204,28 @@ const getStarredHandler = (tag: "starred" | "starred2") =>
       queries.getStarredSongs(user.username),
     ]);
 
+    // 035 — back-fill starred/userRating/playCount via batch annotation lookup.
+    const [artistAnn, albumAnn, songAnn] = await Promise.all([
+      queries.getAnnotationsMap(user.username, "artist", artists.map((a) => a.id)),
+      queries.getAnnotationsMap(user.username, "album", albums.map((a) => a.id)),
+      queries.getAnnotationsMap(user.username, "song", songs.map((s) => s.id)),
+    ]);
+
     return c.text(
       subsonicOK({
         [tag]: {
-          artist: artists.map((a) => attrs(mapArtist(a))),
+          artist: artists.map((a) =>
+            attrs(mapArtist(a, liteOf(artistAnn.get(`artist:${a.id}`))))
+          ),
           album: albums.map((a) =>
             attrs({
-              ...mapAlbum(a, a.artist_name ?? undefined),
+              ...mapAlbum(a, a.artist_name ?? undefined, liteOf(albumAnn.get(`album:${a.id}`))),
               artistId: a.artist_id ?? undefined,
             }),
           ),
           song: songs.map((s) =>
             attrs({
-              ...mapSong(s, s.album_id),
+              ...mapSong(s, s.album_id, liteOf(songAnn.get(`song:${s.id}`))),
               artist: s.artist_name ?? undefined,
               album: s.album_name ?? undefined,
             }),
@@ -241,13 +261,15 @@ const getRandomSongsHandler = async (c: import("hono").Context) => {
 
   const queries = createQueries((c.env as Env).DB);
   const songs = await queries.getRandomSongs({ size, genre, fromYear, toYear });
+  const user = c.get("user") as User;
+  const songAnn = await queries.getAnnotationsMap(user.username, "song", songs.map((s) => s.id));
 
   return c.text(
     subsonicOK({
       randomSongs: {
         song: songs.map((s) =>
           attrs({
-            ...mapSong(s, s.album_id),
+            ...mapSong(s, s.album_id, liteOf(songAnn.get(`song:${s.id}`))),
             artist: s.artist_name ?? undefined,
             album: s.album_name ?? undefined,
           }),

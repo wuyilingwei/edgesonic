@@ -302,6 +302,19 @@
         "save": "Save",
         "saved": "Saved",
         "saveFailed": "Save failed"
+      },
+      "lastfm": {
+        "title": "Last.fm Proxy",
+        "desc": "Optional. Paste a Last.fm API key to enable getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs. Leave empty and these endpoints return Subsonic error 30 (not supported) — the rest of the API stays available.",
+        "label": "API Key",
+        "placeholder": "32-char Last.fm API key",
+        "setStatus": "SET",
+        "unsetStatus": "UNSET",
+        "save": "Save key",
+        "clear": "Clear",
+        "saved": "Last.fm key saved",
+        "cleared": "Last.fm key cleared",
+        "saveFailed": "Save failed"
       }
     },
     "sessions": {

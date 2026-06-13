@@ -17,13 +17,10 @@ import { Hono } from "hono";
 import { createQueries } from "../db/queries";
 import { permissionMiddleware, subsonicError } from "../auth";
 import { subsonicOK } from "../utils/xml";
-import { getFeatureString } from "../utils/features";
 import type { User } from "../types/entities";
-import type { EngineKind, TranscodeEngine, TranscodeInput } from "../transcode/engine";
+import type { TranscodeInput } from "../transcode/engine";
 import { getProfile } from "../transcode/profiles";
-import { SandboxTranscodeEngine } from "../transcode/sandbox";
-import { ExternalTranscodeEngine } from "../transcode/external";
-import type { Sandbox } from "@cloudflare/sandbox";
+import { buildTranscodeEngine } from "../transcode/factory";
 import { parseStorageUri } from "../adapters/index";
 import { createR2Adapter } from "../adapters/r2";
 import { urlAdapter } from "../adapters/url";
@@ -34,36 +31,8 @@ export const transcodeRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-// Build an engine instance from the current feature flags. Returns null when
-// the engine is `disabled` or misconfigured — callers should emit a 503.
-async function buildEngine(env: Env): Promise<{ engine: TranscodeEngine; kind: EngineKind } | null> {
-  const kind = ((await getFeatureString(env, "transcode_engine", "disabled")) as EngineKind) || "disabled";
-
-  if (kind === "disabled") return null;
-
-  if (kind === "sandbox") {
-    // The Sandbox DO namespace is declared in wrangler.toml — bound as `Sandbox`.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const ns = (env as unknown as { Sandbox?: DurableObjectNamespace<Sandbox<any>> }).Sandbox;
-    if (!ns) return null;
-    return { engine: new SandboxTranscodeEngine({ Sandbox: ns }), kind };
-  }
-
-  if (kind === "external") {
-    const url = await getFeatureString(env, "external_transcoder_url", "");
-    if (!url) return null;
-    const secret = await env.DB.prepare(
-      "SELECT value FROM external_secrets WHERE key = 'external_transcoder_key'"
-    ).first<{ value: string }>();
-    if (!secret?.value) return null;
-    return {
-      engine: new ExternalTranscodeEngine({ url, sharedKey: secret.value }),
-      kind,
-    };
-  }
-
-  return null;
-}
+// Engine resolution lives in transcode/factory.ts (shared with media.ts so
+// /rest/stream and /rest/transcodeFile cannot drift).
 
 // Open a streaming read of the song's source instance. Returns null when no
 // suitable instance is found. Mirrors the adapter dispatch in media.ts but
@@ -121,7 +90,7 @@ transcodeRoutes.post("/rest/transcodeFile", permissionMiddleware("manage_sources
     });
   }
 
-  const built = await buildEngine(env);
+  const built = await buildTranscodeEngine(env);
   if (!built) {
     return c.text(subsonicError(50, "Transcode engine is disabled or misconfigured"), 503, {
       "Content-Type": "application/xml; charset=UTF-8",

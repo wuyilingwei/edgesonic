@@ -193,9 +193,10 @@ async function applyTagsToSong(
     db.prepare(
       `UPDATE song_masters SET
          album_id = ?, artist_id = ?, title = ?, sort_title = ?,
-         track = COALESCE(?, track), genre = COALESCE(?, genre), updated_at = ?
+         track = COALESCE(?, track), genre = COALESCE(?, genre),
+         lyrics = COALESCE(?, lyrics), updated_at = ?
        WHERE id = ?`
-    ).bind(albumId, artistId, title, title.toLowerCase(), tags.track ?? null, tags.genre ?? null, now, master.id),
+    ).bind(albumId, artistId, title, title.toLowerCase(), tags.track ?? null, tags.genre ?? null, tags.lyrics ?? null, now, master.id),
     // manual edits win over future scans
     db.prepare("UPDATE song_instances SET tag_scanned = 1 WHERE master_id = ?").bind(master.id),
   ]);
@@ -277,6 +278,11 @@ function decodeBase64(s: string): Uint8Array | null {
   }
 }
 
+// 036 — D1 lyric payload ceiling. A reasonable LRC is < 8 KB; we leave plenty
+// of headroom for plain-text translations / annotations while keeping a single
+// row well under D1's per-row limit.
+const MAX_LYRICS_BYTES = 50 * 1024;
+
 function cleanInput(t: SongTags): SongTags {
   const out: SongTags = {};
   if (t.title?.trim()) out.title = t.title.trim();
@@ -287,6 +293,15 @@ function cleanInput(t: SongTags): SongTags {
   const track = Number(t.track), year = Number(t.year);
   if (Number.isInteger(track) && track > 0) out.track = track;
   if (Number.isInteger(year) && year > 0) out.year = year;
+  // 036 — lyrics: trim, cap, drop silently if oversized so a single bad payload
+  // doesn't poison a batch. File-level write-back (USLT / VORBIS LYRICS) is
+  // deferred to 042; this path is D1-only for v1.
+  if (typeof t.lyrics === "string") {
+    const trimmed = t.lyrics.trim();
+    if (trimmed.length > 0 && trimmed.length <= MAX_LYRICS_BYTES) {
+      out.lyrics = trimmed;
+    }
+  }
   return out;
 }
 
