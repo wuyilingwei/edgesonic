@@ -135,6 +135,29 @@ export function useAuth() {
     return resp.text();
   }
 
+  // === Tag edit helpers (task 039) — thin sugar over authFetch/authPost ===
+  // readTags returns the latest known song row (used by editors to prefill).
+  async function readTags(id: string): Promise<Record<string, string> | null> {
+    const xml = await authFetch("getSong", { id });
+    const m = /<song\s+([^>]+?)\s*\/?>/.exec(xml);
+    if (!m) return null;
+    const attrs: Record<string, string> = {};
+    const attrRe = /(\w+)="([^"]*)"/g;
+    let am;
+    while ((am = attrRe.exec(m[1]))) attrs[am[1]] = am[2];
+    return attrs;
+  }
+
+  interface WriteTagsResult { ok: boolean; error?: string; files?: Array<{ instanceId: string; uri: string; written: boolean; reason?: string }>; masterId?: string; }
+  async function writeTags(id: string, tags: Record<string, string | number>): Promise<WriteTagsResult> {
+    return JSON.parse(await authPost("writeTags", { id, tags }));
+  }
+
+  interface BatchWriteResult { ok: boolean; error?: string; succeeded?: number; failed?: number; results?: Array<{ id: string; ok: boolean; error?: string; masterId?: string }>; }
+  async function batchWriteTags(ids: string[], patch: Record<string, string | number>): Promise<BatchWriteResult> {
+    return JSON.parse(await authPost("batchWriteTags", { ids, patch }));
+  }
+
   async function uploadFile(file: File, target: string, path?: string, masterId?: string): Promise<string> {
     const qs = signedParams();
     qs.set("name", file.name);
@@ -152,6 +175,7 @@ export function useAuth() {
 
   return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
     login, logout, authFetch, authPost, uploadFile, makeSalt, md5,
+    readTags, writeTags, batchWriteTags,
     signedParams, restUrl, streamUrl, coverArtUrl };
 }
 

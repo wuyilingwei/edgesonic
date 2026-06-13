@@ -14,15 +14,17 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatDuration } from "../api";
 import { usePlayerStore, type Track } from "../stores/player";
+import TagEditor from "../components/TagEditor.vue";
 
 const { t } = useI18n();
 
-const { authFetch, authPost, coverArtUrl, isAdmin } = useAuth();
+const { authFetch, writeTags, batchWriteTags, coverArtUrl, isAdmin } = useAuth();
 const player = usePlayerStore();
+const BATCH_MAX = 50;
 
 interface Artist { id: string; name: string; albumCount: string; }
 interface Album { id: string; name: string; artist: string; year: string; coverArt: string; songCount: string; }
@@ -163,72 +165,110 @@ function playAlbumFromStart() {
   if (songs.value.length) player.setQueue(songs.value, 0);
 }
 
-// === Tag editor ===
-const editTarget = ref<Track | null>(null);
-const editForm = ref({ title: "", artist: "", album: "", albumArtist: "", genre: "", year: "", track: "" });
+// === Tag editor (single + batch) ===
+// editTargets: array drives both modes; length 1 → single, length >1 → batch.
+const editTargets = ref<Track[]>([]);
+const editInitial = ref<Record<string, string | number>>({});
 const editBusy = ref(false);
 const editMsg = ref("");
 const editErr = ref(false);
+const editorOpen = ref(false);
+const editorMode = computed<"single" | "batch">(() => editTargets.value.length > 1 ? "batch" : "single");
 
 async function openEditor(s: Track) {
-  editTarget.value = s;
-  editMsg.value = "";
-  editErr.value = false;
-  editForm.value = { title: s.title, artist: s.artist, album: s.album, albumArtist: "", genre: "", year: "", track: "" };
+  editTargets.value = [s];
+  editMsg.value = ""; editErr.value = false;
+  // seed with the list-row data, then enrich from getSong for genre/year/track
+  editInitial.value = { title: s.title, artist: s.artist, album: s.album };
+  editorOpen.value = true;
   try {
     const xml = await authFetch("getSong", { id: s.id });
     const full = parseXmlAttrs(xml, "song")[0];
-    if (full && editTarget.value?.id === s.id) {
-      editForm.value.track = full.track || "";
-      editForm.value.genre = full.genre || "";
-      editForm.value.year = full.year || "";
+    if (full && editTargets.value[0]?.id === s.id) {
+      editInitial.value = {
+        title: full.title || s.title,
+        artist: full.artist || s.artist,
+        album: full.album || s.album,
+        albumArtist: full.albumArtist || "",
+        genre: full.genre || "",
+        year: full.year || "",
+        track: full.track || "",
+        disc: full.discNumber || "",
+      };
     }
   } catch { /* prefill stays partial */ }
 }
 
-function closeEditor() {
-  editTarget.value = null;
+function openBatchEditor() {
+  if (!selectedIds.value.length) return;
+  const lookup = new Map(allSongs.value.map((s) => [s.id, s]));
+  editTargets.value = selectedIds.value.map((id) => lookup.get(id)).filter(Boolean) as Track[];
+  editInitial.value = {};
+  editMsg.value = ""; editErr.value = false;
+  editorOpen.value = true;
 }
 
-async function saveEdit() {
-  const target = editTarget.value;
-  if (!target) return;
-  const f = editForm.value;
-  const tags: Record<string, string | number> = {};
-  if (f.title.trim()) tags.title = f.title.trim();
-  if (f.artist.trim()) tags.artist = f.artist.trim();
-  if (f.album.trim()) tags.album = f.album.trim();
-  if (f.albumArtist.trim()) tags.albumArtist = f.albumArtist.trim();
-  if (f.genre.trim()) tags.genre = f.genre.trim();
-  if (f.track.trim() && parseInt(f.track, 10) > 0) tags.track = parseInt(f.track, 10);
-  if (f.year.trim() && parseInt(f.year, 10) > 0) tags.year = parseInt(f.year, 10);
-  if (!Object.keys(tags).length) return;
+function closeEditor() {
+  editorOpen.value = false;
+  // keep targets briefly so the modal slide-out reads consistent state; reset on next open.
+}
 
-  editBusy.value = true;
-  editMsg.value = "";
-  editErr.value = false;
+async function onEditorSubmit(patch: Record<string, string | number>) {
+  if (!editTargets.value.length || !Object.keys(patch).length) return;
+  editBusy.value = true; editMsg.value = ""; editErr.value = false;
+
   try {
-    const res = JSON.parse(await authPost("writeTags", { id: target.id, tags }));
-    if (!res.ok) {
-      editErr.value = true;
-      editMsg.value = res.error || t("library.editFailed");
+    if (editorMode.value === "single") {
+      const target = editTargets.value[0];
+      const res = await writeTags(target.id, patch);
+      if (!res.ok) {
+        editErr.value = true;
+        editMsg.value = res.error || t("library.editFailed");
+      } else {
+        // reflect changes in the open list without a full reload
+        if (typeof patch.title === "string") target.title = patch.title;
+        if (typeof patch.artist === "string") target.artist = patch.artist;
+        if (typeof patch.album === "string") target.album = patch.album;
+        const files = res.files || [];
+        const written = files.filter((x) => x.written).length;
+        const skipped = files.filter((x) => !x.written).map((x) => x.reason).filter(Boolean);
+        editMsg.value = t("library.editSaved", { written, total: files.length })
+          + (skipped.length ? ` (${skipped.join("; ")})` : "");
+      }
     } else {
-      // reflect the edit in the open lists without a full reload
-      if (tags.title) target.title = String(tags.title);
-      if (tags.artist) target.artist = String(tags.artist);
-      if (tags.album) target.album = String(tags.album);
-      const files = (res.files || []) as Array<{ written: boolean; reason?: string }>;
-      const written = files.filter((x) => x.written).length;
-      const skipped = files.filter((x) => !x.written).map((x) => x.reason).filter(Boolean);
-      editMsg.value = t("library.editSaved", { written, total: files.length })
-        + (skipped.length ? ` (${skipped.join("; ")})` : "");
+      const ids = editTargets.value.map((t) => t.id);
+      const res = await batchWriteTags(ids, patch);
+      if (!res.ok) {
+        editErr.value = true;
+        editMsg.value = res.error || t("tagEditor.batchFailed");
+      } else {
+        editMsg.value = t("tagEditor.batchSaved", { succeeded: res.succeeded ?? 0, failed: res.failed ?? 0 });
+        // optimistic local update for batched fields
+        for (const target of editTargets.value) {
+          if (typeof patch.title === "string") target.title = patch.title;
+          if (typeof patch.artist === "string") target.artist = patch.artist;
+          if (typeof patch.album === "string") target.album = patch.album;
+        }
+        selectedIds.value = [];
+      }
     }
   } catch {
     editErr.value = true;
-    editMsg.value = t("library.editFailed");
+    editMsg.value = editorMode.value === "batch" ? t("tagEditor.batchFailed") : t("library.editFailed");
   }
   editBusy.value = false;
 }
+
+// === Batch selection (songs tab only) ===
+const selectedIds = ref<string[]>([]);
+const selectedSet = computed(() => new Set(selectedIds.value));
+
+function toggleSelected(id: string) {
+  const idx = selectedIds.value.indexOf(id);
+  if (idx >= 0) selectedIds.value.splice(idx, 1);
+  else selectedIds.value.push(id);
+}
+function clearSelection() { selectedIds.value = []; }
 
 function backToList() {
   currentArtist.value = null;
@@ -359,17 +399,37 @@ onMounted(() => {
 
     <!-- Tab: all songs -->
     <div v-else-if="tab === 'songs'">
-      <div class="table-wrap song-table" :style="`--grid-cols: 36px 1fr 1fr auto auto${isAdmin ? ' 32px' : ''}`">
+      <!-- Batch selection toolbar (admin-only) -->
+      <div v-if="isAdmin && selectedIds.length" class="batch-toolbar">
+        <span class="mono-label">{{ t("library.selected", { n: selectedIds.length }) }}</span>
+        <button class="btn-secondary btn-sm" @click="clearSelection">{{ t("library.clearSelection") }}</button>
+        <button
+          class="btn-primary btn-sm"
+          :disabled="selectedIds.length > BATCH_MAX"
+          :title="selectedIds.length > BATCH_MAX ? t('library.batchTooMany') : ''"
+          @click="openBatchEditor"
+        >{{ t("library.batchEdit") }}</button>
+      </div>
+      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin ? '24px ' : ''}36px 1fr 1fr auto auto${isAdmin ? ' 32px' : ''}`">
         <div class="table-header">
+          <span v-if="isAdmin"></span>
           <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span>
         </div>
         <div
           v-for="(s, i) in allSongs"
           :key="s.id"
           class="table-row song-row"
-          :class="{ playing: player.current?.id === s.id }"
+          :class="{ playing: player.current?.id === s.id, selected: selectedSet.has(s.id) }"
           @click="playFromAll(i)"
         >
+          <input
+            v-if="isAdmin"
+            type="checkbox"
+            class="row-check"
+            :checked="selectedSet.has(s.id)"
+            :title="t('library.select')"
+            @click.stop="toggleSelected(s.id)"
+          />
           <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
           <span class="song-title">{{ s.title }}</span>
           <span class="song-album">{{ s.album }}</span>
@@ -384,52 +444,18 @@ onMounted(() => {
         <button v-else-if="!songsDone" class="btn-secondary" @click="loadMoreSongs">{{ t("library.loadMore") }}</button>
       </div>
     </div>
-    <!-- Tag edit modal -->
-    <div v-if="editTarget" class="modal-backdrop" @click.self="closeEditor">
-      <div class="modal edit-modal">
-        <div class="modal-title">{{ t("library.editSong") }}</div>
-        <div class="form-group">
-          <label class="form-label">{{ t("library.fieldTitle") }}</label>
-          <input v-model="editForm.title" class="form-input" />
-        </div>
-        <div class="form-row">
-          <div class="form-group" style="flex:1">
-            <label class="form-label">{{ t("library.fieldArtist") }}</label>
-            <input v-model="editForm.artist" class="form-input" />
-          </div>
-          <div class="form-group" style="flex:1">
-            <label class="form-label">{{ t("library.fieldAlbumArtist") }}</label>
-            <input v-model="editForm.albumArtist" class="form-input" :placeholder="editForm.artist" />
-          </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">{{ t("library.fieldAlbum") }}</label>
-          <input v-model="editForm.album" class="form-input" />
-        </div>
-        <div class="form-row">
-          <div class="form-group" style="flex:2">
-            <label class="form-label">{{ t("library.fieldGenre") }}</label>
-            <input v-model="editForm.genre" class="form-input" />
-          </div>
-          <div class="form-group" style="flex:1">
-            <label class="form-label">{{ t("library.fieldYear") }}</label>
-            <input v-model="editForm.year" class="form-input" inputmode="numeric" />
-          </div>
-          <div class="form-group" style="flex:1">
-            <label class="form-label">{{ t("library.fieldTrack") }}</label>
-            <input v-model="editForm.track" class="form-input" inputmode="numeric" />
-          </div>
-        </div>
-        <p class="field-hint">{{ t("library.editHint") }}</p>
-        <p v-if="editMsg" :class="['edit-msg', { error: editErr }]">{{ editMsg }}</p>
-        <div class="modal-actions">
-          <button class="btn-secondary" @click="closeEditor">{{ t("common.cancel") }}</button>
-          <button class="btn-primary" :disabled="editBusy" @click="saveEdit">{{ editBusy ? t("common.loading") : t("common.save") }}</button>
-        </div>
-        <div class="corner corner-tl"></div>
-        <div class="corner corner-br"></div>
-      </div>
-    </div>
+    <!-- Tag editor (single + batch) -->
+    <TagEditor
+      :open="editorOpen"
+      :mode="editorMode"
+      :song-ids="editTargets.map((t) => t.id)"
+      :initial-tags="editInitial"
+      :busy="editBusy"
+      :message="editMsg"
+      :error="editErr"
+      @submit="onEditorSubmit"
+      @close="closeEditor"
+    />
   </div>
 </template>
 
@@ -519,8 +545,21 @@ onMounted(() => {
 }
 .song-row:hover .edit-btn { opacity: 1; }
 .edit-btn:hover { color: var(--color-accent-primary); }
-.edit-modal { width: min(520px, 92vw); }
-.edit-modal .form-row { display: flex; gap: 0.75rem; }
-.edit-msg { margin-top: 0.6rem; font-size: var(--fs-sm); color: var(--color-status-success, #7dc97d); }
-.edit-msg.error { color: var(--color-status-error, #e06c6c); }
+
+/* batch selection (songs tab) */
+.batch-toolbar {
+  display: flex; align-items: center; gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--color-accent-dim);
+  border-left: 2px solid var(--color-accent-primary);
+  background: var(--color-bg-tertiary);
+}
+.row-check {
+  width: 14px; height: 14px;
+  accent-color: var(--color-accent-primary);
+  cursor: pointer;
+}
+.song-row.selected { background: var(--color-accent-dim); }
+.song-row.selected:hover { background: var(--color-accent-dim); }
 </style>

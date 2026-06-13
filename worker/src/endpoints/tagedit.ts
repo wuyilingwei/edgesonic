@@ -17,6 +17,8 @@ import { Hono } from "hono";
 import { permissionMiddleware } from "../auth";
 import { md5 } from "../utils/md5";
 import { createQueries } from "../db/queries";
+
+type Queries = ReturnType<typeof createQueries>;
 import { requiredPrefixLen, rebuildTagPrefix } from "../utils/tagwrite";
 import { encodePath } from "./scan";
 import type { SongTags } from "../utils/tags";
@@ -25,6 +27,7 @@ export const tagEditRoutes = new Hono();
 
 const HEAD_FETCH = 512 * 1024;
 const MAX_REWRITE_BYTES = 80 * 1024 * 1024; // whole file is buffered for the rewrite
+const BATCH_MAX = 50; // Workers single-request CPU budget bounds batch fan-out (see findings.md)
 
 interface SourceRow {
   id: string;
@@ -41,10 +44,18 @@ interface FileResult {
   reason?: string;
 }
 
+interface ApplyResult {
+  ok: boolean;
+  masterId?: string;
+  albumId?: string;
+  artistId?: string;
+  files?: FileResult[];
+  error?: string;
+}
+
 // ============================================================================
 // POST /rest/writeTags  body: { id: <masterId|instanceId>, tags: SongTags }
-// Updates D1 (artist/album relink, same derivation as scanTags) and rewrites
-// the embedded tags of every writable instance (r2://, webdav://).
+// Single-song edit. The batch endpoint reuses applyTagsToSong below.
 // ============================================================================
 tagEditRoutes.post("/rest/writeTags", permissionMiddleware("edit_tags"), async (c) => {
   const env = c.env as Env;
@@ -57,12 +68,95 @@ tagEditRoutes.post("/rest/writeTags", permissionMiddleware("edit_tags"), async (
   const tags = cleanInput(body.tags);
   if (!Object.keys(tags).length) return c.json({ ok: false, error: "No tag fields provided" }, 400);
 
-  let master = await queries.getSongMaster(body.id);
+  const sources = await loadSources(db);
+  const res = await applyTagsToSong(env, db, queries, sources, body.id, tags);
+  if (!res.ok) {
+    const status = res.error === "Song not found" ? 404 : 500;
+    return c.json({ ok: false, error: res.error || "Write failed" }, status);
+  }
+  return c.json({
+    ok: true,
+    masterId: res.masterId,
+    albumId: res.albumId,
+    artistId: res.artistId,
+    files: res.files,
+  });
+});
+
+// ============================================================================
+// POST /rest/batchWriteTags  body: { ids: string[], patch: Partial<SongTags> }
+// Applies the same tag patch to up to BATCH_MAX songs; per-song results.
+// ============================================================================
+tagEditRoutes.post("/rest/batchWriteTags", permissionMiddleware("edit_tags"), async (c) => {
+  const env = c.env as Env;
+  const db = env.DB;
+  const queries = createQueries(db);
+
+  const body = await c.req.json<{ ids?: string[]; patch?: SongTags }>().catch(() => null);
+  if (!body || !Array.isArray(body.ids) || !body.patch) {
+    return c.json({ ok: false, error: "Missing ids or patch" }, 400);
+  }
+  if (body.ids.length === 0) return c.json({ ok: false, error: "Empty ids" }, 400);
+  if (body.ids.length > BATCH_MAX) {
+    return c.json({ ok: false, error: `Batch size exceeds limit (${BATCH_MAX})` }, 400);
+  }
+
+  const patch = cleanInput(body.patch);
+  if (!Object.keys(patch).length) {
+    return c.json({ ok: false, error: "Patch contains no recognised fields" }, 400);
+  }
+
+  const sources = await loadSources(db);
+  const results: Array<{
+    id: string;
+    ok: boolean;
+    masterId?: string;
+    error?: string;
+    files?: FileResult[];
+  }> = [];
+  let succeeded = 0;
+  let failed = 0;
+
+  // Sequential: keeps D1 contention low and stays within the Workers CPU budget
+  // for a 50-item burst. Each entry is independent — one bad id never poisons
+  // the others; per-row error string lands on the failed result.
+  for (const id of body.ids) {
+    try {
+      const res = await applyTagsToSong(env, db, queries, sources, id, patch);
+      if (res.ok) {
+        succeeded++;
+        results.push({ id, ok: true, masterId: res.masterId, files: res.files });
+      } else {
+        failed++;
+        results.push({ id, ok: false, error: res.error || "Write failed" });
+      }
+    } catch (e) {
+      failed++;
+      results.push({ id, ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  return c.json({ ok: true, results, succeeded, failed });
+});
+
+// ============================================================================
+// Core: apply a tag patch to a single song (D1 relink + per-instance file write).
+// Used by both writeTags (single) and batchWriteTags (loop).
+// ============================================================================
+async function applyTagsToSong(
+  env: Env,
+  db: D1Database,
+  queries: Queries,
+  sources: Map<string, SourceRow>,
+  idOrInstanceId: string,
+  tags: SongTags,
+): Promise<ApplyResult> {
+  let master = await queries.getSongMaster(idOrInstanceId);
   if (!master) {
-    const inst = await queries.getSongInstance(body.id);
+    const inst = await queries.getSongInstance(idOrInstanceId);
     if (inst) master = await queries.getSongMaster(inst.master_id);
   }
-  if (!master) return c.json({ ok: false, error: "Song not found" }, 404);
+  if (!master) return { ok: false, error: "Song not found" };
 
   // --- D1 relink (same id derivation as scanTags so edits and scans converge) ---
   const curArtist = await db.prepare("SELECT name FROM artists WHERE id = ?")
@@ -116,11 +210,6 @@ tagEditRoutes.post("/rest/writeTags", permissionMiddleware("edit_tags"), async (
 
   // --- file write-back per instance ---
   const instances = await queries.getSongInstances(master.id);
-  const sources = new Map<string, SourceRow>();
-  for (const s of (await db.prepare(
-    "SELECT id, base_url, username, password, root_path FROM storage_sources WHERE enabled = 1"
-  ).all<SourceRow>()).results) sources.set(s.id, s);
-
   const files: FileResult[] = [];
   for (const inst of instances) {
     const res = await rewriteInstance(env, sources, inst.storage_uri, (inst.suffix || "").toLowerCase(), inst.content_type, tags)
@@ -133,8 +222,17 @@ tagEditRoutes.post("/rest/writeTags", permissionMiddleware("edit_tags"), async (
     files.push({ instanceId: inst.id, uri: inst.storage_uri, written: res.written, reason: res.reason });
   }
 
-  return c.json({ ok: true, masterId: master.id, albumId, artistId, files });
-});
+  return { ok: true, masterId: master.id, albumId, artistId, files };
+}
+
+async function loadSources(db: D1Database): Promise<Map<string, SourceRow>> {
+  const sources = new Map<string, SourceRow>();
+  const rows = await db.prepare(
+    "SELECT id, base_url, username, password, root_path FROM storage_sources WHERE enabled = 1"
+  ).all<SourceRow>();
+  for (const s of rows.results) sources.set(s.id, s);
+  return sources;
+}
 
 function cleanInput(t: SongTags): SongTags {
   const out: SongTags = {};
