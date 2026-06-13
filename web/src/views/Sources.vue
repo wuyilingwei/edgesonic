@@ -6,21 +6,21 @@ import { useAuth, parseXmlAttrs } from "../api";
 const { t } = useI18n();
 const { isAdmin, authFetch, authPost } = useAuth();
 
-interface Source { id: string; type: string; base_url: string; username: string; rootPath: string; enabled: boolean; lastSync: string; }
+interface Source { id: string; type: string; name: string; base_url: string; username: string; rootPath: string; enabled: boolean; lastSync: string; }
 
 const sources = ref<Source[]>([]);
 const showForm = ref(false);
-const form = ref({ type: "webdav", base_url: "", username: "", password: "", root_path: "" });
+const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "" });
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
 // === Edit modal ===
 const editing = ref<Source | null>(null);
-const editForm = ref({ base_url: "", username: "", password: "", root_path: "", enabled: true });
+const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true });
 
 function openEdit(s: Source) {
   editing.value = s;
-  editForm.value = { base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled };
+  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled };
 }
 function closeEdit() { editing.value = null; }
 
@@ -28,9 +28,10 @@ async function saveEdit() {
   if (!editing.value) return;
   const s = editing.value;
   const body: Record<string, unknown> = { id: s.id };
+  if (editForm.value.name !== s.name) body.name = editForm.value.name;
   if (editForm.value.base_url !== s.base_url) body.base_url = editForm.value.base_url;
   if (editForm.value.username !== s.username) body.username = editForm.value.username;
-  if (editForm.value.password) body.password = editForm.value.password; // 留空 = 不修改
+  if (editForm.value.password) body.password = editForm.value.password;
   if (editForm.value.root_path !== s.rootPath) body.root_path = editForm.value.root_path;
   if (editForm.value.enabled !== s.enabled) body.enabled = editForm.value.enabled ? 1 : 0;
   try {
@@ -44,10 +45,10 @@ async function load() {
   try {
     const xml = await authFetch("getStorageSources");
     sources.value = parseXmlAttrs(xml, "source").map((s) => ({
-      id: s.id || "", type: s.type || "", base_url: s.baseUrl || "",
-      username: s.username || "", rootPath: s.rootPath || "",
-      enabled: s.enabled === "1",
-      lastSync: s.lastSync || "Never",
+      id: s.id || "", type: s.type || "", name: s.name || "",
+      base_url: s.baseUrl || "", username: s.username || "", rootPath: s.rootPath || "",
+      enabled: s.enabled === "true" || s.enabled === "1",
+      lastSync: s.lastSync && s.lastSync !== "0" ? new Date(parseInt(s.lastSync) * 1000).toLocaleString() : "Never",
     }));
   } catch { sources.value = []; }
 }
@@ -61,6 +62,23 @@ async function deleteSource(id: string) {
   if (!confirm(t("sources.deleteConfirm"))) return;
   try { await authPost("deleteStorageSource", { id }); load(); showToast(t("sources.deleted")); }
   catch { showToast(t("sources.deleteFailed"), "error"); }
+}
+
+const scanning = ref<string | null>(null);
+
+async function scanSource(s: Source) {
+  scanning.value = s.id;
+  try {
+    const xml = await authFetch("startScan", { id: s.id });
+    const res = parseXmlAttrs(xml, "source")[0];
+    if (!res || res.error) throw new Error(res?.error || "scan failed");
+    showToast(t("sources.scanDone", { found: res.found || "0", added: res.added || "0" }));
+    load();
+  } catch (e) {
+    showToast(t("sources.scanFailed") + (e instanceof Error && e.message !== "scan failed" ? `: ${e.message}` : ""), "error");
+  } finally {
+    scanning.value = null;
+  }
 }
 
 onMounted(load);
@@ -83,6 +101,7 @@ onMounted(load);
           <label class="form-label">{{ t("sources.type") }}</label>
           <select v-model="form.type" class="form-select"><option value="webdav">WebDAV</option><option value="subsonic">Subsonic</option></select>
         </div>
+        <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="form.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
         <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="form.base_url" class="form-input" placeholder="https://..." /></div>
         <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="form.username" class="form-input" /></div>
         <div class="form-group"><label class="form-label">{{ t("sources.password") }}</label><input v-model="form.password" type="password" class="form-input" /></div>
@@ -99,17 +118,22 @@ onMounted(load);
 
     <div class="grid grid-2">
       <div v-for="s in sources" :key="s.id" class="card hoverable source-card">
+        <!-- Top row: type badge (left) + enabled + actions (right) -->
         <div class="source-header">
-          <div class="source-badges">
-            <span class="status-badge info">{{ s.type.toUpperCase() }}</span>
+          <span class="status-badge info">{{ s.type.toUpperCase() }}</span>
+          <div class="source-right">
             <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
-          </div>
-          <div v-if="isAdmin" class="source-actions">
-            <button class="btn-secondary btn-sm" @click="openEdit(s)">{{ t("common.edit") }}</button>
-            <button class="btn-danger btn-sm" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
+            <template v-if="isAdmin">
+              <button v-if="s.type === 'webdav'" class="btn-primary btn-sm" :disabled="scanning === s.id" @click="scanSource(s)">{{ scanning === s.id ? t("sources.scanning") : t("sources.scan") }}</button>
+              <button class="btn-secondary btn-sm" @click="openEdit(s)">{{ t("common.edit") }}</button>
+              <button class="btn-danger btn-sm" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
+            </template>
           </div>
         </div>
-        <div class="source-url">{{ s.base_url }}</div>
+        <!-- Alias / display name -->
+        <div class="source-name">{{ s.name || s.base_url }}</div>
+        <!-- URL (shown when alias is set) -->
+        <div v-if="s.name" class="source-url">{{ s.base_url }}</div>
         <div class="source-meta">
           <span v-if="s.username">{{ t("sources.user") }}: {{ s.username }}</span>
           <span v-if="s.rootPath">{{ t("sources.root") }}: {{ s.rootPath }}</span>
@@ -129,6 +153,7 @@ onMounted(load);
       <div class="modal">
         <div class="modal-title">{{ t("sources.editSource") }}</div>
         <div style="display:flex; flex-direction:column; gap:0.8rem">
+          <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="editForm.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
           <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="editForm.base_url" class="form-input" placeholder="https://..." /></div>
           <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="editForm.username" class="form-input" /></div>
           <div class="form-group">
@@ -163,10 +188,15 @@ onMounted(load);
 
 <style scoped>
 .page { max-width: 1000px; }
-.source-card { display: flex; flex-direction: column; gap: 0.7rem; }
-.source-header { display: flex; align-items: center; justify-content: space-between; }
-.source-badges { display: flex; gap: 0.4rem; }
-.source-actions { display: flex; gap: 0.4rem; }
+.source-card { display: flex; flex-direction: column; gap: 0.55rem; }
+.source-header { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
+.source-right { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+.source-name {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: 0.01em;
+}
 .source-url {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);

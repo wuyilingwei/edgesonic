@@ -8,6 +8,8 @@ export interface StreamResult {
   contentLength: number | null;
   contentType: string;
   acceptRanges: boolean;
+  // RFC 7233: a 206 without Content-Range is invalid — browsers reject the media
+  contentRange?: string | null;
 }
 
 export interface StorageUri {

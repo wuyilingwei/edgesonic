@@ -47,7 +47,10 @@ const SESSION_ONLY_PATHS = new Set([
   "/rest/getUser",
   "/rest/getPermissions",
   "/rest/updatePermission",
-  "/rest/upload",
+  "/rest/files/upload",
+  "/rest/files/delete",
+  "/rest/files/move",
+  "/rest/files/copy",
   "/rest/download",
   "/rest/getCredentials",
   "/rest/createCredential",
@@ -56,6 +59,9 @@ const SESSION_ONLY_PATHS = new Set([
   "/rest/revokeSession",
   "/rest/getFeatures",
   "/rest/updateFeature",
+  "/rest/listFiles",
+  "/rest/scanTags",
+  "/rest/writeTags",
 ]);
 
 // ============================================================================
