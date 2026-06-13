@@ -383,6 +383,17 @@
         "saved": "Saved",
         "saveFailed": "Save failed"
       },
+      "crossOriginIsolation": {
+        "title": "Cross-Origin Isolation (COOP/COEP)",
+        "hint": "Enables SharedArrayBuffer so the browser worker pool can run ffmpeg.wasm multi-thread. The Worker stamps Cross-Origin-Opener-Policy: same-origin, Cross-Origin-Embedder-Policy: require-corp, Cross-Origin-Resource-Policy: same-origin on every response. May break cross-origin image embeds you have hand-wired — turn off as a quick rollback.",
+        "toggleLabel": "Enable isolation",
+        "toggleDesc": "Off restores pre-065 headers immediately; on takes effect on the next response (you may need to reload to flip crossOriginIsolated in this tab).",
+        "live": "LIVE",
+        "notLive": "OFF",
+        "save": "Save",
+        "saved": "Cross-origin isolation saved",
+        "saveFailed": "Save failed"
+      },
       "cf": {
         "title": "Cloudflare Integration",
         "desc": "Push the Cloudflare API token into Workers Secrets, manage cron schedules dynamically, and read 24h Worker analytics. Token never leaves CF's secret store. Requires super admin.",

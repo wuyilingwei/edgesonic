@@ -100,6 +100,8 @@ async function loadFeatures() {
     hydrateLastfmFromFeatures();
     // 051: hydrate WebDAV scan cadence + BROWSER READ controls.
     hydrateScanFromFeatures();
+    // 065: hydrate cross-origin isolation toggle.
+    hydrateCioFromFeatures();
   } catch (e: unknown) {
     // 后端契约可能尚未部署 —— 优雅降级显示错误（非 JSON 响应一律视为 API 不可用）
     error.value = e instanceof SyntaxError || !(e instanceof Error)
@@ -258,6 +260,38 @@ const scanEtagCheck = ref<boolean>(true);
 const scanRescanStrategy = ref<"auto" | "worker" | "browser">("auto");
 const scanBrowserAuto = ref<boolean>(true);
 const scanBusy = ref(false);
+
+// === 065 — Cross-Origin Isolation ===
+// COOP/COEP/CORP gating for SharedArrayBuffer + ffmpeg.wasm multi-thread.
+// `crossOriginIsolated` reflects the *current* page state (live), not the
+// feature flag — so the admin can see whether their last change took effect
+// after a reload.
+const cioEnabled = ref<boolean>(true);
+const cioBusy = ref(false);
+const cioLive = computed<boolean>(() =>
+  typeof window !== "undefined" &&
+  (window as { crossOriginIsolated?: boolean }).crossOriginIsolated === true,
+);
+
+function hydrateCioFromFeatures() {
+  cioEnabled.value = findFeatureString("enable_cross_origin_isolation", "1") !== "0";
+}
+
+async function saveCio() {
+  cioBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "enable_cross_origin_isolation",
+      value: cioEnabled.value ? "1" : "0",
+    }));
+    if (!data.ok) throw new Error(data.error || "enable_cross_origin_isolation");
+    showToast(t("settings.common.crossOriginIsolation.saved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.crossOriginIsolation.saveFailed")}: ${msg}`, "error");
+  }
+  cioBusy.value = false;
+}
 
 function hydrateScanFromFeatures() {
   const hours = parseInt(findFeatureString("scan_interval_hours", "1"), 10);
@@ -942,6 +976,43 @@ onMounted(() => {
                 @click="saveScan"
               >
                 {{ t("settings.common.scan.save") }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 065 — Cross-Origin Isolation (COOP/COEP) -->
+        <div class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.crossOriginIsolation.title") }}</span>
+            <span class="status-badge" :class="cioLive ? 'success' : 'muted'">
+              {{ cioLive ? t("settings.common.crossOriginIsolation.live") : t("settings.common.crossOriginIsolation.notLive") }}
+            </span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.crossOriginIsolation.hint") }}
+          </p>
+          <div class="transcode-grid">
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.crossOriginIsolation.toggleLabel") }}</span>
+              <span class="scan-toggle">
+                <input
+                  type="checkbox"
+                  v-model="cioEnabled"
+                  :disabled="!isSuperAdmin"
+                />
+                <span>{{ cioEnabled ? t("common.on") : t("common.off") }}</span>
+              </span>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.crossOriginIsolation.toggleDesc") }}</p>
+
+            <div class="tc-actions">
+              <button
+                class="btn-primary"
+                :disabled="!isSuperAdmin || cioBusy"
+                @click="saveCio"
+              >
+                {{ t("settings.common.crossOriginIsolation.save") }}
               </button>
             </div>
           </div>

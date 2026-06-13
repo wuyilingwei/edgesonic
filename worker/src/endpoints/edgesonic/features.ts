@@ -93,6 +93,11 @@ const STRING_FEATURE_KEYS = new Set([
   "worker_poll_interval_seconds",
   "worker_batch_size",
   "worker_claim_ttl_seconds",
+  // 065 — Cross-Origin Isolation kill switch. When '1', the global response
+  // middleware in index.ts stamps COOP/COEP/CORP headers so the browser flips
+  // `crossOriginIsolated = true`, unlocking SharedArrayBuffer + ffmpeg.wasm
+  // multi-thread in the work pool. '0' restores pre-065 behaviour.
+  "enable_cross_origin_isolation",
 ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -154,6 +159,10 @@ function validateFeatureString(key: string, value: string): string | null {
       return null;
     case "worker_pool_enabled":
       if (value !== "0" && value !== "1") return "worker_pool_enabled must be '0' or '1'";
+      return null;
+    case "enable_cross_origin_isolation":
+      // 065 — only '0' or '1'. Mirrored shape on worker_pool_enabled.
+      if (value !== "0" && value !== "1") return "enable_cross_origin_isolation must be '0' or '1'";
       return null;
     case "worker_poll_interval_seconds": {
       // Stored as a stringified integer in [30, 3600]. Anything lower hammers
