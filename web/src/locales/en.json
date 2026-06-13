@@ -200,7 +200,31 @@
       "apiUnavailable": "Feature API unavailable — backend may not be deployed yet (getFeatures)",
       "updateFailed": "Failed to update {key}",
       "copyFailed": "Copy failed",
-      "levelRequired": "Level 3 required"
+      "levelRequired": "Level 3 required",
+      "transcode": {
+        "title": "Transcoder",
+        "engine": "Engine",
+        "engineDesc": "Backend that actually runs ffmpeg. Set to disabled to turn transcoding off entirely.",
+        "engineDisabled": "Disabled",
+        "engineSandbox": "Sandbox (Cloudflare container)",
+        "engineExternal": "External container",
+        "mode": "Mode",
+        "modeDesc": "on_demand transcodes on /stream; pre_bake at upload; both combines.",
+        "modeOnDemand": "On-Demand",
+        "modePreBake": "Pre-bake",
+        "modeBoth": "Both",
+        "profiles": "Default Profiles",
+        "profilesDesc": "Targets used for pre-bake (pre_bake / both modes).",
+        "externalUrl": "External Transcoder URL",
+        "externalUrlPlaceholder": "https://transcoder.example.com",
+        "externalKey": "External Transcoder Shared Key",
+        "externalKeySet": "SET",
+        "externalKeyUnset": "UNSET",
+        "externalKeyPlaceholder": "Paste the openssl rand -hex 32 secret",
+        "save": "Save",
+        "saved": "Saved",
+        "saveFailed": "Save failed"
+      }
     },
     "sessions": {
       "title": "Sessions",

@@ -151,3 +151,17 @@ export interface PlayQueue {
   changed_by: string | null;
   updated_at: number;
 }
+
+// 049 — Transcode jobs (post-migration 0010: adds engine + profile_id columns)
+export interface TranscodeJob {
+  id: string;
+  instance_id: string;
+  profile: string;
+  profile_id: string | null;
+  engine: string | null;
+  status: "pending" | "processing" | "completed" | "failed";
+  output_instance_id: string | null;
+  error_message: string | null;
+  created_at: number;
+  completed_at: number | null;
+}
