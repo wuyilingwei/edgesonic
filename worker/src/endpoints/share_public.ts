@@ -261,7 +261,7 @@ sharePublicRoutes.get("/share/:id", async (c) => {
       result = await urlAdapter.stream(selected.storage_uri, range);
       break;
     case "webdav":
-      result = await createWebDAVAdapter(env.DB).stream(selected.storage_uri, range);
+      result = await createWebDAVAdapter(env.DB, env).stream(selected.storage_uri, range);
       break;
     case "subsonic": {
       if (!(await getFeature(env, "enable_subsonic_upstream"))) {
@@ -271,7 +271,7 @@ sharePublicRoutes.get("/share/:id", async (c) => {
       result = await createSubsonicAdapter(env.DB, {
         instanceId: env.INSTANCE_ID,
         incomingChain,
-      }).stream(selected.storage_uri, range);
+      }, env).stream(selected.storage_uri, range);
       break;
     }
     default:

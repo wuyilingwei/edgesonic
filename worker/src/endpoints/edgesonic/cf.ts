@@ -310,6 +310,81 @@ cfRoutes.get("/cf/getCron", async (c) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /edgesonic/cf/ensureDefaultCron
+// ---------------------------------------------------------------------------
+// 067 — wrangler deploy clears the Worker's schedules list (the static
+// [triggers] block was removed from wrangler.toml so the runtime CF API is
+// the single source of truth). After every deploy a super admin opens
+// Settings → Cloudflare integration and clicks "Ensure default cron"; this
+// endpoint inspects the live schedules and PUTs the default 046/051/052
+// cadence ("0 */1 * * *") only when the list is empty.
+//
+// Semantics:
+//   - schedules already non-empty → no-op, returns applied=false + the
+//     existing schedules so the UI can render what's live
+//   - schedules empty → PUT [{ cron: "0 */1 * * *" }], returns applied=true
+//     with the CF response (the new schedules list)
+//
+// We never overwrite a user-customised cron. If the admin wants a different
+// frequency, they use the existing /cf/setCron form in Settings — this
+// endpoint is purely a post-deploy "restore the hourly default" button.
+const DEFAULT_CRON = "0 */1 * * *";
+
+cfRoutes.get("/cf/ensureDefaultCron", async (c) => {
+  const user = c.get("user");
+  const guard = requireSuper(user);
+  if (!guard.ok) return guard.resp;
+  const token = c.env.CF_API_TOKEN;
+  const accountId = c.env.CF_ACCOUNT_ID;
+  if (!token || !accountId) {
+    return c.json({ ok: false, error: "CF_API_TOKEN / CF_ACCOUNT_ID not configured" }, 400);
+  }
+
+  // Step 1: read the live schedules.
+  let existing: Array<{ cron: string }>;
+  try {
+    const result = await callCfApi(
+      token,
+      `/accounts/${accountId}/workers/scripts/${SCRIPT_NAME}/schedules`,
+    );
+    const r = result as { schedules?: Array<{ cron: string }> };
+    existing = r.schedules || [];
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ ok: false, error: msg }, 502);
+  }
+
+  // Step 2: non-empty list → respect the admin's existing config.
+  if (existing.length > 0) {
+    return c.json({
+      ok: true,
+      applied: false,
+      schedules: existing,
+    });
+  }
+
+  // Step 3: empty list → restore the default.
+  try {
+    const result = await callCfApi(
+      token,
+      `/accounts/${accountId}/workers/scripts/${SCRIPT_NAME}/schedules`,
+      {
+        method: "PUT",
+        body: JSON.stringify([{ cron: DEFAULT_CRON }]),
+      },
+    );
+    return c.json({
+      ok: true,
+      applied: true,
+      schedules: result,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ ok: false, error: msg }, 502);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /edgesonic/cf/getAnalytics
 // ---------------------------------------------------------------------------
 // 24h rollup of Worker analytics via the GraphQL endpoint

@@ -24,11 +24,18 @@ export interface SubsonicAdapterOptions {
   incomingChain?: string[];
 }
 
-export function createSubsonicAdapter(db: D1Database, opts: SubsonicAdapterOptions = {}): StorageAdapter {
+// 068 — `env` is optional so legacy call sites still compile while we migrate
+// them over. When provided, the password column may be a `v1:<base64url>` blob
+// that's transparently decrypted via env.STORAGE_KEY (see adapters/index.ts).
+export function createSubsonicAdapter(
+  db: D1Database,
+  opts: SubsonicAdapterOptions = {},
+  env?: { STORAGE_KEY?: string },
+): StorageAdapter {
   return {
     async stream(uri: string, range?: string): Promise<StreamResult> {
       const { path } = parseStorageUri(uri);
-      const creds = await getSourceCredentials(db, "subsonic");
+      const creds = await getSourceCredentials(db, "subsonic", env);
       if (!creds) {
         return { body: null, statusCode: 401, contentLength: null, contentType: "text/plain", acceptRanges: false };
       }

@@ -16,11 +16,18 @@
 import type { StorageAdapter, StreamResult } from "./index";
 import { parseStorageUri, getSourceCredentials } from "./index";
 
-export function createWebDAVAdapter(db: D1Database): StorageAdapter {
+// 068 — `env` is optional so legacy call sites still compile while we migrate
+// them over. When provided, the password column may be a `v1:<base64url>` blob
+// that's transparently decrypted via env.STORAGE_KEY. Without env (or with
+// STORAGE_KEY unset) we fall back to the legacy plaintext path.
+export function createWebDAVAdapter(
+  db: D1Database,
+  env?: { STORAGE_KEY?: string },
+): StorageAdapter {
   return {
     async stream(uri: string, range?: string): Promise<StreamResult> {
       const { path } = parseStorageUri(uri);
-      const creds = await getSourceCredentials(db, "webdav");
+      const creds = await getSourceCredentials(db, "webdav", env);
       if (!creds) {
         return { body: null, statusCode: 401, contentLength: null, contentType: "text/plain", acceptRanges: false };
       }

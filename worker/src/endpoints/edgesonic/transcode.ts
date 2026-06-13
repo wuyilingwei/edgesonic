@@ -73,7 +73,7 @@ async function openSourceStream(env: Env, instanceId: string): Promise<{ body: R
       return r.body ? { body: r.body, contentType: r.contentType } : null;
     }
     case "webdav": {
-      const r = await createWebDAVAdapter(env.DB).stream(selected.storage_uri);
+      const r = await createWebDAVAdapter(env.DB, env).stream(selected.storage_uri);
       return r.body ? { body: r.body, contentType: r.contentType } : null;
     }
     default:

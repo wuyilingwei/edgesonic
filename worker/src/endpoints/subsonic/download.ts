@@ -65,7 +65,7 @@ downloadRoutes.get("/download", permissionMiddleware("download"), async (c) => {
       break;
     }
     case "webdav": {
-      const creds = await getSourceCredentials(env.DB, "webdav");
+      const creds = await getSourceCredentials(env.DB, "webdav", env);
       if (creds) {
         const fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${parsed.path.split("/").map(encodeURIComponent).join("/")}`;
         const resp = await fetch(fullUrl, {
@@ -77,7 +77,7 @@ downloadRoutes.get("/download", permissionMiddleware("download"), async (c) => {
     }
     case "subsonic": {
       const { createSubsonicAdapter } = await import("../../adapters/subsonic");
-      const result = await createSubsonicAdapter(env.DB).stream(instance.storage_uri);
+      const result = await createSubsonicAdapter(env.DB, {}, env).stream(instance.storage_uri);
       body = result.body;
       break;
     }

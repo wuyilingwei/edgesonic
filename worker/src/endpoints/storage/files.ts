@@ -42,7 +42,7 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const suffix = name.split(".").pop() || "bin";
 
   if (source === "webdav") {
-    const creds = await getSourceCredentials(db, "webdav");
+    const creds = await getSourceCredentials(db, "webdav", env);
     if (!creds) return c.json({ ok: false, error: "No WebDAV source configured" }, 400);
     const fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${r2Key.split("/").map(encodeURIComponent).join("/")}`;
     const resp = await fetch(fullUrl, {
