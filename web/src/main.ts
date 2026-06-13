@@ -23,6 +23,11 @@ const routes = [
   { path: "/permissions", redirect: "/settings" },
   { path: "/settings", component: Settings, meta: { title: "Settings" } },
   { path: "/transcoder", component: Transcoder, meta: { title: "Transcoder" } },
+  // 062 — Internet Radio management. Lazy-loaded; view is rarely needed by
+  // non-admin users so we keep it out of the main chunk.
+  { path: "/radio", component: () => import("./views/Radio.vue"), meta: { title: "Radio" } },
+  // 063 — Podcast subscription management.
+  { path: "/podcasts", component: () => import("./views/Podcasts.vue"), meta: { title: "Podcasts" } },
 ];
 
 const router = createRouter({ history: createWebHashHistory(), routes });

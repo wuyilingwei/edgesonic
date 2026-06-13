@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { useAuth, parseXmlAttrs } from "../api";
+import { useAuth } from "../api";
 
 const { t } = useI18n();
 const { username: currentUsername, isAdmin, isSuperAdmin, edgesonicFetch, edgesonicPost, restUrl } = useAuth();
@@ -142,31 +142,54 @@ async function submitAvatar() {
   }
 }
 
-// ----- existing CRUD (unchanged) -----
+// ----- CRUD — 072 ported off XML envelopes to plain JSON now that the whole
+// /edgesonic/users bucket emits {ok,...}/{ok:false,error}. The wrapper
+// edgesonicFetch/Post still returns a raw response string so we JSON.parse
+// here (consistent with writeTags etc. elsewhere in api.ts). -----
+interface OkJson { ok: boolean; error?: string }
+interface UsersListJson extends OkJson { users?: Array<{ username: string; level: number; enabled: boolean }> }
+
+function safeParse<T extends OkJson>(raw: string): T {
+  try { return JSON.parse(raw) as T; } catch { return { ok: false, error: "bad_json" } as T; }
+}
+
 async function load() {
   try {
-    const xml = await edgesonicFetch("users/list");
-    users.value = parseXmlAttrs(xml, "user").map((u) => ({
-      username: u.username || "", level: parseInt(u.level || "1"),
-      enabled: u.enabled === "1" || u.enabled === "true",
+    const raw = await edgesonicFetch("users/list");
+    const resp = safeParse<UsersListJson>(raw);
+    if (!resp.ok || !Array.isArray(resp.users)) { users.value = []; return; }
+    users.value = resp.users.map((u) => ({
+      username: u.username || "",
+      level: typeof u.level === "number" ? u.level : parseInt(String(u.level ?? "1")),
+      enabled: !!u.enabled,
     }));
   } catch { users.value = []; }
 }
 
 async function addUser() {
-  try { await edgesonicPost("users/create", form.value); showForm.value = false; form.value = { username: "", password: "", level: 1 }; load(); showToast(t("users.created")); }
-  catch { showToast(t("users.createFailed"), "error"); }
+  try {
+    const resp = safeParse<OkJson>(await edgesonicPost("users/create", form.value));
+    if (!resp.ok) throw new Error(resp.error || "create failed");
+    showForm.value = false; form.value = { username: "", password: "", level: 1 };
+    load(); showToast(t("users.created"));
+  } catch { showToast(t("users.createFailed"), "error"); }
 }
 
 async function updateUser(user: { username: string; level?: number; enabled?: number }) {
-  try { await edgesonicPost("users/update", user); load(); showToast(t("users.updated")); }
-  catch { showToast(t("users.updateFailed"), "error"); }
+  try {
+    const resp = safeParse<OkJson>(await edgesonicPost("users/update", user));
+    if (!resp.ok) throw new Error(resp.error || "update failed");
+    load(); showToast(t("users.updated"));
+  } catch { showToast(t("users.updateFailed"), "error"); }
 }
 
 async function deleteUser(username: string) {
   if (!confirm(t("users.deleteConfirm", { name: username }))) return;
-  try { await edgesonicPost("users/delete", { username }); load(); showToast(t("users.deleted")); }
-  catch { showToast(t("users.deleteFailed"), "error"); }
+  try {
+    const resp = safeParse<OkJson>(await edgesonicPost("users/delete", { username }));
+    if (!resp.ok) throw new Error(resp.error || "delete failed");
+    load(); showToast(t("users.deleted"));
+  } catch { showToast(t("users.deleteFailed"), "error"); }
 }
 
 function toggleEnabled(u: { username: string; enabled: boolean }) {
