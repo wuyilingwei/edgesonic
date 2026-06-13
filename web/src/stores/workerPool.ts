@@ -57,6 +57,54 @@ export const useWorkerPool = defineStore("workerPool", () => {
   const lastError = ref<string | null>(null);
   const lastPollAt = ref<number>(0);
 
+  // 056 — surface state Files.vue needs to render the work-queue HUD.
+  // - `recent` is a small FIFO ring (≤ 5) of just-finished tasks so the UI
+  //   can show task chips without re-querying the server.
+  // - `completedSamples` powers the speed estimator: we push one entry per
+  //   completed/failed task and compute completions/min over the last 5min.
+  //   Memory cap is the SAMPLE_LIMIT below (older entries get dropped).
+  // - `isWorking` is true any time the pool is busy (either running a task
+  //   or mid-poll) so the HUD can hide itself when truly idle.
+  interface RecentTask {
+    id: string;
+    taskType: string;
+    fileName: string;
+    status: "ok" | "fail";
+    finishedAt: number;
+    error?: string;
+  }
+  const RECENT_LIMIT = 5;
+  const SPEED_WINDOW_MS = 5 * 60 * 1000;
+  const SAMPLE_LIMIT = 120;
+  const recent = ref<RecentTask[]>([]);
+  const completedSamples = ref<Array<{ ts: number; count: number }>>([]);
+
+  function pushRecent(entry: RecentTask): void {
+    recent.value.unshift(entry);
+    if (recent.value.length > RECENT_LIMIT) recent.value.length = RECENT_LIMIT;
+  }
+  function recordSample(): void {
+    completedSamples.value.push({ ts: Date.now(), count: stats.value.completed });
+    if (completedSamples.value.length > SAMPLE_LIMIT) {
+      completedSamples.value.splice(0, completedSamples.value.length - SAMPLE_LIMIT);
+    }
+  }
+  // Best-effort: PolledTask payloads from the scan dispatcher include either
+  // `sourceUri` or `storageUri`. We take the tail segment so the recent-list
+  // shows something human-readable instead of an instance UUID.
+  function fileNameFrom(task: PolledTask): string {
+    const payload = task.payload || {};
+    const candidate =
+      typeof payload.sourceUri === "string" ? payload.sourceUri :
+      typeof payload.storageUri === "string" ? payload.storageUri :
+      "";
+    if (candidate) {
+      const tail = candidate.split("/").filter(Boolean).pop();
+      if (tail) return tail;
+    }
+    return task.id.slice(0, 8);
+  }
+
   // capabilities — what this browser can actually execute. The Worker poll
   // endpoint takes a `caps=` parameter; we filter on the server using these.
   const caps = computed<string[]>(() => {
@@ -78,6 +126,37 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // --- internal state ---
   let intervalId: number | null = null;
   let draining = false;
+  // 056 — `draining` is module-local, not reactive; mirror it into a ref so
+  // `isWorking` updates when poll-and-drain starts/stops without a task.
+  const isDraining = ref(false);
+
+  // 056 — true whenever the pool has *something* to show in the HUD: either
+  // a task is currently executing (currentTaskType is non-empty) or we're
+  // mid-poll. Falls back to false when fully idle so Files.vue can collapse
+  // the work-queue block.
+  const isWorking = computed(() =>
+    !!stats.value.currentTaskType || isDraining.value,
+  );
+
+  // 056 — completions/min averaged over the last SPEED_WINDOW_MS. Returns
+  // null when there's < 2 samples or the window is too short (UI shows "--").
+  const speedPerMin = computed<number | null>(() => {
+    const samples = completedSamples.value;
+    if (samples.length < 2) return null;
+    const now = Date.now();
+    const cutoff = now - SPEED_WINDOW_MS;
+    // Find the oldest sample inside the window (or fall back to the first
+    // one — a low-throughput pool can have samples spread > 5min apart).
+    let oldest = samples[0];
+    for (const s of samples) {
+      if (s.ts >= cutoff) { oldest = s; break; }
+    }
+    const elapsed = now - oldest.ts;
+    if (elapsed < 1000) return null;
+    const delta = stats.value.completed - oldest.count;
+    if (delta <= 0) return 0;
+    return Math.round((delta * 60_000) / elapsed * 10) / 10;
+  });
 
   // ---------------------------------------------------------------------------
   // Lifecycle
@@ -119,6 +198,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     if (!enabled.value || !eligible.value) return;
     if (typeof document !== "undefined" && document.hidden) return;
     draining = true;
+    isDraining.value = true;
     lastError.value = null;
     lastPollAt.value = Date.now();
     try {
@@ -136,6 +216,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     } finally {
       stats.value.currentTaskType = "";
       draining = false;
+      isDraining.value = false;
     }
   }
 
@@ -166,6 +247,15 @@ export const useWorkerPool = defineStore("workerPool", () => {
       // Submit success path.
       await edgesonicPost("work/submit", { id: task.id, result });
       stats.value.completed++;
+      // 056 — surface to Files.vue HUD.
+      pushRecent({
+        id: task.id,
+        taskType: task.taskType,
+        fileName: fileNameFrom(task),
+        status: "ok",
+        finishedAt: Date.now(),
+      });
+      recordSample();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       // submit error so the row goes back to queued (or to failed if exhausted).
@@ -173,6 +263,15 @@ export const useWorkerPool = defineStore("workerPool", () => {
       // also down we'll let the reclaim sweep catch the row.
       try { await edgesonicPost("work/submit", { id: task.id, error: msg }); } catch { /* ignore */ }
       stats.value.failed++;
+      pushRecent({
+        id: task.id,
+        taskType: task.taskType,
+        fileName: fileNameFrom(task),
+        status: "fail",
+        finishedAt: Date.now(),
+        error: msg,
+      });
+      recordSample();
     } finally {
       if (worker) worker.terminate();
     }
@@ -239,6 +338,10 @@ export const useWorkerPool = defineStore("workerPool", () => {
     stop();
     stats.value = { completed: 0, failed: 0, currentTaskType: "" };
     lastError.value = null;
+    // 056 — also wipe the HUD-facing surface so a logout doesn't leave
+    // stale chips for the next user.
+    recent.value = [];
+    completedSamples.value = [];
   }
 
   return {
@@ -249,6 +352,10 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastError,
     lastPollAt,
     pollIntervalMs,
+    // 056 — HUD-facing
+    recent,
+    speedPerMin,
+    isWorking,
     start,
     stop,
     setEnabled,

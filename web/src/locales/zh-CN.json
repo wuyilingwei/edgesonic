@@ -197,7 +197,27 @@
     "tidyFailed": "整理失败",
     "tidyFrom": "原路径",
     "tidyTo": "目标",
-    "tidySkipped": "跳过：{reason}"
+    "tidySkipped": "跳过：{reason}",
+    "workQueue": {
+      "title": "工作节点队列",
+      "progress": "已解析 {completed} / 待解析 {queued}",
+      "progressNoQueue": "已完成 {completed} · 失败 {failed}",
+      "speed": "速度：{speed}/分钟",
+      "speedPending": "速度：测算中…",
+      "current": "正在处理：{type}",
+      "recent": "最近任务",
+      "pause": "暂停",
+      "resume": "继续",
+      "paused": "已暂停 — 当前 claim 的任务仍会完成",
+      "failed": "失败队列（{n}）",
+      "failedEmpty": "无失败任务",
+      "failedRow": "{type} · {error}",
+      "cancel": "取消",
+      "canceled": "任务已取消",
+      "cancelFailed": "取消失败",
+      "statusLoadFailed": "无法加载队列状态",
+      "refresh": "刷新"
+    }
   },
   "users": {
     "label": "// 管理",
@@ -227,6 +247,19 @@
       "user": "用户",
       "admin": "管理员",
       "super": "超级管理员"
+    },
+    "avatar": {
+      "title": "头像",
+      "current": "当前头像",
+      "upload": "上传图片",
+      "clear": "清除选择",
+      "change": "更换头像",
+      "tooLarge": "图片过大（>500KB）",
+      "invalidMime": "仅支持 JPEG 或 PNG",
+      "uploaded": "头像已更新",
+      "uploadFailed": "头像上传失败",
+      "noAvatar": "未设置",
+      "open": "管理头像"
     }
   },
   "transcoder": {
@@ -491,6 +524,34 @@
     "scan": "扫描",
     "scanning": "扫描中…",
     "scanDone": "扫描完成：发现 {found} 个文件，新增 {added} 首",
-    "scanFailed": "扫描失败"
+    "scanFailed": "扫描失败",
+    "scanStatus": {
+      "idle": "扫描",
+      "running": "扫描中 ({scanned} / {total})",
+      "runningUnknown": "扫描中…",
+      "completed": "已完成 {total} 文件 · {relative}",
+      "failed": "扫描失败",
+      "retry": "重试",
+      "history": "扫描历史",
+      "historyEmpty": "暂无扫描记录",
+      "progress": "进度",
+      "started": "开始时间",
+      "duration": "耗时",
+      "jobId": "任务 ID",
+      "status": "状态",
+      "errorPrefix": "错误",
+      "startToast": "扫描已启动",
+      "expand": "展开历史",
+      "collapse": "收起",
+      "relative": {
+        "justNow": "刚刚",
+        "secondsAgo": "{n} 秒前",
+        "minutesAgo": "{n} 分钟前",
+        "hoursAgo": "{n} 小时前",
+        "daysAgo": "{n} 天前"
+      },
+      "durationSeconds": "{n} 秒",
+      "durationMinutes": "{n} 分钟"
+    }
   }
 }
