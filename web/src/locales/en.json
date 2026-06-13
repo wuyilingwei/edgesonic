@@ -279,6 +279,7 @@
         "engineDisabled": "Disabled",
         "engineSandbox": "Sandbox (Cloudflare container)",
         "engineExternal": "External container",
+        "engineBrowserPool": "Browser pool",
         "mode": "Mode",
         "modeDesc": "on_demand transcodes on /stream; pre_bake at upload; both combines.",
         "modeOnDemand": "On-Demand",

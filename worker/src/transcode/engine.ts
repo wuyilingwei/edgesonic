@@ -107,7 +107,10 @@ export interface TranscodeEngine {
 }
 
 // Engine selector — read from features.transcode_engine.
-export type EngineKind = "sandbox" | "external" | "disabled";
+// 053 — `browser_pool` added: transcode tasks are queued via work_queue and
+// executed by browser-resident Web Workers (52b). Async-only — callers must
+// short-circuit on this kind instead of calling `engine.transcode()`.
+export type EngineKind = "sandbox" | "external" | "browser_pool" | "disabled";
 
 // Mode selector — read from features.transcode_mode.
 //   on_demand : transcode at /stream time when no instance matches the request
