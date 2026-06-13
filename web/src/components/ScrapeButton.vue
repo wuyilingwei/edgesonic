@@ -23,7 +23,7 @@ import {
 } from "../lib/scrape";
 
 const { t } = useI18n();
-const { authFetch, authPost } = useAuth();
+const { edgesonicFetch, tagPost } = useAuth();
 
 const props = withDefaults(
   defineProps<{
@@ -48,7 +48,7 @@ const configReady = ref(false);
 
 async function loadConfig() {
   try {
-    const data = JSON.parse(await authFetch("getFeatures"));
+    const data = JSON.parse(await edgesonicFetch("features/list"));
     if (!data.ok) throw new Error(data.error || "getFeatures failed");
     const flag = (data.features || []).find((f: { key: string }) => f.key === "scrape_enabled");
     scrapeEnabled.value = flag ? Number(flag.value) !== 0 : true;
@@ -105,7 +105,7 @@ async function runSearch() {
   results.value = [];
   errors.value = [];
   try {
-    const proxy = makeProxyFetch(authPost);
+    const proxy = makeProxyFetch(tagPost);
     const resp = await searchAll({
       query: q,
       sources: enabledSources.value,
@@ -152,7 +152,7 @@ async function applyResult(r: ScrapeResult) {
         result: r,
         mode: "tags",
       },
-      authPost,
+      tagPost,
     );
   } catch {/* swallow — caller already saw the merge */}
   closePanel();

@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 
 const { t } = useI18n();
-const { isAdmin, isSuperAdmin, authFetch, authPost } = useAuth();
+const { isAdmin, isSuperAdmin, edgesonicFetch, edgesonicPost } = useAuth();
 const users = ref<Array<{ username: string; level: number; enabled: boolean }>>([]);
 const showForm = ref(false);
 const form = ref({ username: "", password: "", level: 1 });
@@ -17,7 +17,7 @@ const levelColors: Record<number, string> = { 0: "muted", 1: "success", 2: "info
 
 async function load() {
   try {
-    const xml = await authFetch("getUsers");
+    const xml = await edgesonicFetch("users/list");
     users.value = parseXmlAttrs(xml, "user").map((u) => ({
       username: u.username || "", level: parseInt(u.level || "1"),
       enabled: u.enabled === "1" || u.enabled === "true",
@@ -26,18 +26,18 @@ async function load() {
 }
 
 async function addUser() {
-  try { await authPost("createUser", form.value); showForm.value = false; form.value = { username: "", password: "", level: 1 }; load(); showToast(t("users.created")); }
+  try { await edgesonicPost("users/create", form.value); showForm.value = false; form.value = { username: "", password: "", level: 1 }; load(); showToast(t("users.created")); }
   catch { showToast(t("users.createFailed"), "error"); }
 }
 
 async function updateUser(user: { username: string; level?: number; enabled?: number }) {
-  try { await authPost("updateUser", user); load(); showToast(t("users.updated")); }
+  try { await edgesonicPost("users/update", user); load(); showToast(t("users.updated")); }
   catch { showToast(t("users.updateFailed"), "error"); }
 }
 
 async function deleteUser(username: string) {
   if (!confirm(t("users.deleteConfirm", { name: username }))) return;
-  try { await authPost("deleteUser", { username }); load(); showToast(t("users.deleted")); }
+  try { await edgesonicPost("users/delete", { username }); load(); showToast(t("users.deleted")); }
   catch { showToast(t("users.deleteFailed"), "error"); }
 }
 

@@ -1,19 +1,19 @@
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { parseStorageUri } from "../adapters/index";
-import { createR2Adapter } from "../adapters/r2";
-import { urlAdapter } from "../adapters/url";
-import { createWebDAVAdapter } from "../adapters/webdav";
-import { createSubsonicAdapter } from "../adapters/subsonic";
-import type { StreamResult } from "../adapters/index";
-import { subsonicError } from "../auth";
-import { getFeature, parseChain } from "../utils/features";
+import { createQueries } from "../../db/queries";
+import { parseStorageUri } from "../../adapters/index";
+import { createR2Adapter } from "../../adapters/r2";
+import { urlAdapter } from "../../adapters/url";
+import { createWebDAVAdapter } from "../../adapters/webdav";
+import { createSubsonicAdapter } from "../../adapters/subsonic";
+import type { StreamResult } from "../../adapters/index";
+import { subsonicError } from "../../auth";
+import { getFeature, parseChain } from "../../utils/features";
 // Transcode factory is statically imported (it lazy-loads the Sandbox /
 // External engine modules so this is safe under tsx test runs). Tests can
 // inject a FakeEngine via __setEngineFactoryForTest exported from factory.ts.
-import { DEFAULT_PROFILES } from "../transcode/profiles";
-import { buildTranscodeEngine } from "../transcode/factory";
-import type { TranscodeProfile, TranscodeInput } from "../transcode/engine";
+import { DEFAULT_PROFILES } from "../../transcode/profiles";
+import { buildTranscodeEngine } from "../../transcode/factory";
+import type { TranscodeProfile, TranscodeInput } from "../../transcode/engine";
 
 export const mediaRoutes = new Hono();
 
@@ -135,7 +135,7 @@ async function openSourceForTranscode(
 // original instance instead of failing. The Subsonic spec calls this out as
 // the correct behaviour ("ignored when the server doesn't support it").
 // ============================================================================
-mediaRoutes.get("/rest/stream", async (c) => {
+mediaRoutes.get("/stream", async (c) => {
   const id = c.req.query("id");
   const format = c.req.query("format") || "raw";
   const maxBitRate = parseInt(c.req.query("maxBitRate") || "0", 10) || 0;
@@ -291,7 +291,7 @@ async function tryTranscodeStream(
 //          server does **not** actually resize the image (see findings.md
 //          decision 1) — the underlying bytes are the original.
 // ============================================================================
-mediaRoutes.get("/rest/getCoverArt", async (c) => {
+mediaRoutes.get("/getCoverArt", async (c) => {
   const id = c.req.query("id");
   if (!id) return c.body(null, 400 as never);
 
@@ -314,7 +314,7 @@ mediaRoutes.get("/rest/getCoverArt", async (c) => {
       // On-demand: pull a directory image or embedded art from the source, cache in R2
       const noCover = await env.KV.get(`nocover:${albumId}`);
       if (noCover) return c.body(null, 404 as never);
-      const { resolveAlbumCover } = await import("../utils/covers");
+      const { resolveAlbumCover } = await import("../../utils/covers");
       try {
         coverKey = await resolveAlbumCover(env, albumId);
       } catch { coverKey = null; }

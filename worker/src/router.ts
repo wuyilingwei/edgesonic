@@ -1,52 +1,19 @@
+// 055 — Four-bucket API surface:
+//   /rest/*       Subsonic 1.16.1 + OpenSubsonic protocol
+//   /tag/*        Tag management   (web-session, edit_tags etc.)
+//   /storage/*    Storage management (web-session, manage_sources/files)
+//   /edgesonic/*  EdgeSonic private (web-session, per-endpoint perms)
+// plus the publicly accessible /share/:id route registered outside the auth
+// middleware (see index.ts).
 import { Hono } from "hono";
-import { pingRoutes } from "./endpoints/ping";
-import { browsingRoutes } from "./endpoints/browsing";
-import { searchRoutes } from "./endpoints/searching";
-import { mediaRoutes } from "./endpoints/media";
-import { adminRoutes } from "./endpoints/admin";
-import { filesRoutes } from "./endpoints/files";
-import { featuresRoutes } from "./endpoints/features";
-import { scanRoutes } from "./endpoints/scan";
-import { fileBrowseRoutes } from "./endpoints/filebrowse";
-import { tagEditRoutes } from "./endpoints/tagedit";
-import { tidyFolderRoutes } from "./endpoints/tidyfolder";
-import { playlistsRoutes } from "./endpoints/playlists";
-import { bookmarksRoutes } from "./endpoints/bookmarks";
-import { annotationRoutes } from "./endpoints/annotation";
-import { transcodeRoutes } from "./endpoints/transcode";
-import { scrapeRoutes } from "./endpoints/scrape";
-import { metadataRoutes } from "./endpoints/metadata";
-import { openSubsonicRoutes } from "./endpoints/opensubsonic";
-import { infoRoutes } from "./endpoints/info";
-import { lyricsRoutes } from "./endpoints/lyrics";
-import { radioRoutes } from "./endpoints/radio";
-import { nowPlayingRoutes } from "./endpoints/now_playing";
-import { podcastsRoutes } from "./endpoints/podcasts";
-import { sharesRoutes } from "./endpoints/shares";
+import { subsonicRoutes } from "./endpoints/subsonic";
+import { tagRoutes } from "./endpoints/tag";
+import { storageRoutes } from "./endpoints/storage";
+import { edgesonicRoutes } from "./endpoints/edgesonic";
 
 export function registerRoutes(app: Hono) {
-  app.route("/", pingRoutes);
-  app.route("/", browsingRoutes);
-  app.route("/", searchRoutes);
-  app.route("/", mediaRoutes);
-  app.route("/", adminRoutes);
-  app.route("/", filesRoutes);
-  app.route("/", featuresRoutes);
-  app.route("/", scanRoutes);
-  app.route("/", fileBrowseRoutes);
-  app.route("/", tagEditRoutes);
-  app.route("/", tidyFolderRoutes);
-  app.route("/", playlistsRoutes);
-  app.route("/", bookmarksRoutes);
-  app.route("/", annotationRoutes);
-  app.route("/", transcodeRoutes);
-  app.route("/", scrapeRoutes);
-  app.route("/", metadataRoutes);
-  app.route("/", openSubsonicRoutes);
-  app.route("/", infoRoutes);
-  app.route("/", lyricsRoutes);
-  app.route("/", radioRoutes);
-  app.route("/", nowPlayingRoutes);
-  app.route("/", podcastsRoutes);
-  app.route("/", sharesRoutes);
+  app.route("/rest", subsonicRoutes);
+  app.route("/tag", tagRoutes);
+  app.route("/storage", storageRoutes);
+  app.route("/edgesonic", edgesonicRoutes);
 }

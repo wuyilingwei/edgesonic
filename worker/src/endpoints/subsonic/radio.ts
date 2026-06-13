@@ -14,11 +14,11 @@
 //   * EdgeSonic is a directory only — clients connect to stream_url directly,
 //     no proxy here (esChain does not apply to external radio streams).
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { permissionMiddleware, subsonicError } from "../auth";
-import { subsonicOK } from "../utils/xml";
-import { mapInternetRadioStation } from "../types/subsonic";
-import type { User } from "../types/entities";
+import { createQueries } from "../../db/queries";
+import { permissionMiddleware, subsonicError } from "../../auth";
+import { subsonicOK } from "../../utils/xml";
+import { mapInternetRadioStation } from "../../types/subsonic";
+import type { User } from "../../types/entities";
 
 export const radioRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
@@ -171,7 +171,7 @@ function register(
     c: import("hono").Context<{ Bindings: Env; Variables: { user: User } }>,
   ) => Promise<Response>,
 ) {
-  const paths = [`/rest/${path}`, `/rest/${path}.view`];
+  const paths = [`/${path}`, `/${path}.view`];
   for (const p of paths) {
     if (middleware) {
       radioRoutes.get(p, middleware, handler);

@@ -1,5 +1,5 @@
 import { locateEmbeddedPicture } from "./tags";
-import { parseMultistatus, stripTrailingSlash, encodePath } from "../endpoints/scan";
+import { parseMultistatus, stripTrailingSlash, encodePath } from "../endpoints/storage/scan";
 
 const IMAGE_EXT: Record<string, string> = {
   jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", gif: "image/gif",

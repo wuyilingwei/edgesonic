@@ -17,9 +17,9 @@
 // Permission: manage_files (session-only). See migration 0013.
 
 import { Hono } from "hono";
-import { permissionMiddleware } from "../auth";
-import { createQueries } from "../db/queries";
-import { encodePath } from "./scan";
+import { permissionMiddleware } from "../../auth";
+import { createQueries } from "../../db/queries";
+import { encodePath } from "../storage/scan";
 
 export const tidyFolderRoutes = new Hono();
 
@@ -49,7 +49,7 @@ interface SourceRow {
   root_path: string | null;
 }
 
-tidyFolderRoutes.post("/rest/tidyFolder", permissionMiddleware("manage_files"), async (c) => {
+tidyFolderRoutes.post("/tidyFolder", permissionMiddleware("manage_files"), async (c) => {
   const env = c.env as Env;
   const db = env.DB;
   const queries = createQueries(db);
