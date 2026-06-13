@@ -451,7 +451,12 @@
         "loadEntry": "{user}: {n}",
         "ineligible": "您的等级不可参与浏览器任务池（需要等级 ≥ 2）。",
         "refreshStatus": "刷新队列状态",
-        "refreshing": "正在刷新…"
+        "refreshing": "正在刷新…",
+        "backfillLabel": "回填已完成任务",
+        "backfillDesc": "重放所有 status=completed task_type=metadata 的旧任务结果到 song_masters / song_instances。修复 077 前已完成但未应用的历史任务。幂等操作。",
+        "backfillButton": "回填已完成 metadata 任务",
+        "backfillRunning": "回填中…",
+        "backfillDoneToast": "已处理 {processed}：成功 {applied}，失败 {failed}"
       }
     },
     "sessions": {
