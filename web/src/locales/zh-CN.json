@@ -109,7 +109,9 @@
     "createNewPlaylist": "新建歌单…",
     "addToPlaylistFailed": "加入歌单失败",
     "selectPlaylist": "选择一个歌单",
-    "noPlaylists": "暂无歌单 — 请先新建一个"
+    "noPlaylists": "暂无歌单 — 请先新建一个",
+    "songsHint": "💡 悬停歌曲行编辑 (✎) · 多选后顶部出现批量编辑",
+    "batchHint": "勾选歌曲行以批量操作（编辑标签 / 加入歌单 / 分享）"
   },
   "tagEditor": {
     "singleTitle": "编辑歌曲信息",
@@ -289,7 +291,9 @@
     "selectFirst": "请先选择文件",
     "loadingWasm": "正在加载 FFmpeg WASM…",
     "done": "完成！已开始下载。",
-    "failed": "转码失败"
+    "failed": "转码失败",
+    "description": "浏览器内 ffmpeg.wasm 转码，不上传服务器",
+    "hint": "选文件 → 选格式 → 下载"
   },
   "player": {
     "noTrack": "未加载曲目",
