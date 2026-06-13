@@ -124,10 +124,17 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // endpoint takes a `caps=` parameter; we filter on the server using these.
   const caps = computed<string[]>(() => {
     const c: string[] = ["music-metadata", "scrape"];
-    // ffmpeg.wasm needs SharedArrayBuffer (cross-origin isolation). EdgeSonic
-    // doesn't set COOP/COEP today (would break 024's coverArt embedding), so
-    // the check usually returns false. 053 owns the COOP/COEP migration.
-    if (typeof globalThis !== "undefined" && "SharedArrayBuffer" in globalThis) {
+    // ffmpeg.wasm needs SharedArrayBuffer, which requires the page to be
+    // cross-origin isolated. 065 ships the COOP/COEP/CORP middleware that
+    // flips `crossOriginIsolated = true`. We gate on both the global symbol
+    // (engine support) AND the runtime flag (page actually isolated) — a
+    // browser may expose SharedArrayBuffer but refuse to materialise its
+    // shared memory backing when isolation is off.
+    if (
+      typeof SharedArrayBuffer !== "undefined" &&
+      typeof globalThis !== "undefined" &&
+      (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true
+    ) {
       c.push("ffmpeg");
     }
     return c;

@@ -17,6 +17,7 @@ import { Hono } from "hono";
 import { authMiddleware } from "./auth";
 import { registerRoutes } from "./router";
 import { formPostMiddleware } from "./middleware/form_post";
+import { crossOriginIsolationMiddleware } from "./middleware/cross_origin_isolation";
 import { refreshAllChannels } from "./utils/podcastSync";
 import { maybeRunScheduledScan } from "./utils/scheduledScan";
 import { reclaimStaleWork } from "./utils/workReclaim";
@@ -29,6 +30,12 @@ import { sharePublicRoutes } from "./endpoints/share_public";
 export { Sandbox } from "@cloudflare/sandbox";
 
 const app = new Hono();
+
+// 065 — Cross-Origin Isolation response headers. Lives in
+// ./middleware/cross_origin_isolation so the test suite can import it without
+// dragging in the @cloudflare/sandbox container binding from this file's
+// top-level re-export.
+app.use("*", crossOriginIsolationMiddleware);
 
 // 055 — Login bootstraps the very session token authMiddleware checks, so it
 // has to run BEFORE any auth filter. Mounted on the bare app at

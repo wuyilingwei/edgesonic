@@ -171,8 +171,17 @@ async function runTranscode(payload: Record<string, unknown>): Promise<unknown> 
 
   await ff.exec(patchedArgs);
   const out = await ff.readFile(outputName);
-  // readFile returns Uint8Array in v0.12; defensive cast in case API drifts.
-  const outBytes = out instanceof Uint8Array ? out : new Uint8Array(out as ArrayBuffer);
+  // readFile's type is Uint8Array | string (string only when an encoding is
+  // passed, which we don't). Narrow defensively; if a future API drift hands
+  // us a string we'd corrupt the upload, so fail loud instead.
+  if (typeof out === "string") {
+    throw new Error("ffmpeg readFile returned string; expected Uint8Array");
+  }
+  // Copy into a fresh Uint8Array backed by a standard ArrayBuffer so the type
+  // satisfies BodyInit (which rejects Uint8Array<ArrayBufferLike> because
+  // ArrayBufferLike may be SharedArrayBuffer). The copy is O(n) but ffmpeg
+  // outputs are typically a few MB — negligible vs. the upload itself.
+  const outBytes: Uint8Array<ArrayBuffer> = new Uint8Array(out);
 
   const uploadResp = await fetch(uploadUrl, {
     method: "POST",
