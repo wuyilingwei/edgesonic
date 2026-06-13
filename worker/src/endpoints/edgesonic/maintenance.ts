@@ -180,3 +180,66 @@ maintenanceRoutes.post("/maintenance/reclaimStaleWork", async (c) => {
     items,
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /edgesonic/maintenance/resetFailedWork
+// ---------------------------------------------------------------------------
+// 082 — Recovery hatch for the "permanently failed" trap:
+//   When a browser worker shipped a buggy bundle, every task it picked up
+//   would burn through attempts (default max=3) and end up at status='failed'.
+//   Subsequent scans INSERT OR IGNORE the same deterministic id, so the
+//   failed row sticks around forever and no fresh worker ever gets a shot at
+//   it. The legitimate (now updated) bundle therefore can't recover the
+//   instance metadata until somebody manually flips the failed rows back to
+//   queued. This endpoint is that flip.
+//
+// Query: task_type=<optional> — filter the reset to a single task type. Useful
+//   for "I only want metadata tasks to retry, leave the scan failures alone".
+// Response: { ok: true, reset, taskType? }
+//   - reset:    number of rows whose status moved 'failed' → 'queued'
+//   - taskType: echoes the filter when given (helpful in operator audit log)
+//
+// Why the wholesale reset (attempts=0, clear claimed_* / error_message)?
+//   - attempts=0: a fresh bundle deserves a clean budget; otherwise the very
+//     first hiccup re-fails it.
+//   - claimed_by/claimed_at/heartbeat_at: failed rows shouldn't carry
+//     stale-claim residue. Leaving them set would make a future workReclaim
+//     sweep treat the row as "claimed but stale" and try to flip it back to
+//     failed again — clearing is safer.
+//   - error_message=NULL: the previous error doesn't apply to the retry; the
+//     UI shows it as a fresh queued row.
+//
+// Idempotent: re-running with zero failed rows just returns reset=0.
+maintenanceRoutes.post("/maintenance/resetFailedWork", async (c) => {
+  const env = c.env as Env;
+  const user = c.get("user");
+  if (user.level < 3) {
+    return c.json({ ok: false, error: "Admin level required" }, 403);
+  }
+
+  // Optional filter — drop the param entirely if absent so the SQL stays
+  // bind-arity-clean (avoids a "?" with no matching bind).
+  const onlyTaskType = c.req.query("task_type");
+  const where = onlyTaskType
+    ? "status='failed' AND task_type=?"
+    : "status='failed'";
+  const stmt = env.DB.prepare(
+    `UPDATE work_queue
+     SET status='queued',
+         attempts=0,
+         error_message=NULL,
+         claimed_by=NULL,
+         claimed_at=NULL,
+         heartbeat_at=NULL
+     WHERE ${where}`,
+  );
+  const result = onlyTaskType
+    ? await stmt.bind(onlyTaskType).run()
+    : await stmt.run();
+
+  return c.json({
+    ok: true,
+    reset: result.meta.changes,
+    ...(onlyTaskType ? { taskType: onlyTaskType } : {}),
+  });
+});

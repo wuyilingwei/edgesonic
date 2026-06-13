@@ -625,6 +625,32 @@ async function onReclaimStaleWork() {
   reclaimBusy.value = false;
 }
 
+// 082 — manually re-queue rows stuck at status='failed'. After a buggy bundle
+// burns through attempts the deterministic-id INSERT OR IGNORE means scan
+// can't dispatch them again; this knob flips them back to queued so a fresh
+// (presumably fixed) bundle can pick them up.
+const resetFailedBusy = ref(false);
+const resetFailedToast = ref("");
+async function onResetFailedWork() {
+  if (!isSuperAdmin.value || resetFailedBusy.value) return;
+  if (!confirm(t("settings.common.maintenance.resetFailedConfirm"))) return;
+  resetFailedBusy.value = true;
+  resetFailedToast.value = "";
+  try {
+    const text = await edgesonicPost("maintenance/resetFailedWork", {});
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "rejected");
+    resetFailedToast.value = t("settings.common.maintenance.resetFailedDoneToast", {
+      reset: data.reset || 0,
+    });
+  } catch (e: unknown) {
+    resetFailedToast.value = t("settings.common.maintenance.resetFailedFailed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  resetFailedBusy.value = false;
+}
+
 async function clearLastfm() {
   lastfmBusy.value = true;
   try {
@@ -768,6 +794,33 @@ async function createCredential() {
     showToast(t("settings.clients.loadFailed"), "error");
   }
   credBusy.value = false;
+}
+
+// 082 — Rename a credential's label in place. Triggered by the row input's
+// blur/Enter when the value differs from the persisted label. We snapshot the
+// original on focus so blur knows whether to fire — see the template's
+// @focus/@blur handlers below. On failure we revert the local mutation by
+// reloading the list (cheap; the table is per-user and capped at 64).
+async function updateCredentialLabel(cr: { id: string; label: string }, newLabel: string) {
+  const trimmed = newLabel.trim();
+  if (trimmed === cr.label) return;            // no-op — user pressed blur with no change
+  if (trimmed.length > 200) {
+    showToast(t("settings.clients.labelTooLong"), "error");
+    // Reload to snap the oversized input back to the persisted value — the
+    // server would have rejected this anyway (400 Label too long), so we
+    // skip the round-trip and just resync from D1.
+    await loadCredentials();
+    return;
+  }
+  try {
+    const xml = await edgesonicPost("auth/credentials/update", { id: cr.id, label: trimmed });
+    if (/status="failed"/.test(xml)) throw new Error("rejected");
+    cr.label = trimmed;
+    showToast(t("settings.clients.labelSaved"));
+  } catch {
+    showToast(t("settings.clients.loadFailed"), "error");
+    await loadCredentials();                   // resync UI to server truth
+  }
 }
 
 async function deleteCredential(id: string) {
@@ -1451,6 +1504,30 @@ onMounted(() => {
           <p class="feature-desc" style="margin: 0.4rem 0 0 0">
             {{ t("settings.common.maintenance.reclaimHint") }}
           </p>
+
+          <!-- 082 — re-queue rows stuck at status='failed'. Browser bundle
+               regressions can burn through attempts on every task; once they
+               settle at 'failed' the deterministic-id scan can't dispatch
+               them again until they're flipped back. -->
+          <div class="tc-row">
+            <span class="tc-key">{{ t("settings.common.maintenance.resetFailedTitle") }}</span>
+            <span class="feature-desc">{{ t("settings.common.maintenance.resetFailedDesc") }}</span>
+          </div>
+          <div class="tc-actions">
+            <button
+              class="btn-secondary"
+              :disabled="resetFailedBusy"
+              @click="onResetFailedWork"
+            >
+              {{ resetFailedBusy
+                ? t("settings.common.maintenance.resetFailedRunning")
+                : t("settings.common.maintenance.resetFailedButton") }}
+            </button>
+            <span v-if="resetFailedToast" class="feature-desc" style="margin-left: 0.6rem">{{ resetFailedToast }}</span>
+          </div>
+          <p class="feature-desc" style="margin: 0.4rem 0 0 0">
+            {{ t("settings.common.maintenance.resetFailedHint") }}
+          </p>
         </div>
 
         <!-- Feature flags -->
@@ -1603,7 +1680,20 @@ onMounted(() => {
           </div>
           <div v-for="cr in credentials" :key="cr.id" class="table-row">
             <span class="session-id" :title="cr.id">{{ cr.id }}</span>
-            <span class="session-ua">{{ cr.label || "—" }}</span>
+            <!-- 082 — inline label editor. blur and Enter commit; Esc reverts
+                 by reloading the list. We keep the original value in a data-
+                 attribute so the handler can detect "no change" cheaply. -->
+            <span class="session-ua">
+              <input
+                class="form-input cred-label-edit"
+                :value="cr.label"
+                :placeholder="t('settings.clients.labelEditPlaceholder')"
+                maxlength="200"
+                @keydown.enter="($event.target as HTMLInputElement).blur()"
+                @keydown.esc="loadCredentials()"
+                @blur="updateCredentialLabel(cr, ($event.target as HTMLInputElement).value)"
+              />
+            </span>
             <span class="session-time">{{ formatTs(cr.createdAt) }}</span>
             <span class="session-time">{{ cr.lastUsed ? formatTs(cr.lastUsed) : t("settings.clients.never") }}</span>
             <span><button class="btn-danger btn-sm" @click="deleteCredential(cr.id)">{{ t("common.delete") }}</button></span>
@@ -1722,6 +1812,9 @@ onMounted(() => {
 /* --- Subsonic clients --- */
 .cred-create { display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
 .cred-label-input { flex: 1; min-width: 220px; }
+/* 082 — inline label editor inside the credential table row: tight padding so
+   it doesn't push the row taller than the read-only siblings. */
+.cred-label-edit { width: 100%; padding: 0.25rem 0.4rem; font-size: 0.85rem; }
 .issued-panel {
   border: 1px solid var(--color-accent-primary);
   background: var(--color-bg-primary);

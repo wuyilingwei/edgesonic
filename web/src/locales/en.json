@@ -491,7 +491,15 @@
         "reclaimRunning": "Reclaiming…",
         "reclaimDoneToast": "Reclaimed {reclaimed}: requeued {requeued}, failed {failed}",
         "reclaimFailed": "Failed: {error}",
-        "reclaimHint": "If CF cron is configured (Cloudflare integration → schedules non-empty), this button is normally unnecessary."
+        "reclaimHint": "If CF cron is configured (Cloudflare integration → schedules non-empty), this button is normally unnecessary.",
+        "resetFailedTitle": "Reset failed work",
+        "resetFailedDesc": "Flip every work_queue row with status='failed' back to 'queued' (attempts=0, clear error / claimed_*), letting browser workers dispatch them again.",
+        "resetFailedButton": "🔁 Reset failed tasks",
+        "resetFailedRunning": "Resetting…",
+        "resetFailedDoneToast": "Reset {reset} failed task(s)",
+        "resetFailedFailed": "Failed: {error}",
+        "resetFailedHint": "Before resetting, make sure your browser workers are on the latest bundle (see the update banner at the top) so they don't immediately fail again.",
+        "resetFailedConfirm": "Re-queue every failed task? Make sure your browser workers are running the latest bundle first."
       }
     },
     "sessions": {
@@ -550,7 +558,10 @@
       "colCreated": "Created",
       "colLastUsed": "Last used",
       "never": "never",
-      "loadFailed": "Failed to load credentials"
+      "loadFailed": "Failed to load credentials",
+      "labelEditPlaceholder": "Click to edit label",
+      "labelSaved": "Label updated",
+      "labelTooLong": "Label must be 200 chars or fewer"
     }
   },
   "sources": {
