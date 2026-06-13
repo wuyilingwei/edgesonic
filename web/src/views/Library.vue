@@ -398,6 +398,116 @@ async function copyShareUrl() {
   if (!shareCreatedUrl.value) return;
   try { await navigator.clipboard.writeText(shareCreatedUrl.value); } catch { /* silent */ }
 }
+
+// ============================================================================
+// 069 — Add-to-Playlist affordance.
+//
+// Per-song button sits to the left of the 061 share-btn (also absolute, so the
+// existing --grid-cols template is untouched). Clicking opens a small modal
+// listing the caller's playlists; picking one calls updatePlaylist with
+// songIdToAdd. A "Create new playlist..." sentinel option creates the playlist
+// on the fly (createPlaylist with the seed song), avoiding a forced detour
+// through /playlists for first-time users.
+// ============================================================================
+interface AddPlaylistRow {
+  id: string;
+  name: string;
+  songCount: string;
+}
+const addPlaylistOpen = ref(false);
+const addPlaylistTarget = ref<{ id: string; title: string } | null>(null);
+const addPlaylistList = ref<AddPlaylistRow[]>([]);
+const addPlaylistLoading = ref(false);
+const addPlaylistBusy = ref(false);
+const addPlaylistMessage = ref("");
+const addPlaylistError = ref("");
+const addPlaylistCreating = ref(false);
+const addPlaylistNewName = ref("");
+
+async function openAddToPlaylist(songId: string, title: string) {
+  addPlaylistTarget.value = { id: songId, title };
+  addPlaylistOpen.value = true;
+  addPlaylistMessage.value = "";
+  addPlaylistError.value = "";
+  addPlaylistCreating.value = false;
+  addPlaylistNewName.value = "";
+  addPlaylistLoading.value = true;
+  try {
+    const xml = await authFetch("getPlaylists");
+    addPlaylistList.value = parseXmlAttrs(xml, "playlist").map((p) => ({
+      id: p.id || "",
+      name: p.name || "",
+      songCount: p.songCount || "0",
+    }));
+  } catch {
+    addPlaylistList.value = [];
+  } finally {
+    addPlaylistLoading.value = false;
+  }
+}
+function closeAddToPlaylist() {
+  addPlaylistOpen.value = false;
+  addPlaylistTarget.value = null;
+  addPlaylistMessage.value = "";
+  addPlaylistError.value = "";
+  addPlaylistCreating.value = false;
+}
+async function addSongToPlaylist(playlistId: string) {
+  if (!addPlaylistTarget.value) return;
+  addPlaylistBusy.value = true;
+  addPlaylistError.value = "";
+  addPlaylistMessage.value = "";
+  try {
+    const xml = await authFetch("updatePlaylist", {
+      playlistId,
+      songIdToAdd: addPlaylistTarget.value.id,
+    });
+    if (/status="failed"/.test(xml)) {
+      const m = /<error[^>]+message="([^"]+)"/.exec(xml);
+      throw new Error(m?.[1] || "add failed");
+    }
+    addPlaylistMessage.value = t("library.addedToPlaylist");
+    // Brief delay so the user sees the confirmation, then auto-close.
+    setTimeout(() => { if (addPlaylistOpen.value) closeAddToPlaylist(); }, 900);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    addPlaylistError.value = `${t("library.addToPlaylistFailed")}: ${msg}`;
+  } finally {
+    addPlaylistBusy.value = false;
+  }
+}
+function beginCreateNew() {
+  addPlaylistCreating.value = true;
+  addPlaylistNewName.value = "";
+  addPlaylistError.value = "";
+}
+async function submitCreateAndAdd() {
+  if (!addPlaylistTarget.value) return;
+  const name = addPlaylistNewName.value.trim();
+  if (!name) {
+    addPlaylistError.value = t("library.addToPlaylistFailed");
+    return;
+  }
+  addPlaylistBusy.value = true;
+  addPlaylistError.value = "";
+  try {
+    const xml = await authFetch("createPlaylist", {
+      name,
+      songId: addPlaylistTarget.value.id,
+    });
+    if (/status="failed"/.test(xml)) {
+      const m = /<error[^>]+message="([^"]+)"/.exec(xml);
+      throw new Error(m?.[1] || "create failed");
+    }
+    addPlaylistMessage.value = t("library.addedToPlaylist");
+    setTimeout(() => { if (addPlaylistOpen.value) closeAddToPlaylist(); }, 900);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    addPlaylistError.value = `${t("library.addToPlaylistFailed")}: ${msg}`;
+  } finally {
+    addPlaylistBusy.value = false;
+  }
+}
 </script>
 
 <template>
@@ -444,6 +554,8 @@ async function copyShareUrl() {
         <button v-if="isAdmin" class="edit-btn" :title="t('library.editSong')" @click.stop="openEditor(s)">✎</button>
         <!-- 061: per-song share, absolute-positioned so we don't touch grid-cols. -->
         <button class="share-btn" :title="t('library.share')" @click.stop="openShare('song', s.id, s.title)">⤴</button>
+        <!-- 069: per-song add-to-playlist, also absolute (right: 3.6rem leaves room for share-btn). -->
+        <button class="add-playlist-btn" :title="t('library.addToPlaylist')" @click.stop="openAddToPlaylist(s.id, s.title)">＋</button>
       </div>
       <div v-if="loading" class="empty-state">{{ t("common.loading") }}</div>
       <div v-else-if="!songs.length" class="empty-state">{{ t("library.noTracks") }}</div>
@@ -557,6 +669,8 @@ async function copyShareUrl() {
           <button v-if="isAdmin" class="edit-btn" :title="t('library.editSong')" @click.stop="openEditor(s)">✎</button>
           <!-- 061: per-song share. -->
           <button class="share-btn" :title="t('library.share')" @click.stop="openShare('song', s.id, s.title)">⤴</button>
+          <!-- 069: per-song add-to-playlist. -->
+          <button class="add-playlist-btn" :title="t('library.addToPlaylist')" @click.stop="openAddToPlaylist(s.id, s.title)">＋</button>
         </div>
         <div v-if="!allSongs.length && !loading" class="empty-state">{{ t("library.noTracks") }}</div>
       </div>
@@ -624,6 +738,58 @@ async function copyShareUrl() {
           <button v-if="!shareCreatedUrl" class="btn-primary" :disabled="shareBusy" @click="submitShare">
             {{ shareBusy ? t("common.loading") : t("shares.save") }}
           </button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
+      </div>
+    </div>
+
+    <!-- 069: Add-to-playlist modal. Singleton at root, mirrors the share-modal
+         pattern — opens on the per-song [＋] button. Lists existing playlists
+         and exposes a "create new" sentinel that round-trips through
+         createPlaylist with the seed song. -->
+    <div v-if="addPlaylistOpen" class="modal-backdrop" @click.self="closeAddToPlaylist">
+      <div class="modal add-playlist-modal">
+        <div class="modal-title">{{ t("library.addToPlaylist") }} — {{ addPlaylistTarget?.title }}</div>
+
+        <div v-if="addPlaylistLoading" class="empty-state" style="padding: 1rem">
+          {{ t("common.loading") }}
+        </div>
+
+        <div v-else-if="addPlaylistCreating" class="form-group" style="margin-top: 0.6rem">
+          <label class="form-label">{{ t("playlists.name") }}</label>
+          <input v-model="addPlaylistNewName" class="form-input" autofocus :placeholder="t('playlists.namePlaceholder')" />
+        </div>
+
+        <template v-else>
+          <div v-if="!addPlaylistList.length" class="empty-state" style="padding: 1rem">
+            {{ t("library.noPlaylists") }}
+          </div>
+          <div v-else class="add-playlist-list">
+            <div
+              v-for="p in addPlaylistList"
+              :key="p.id"
+              class="add-playlist-row"
+              @click="addSongToPlaylist(p.id)"
+            >
+              <span class="add-playlist-name">{{ p.name }}</span>
+              <span class="mono-label">{{ p.songCount }} ♪</span>
+            </div>
+          </div>
+          <button class="create-new-row" @click="beginCreateNew">{{ t("library.createNewPlaylist") }}</button>
+        </template>
+
+        <div v-if="addPlaylistMessage" class="status-badge info" style="margin-top: 0.6rem">{{ addPlaylistMessage }}</div>
+        <div v-if="addPlaylistError" class="status-badge error" style="margin-top: 0.6rem">{{ addPlaylistError }}</div>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeAddToPlaylist">{{ t("playlists.cancel") }}</button>
+          <button
+            v-if="addPlaylistCreating"
+            class="btn-primary"
+            :disabled="addPlaylistBusy"
+            @click="submitCreateAndAdd"
+          >{{ addPlaylistBusy ? t("common.loading") : t("playlists.save") }}</button>
         </div>
         <div class="corner corner-tl"></div>
         <div class="corner corner-br"></div>
@@ -826,5 +992,66 @@ async function copyShareUrl() {
   font-size: var(--fs-xs);
   color: var(--color-text-muted);
   letter-spacing: 0.05em;
+}
+
+/* === 069: Add-to-Playlist affordances ===
+   add-playlist-btn (per-song): absolute-positioned to the LEFT of share-btn
+   so they don't collide. share-btn lives at right: 0.4rem; this one sits at
+   right: 3.6rem. When an edit-btn is also visible the share-btn floats over
+   to right: 1.8rem (see existing rule) so we push this one further to
+   right: 4.8rem to keep the gap consistent. */
+.add-playlist-btn {
+  position: absolute;
+  right: 3.6rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none; border: none; cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: var(--fs-md);
+  padding: 0 0.25rem;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.song-row:hover .add-playlist-btn { opacity: 1; }
+.add-playlist-btn:hover { color: var(--color-accent-primary); }
+.song-row .edit-btn ~ .add-playlist-btn { right: 4.8rem; }
+
+.add-playlist-modal { max-width: 480px; }
+.add-playlist-list {
+  max-height: 320px; overflow-y: auto;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-secondary);
+}
+.add-playlist-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.add-playlist-row:last-child { border-bottom: none; }
+.add-playlist-row:hover { background: var(--color-bg-tertiary); }
+.add-playlist-name {
+  color: var(--color-text-primary); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.create-new-row {
+  display: block; width: 100%;
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.7rem;
+  background: none;
+  border: 1px dashed var(--color-border-subtle);
+  color: var(--color-accent-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.05em;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.create-new-row:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent-primary);
 }
 </style>
