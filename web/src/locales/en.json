@@ -90,7 +90,35 @@
     "fieldTrack": "Track #",
     "editHint": "Changes update the library immediately and are written back into mp3/flac files on R2 and WebDAV sources.",
     "editSaved": "Saved. Tags written to {written}/{total} file(s).",
-    "editFailed": "Save failed"
+    "editFailed": "Save failed",
+    "select": "Select",
+    "selected": "{n} selected",
+    "clearSelection": "Clear selection",
+    "batchEdit": "Batch Edit",
+    "batchTooMany": "Batch is capped at 50 tracks"
+  },
+  "tagEditor": {
+    "singleTitle": "Edit Track Info",
+    "batchTitle": "Batch Edit · {n} tracks",
+    "fieldTitle": "Title",
+    "fieldArtist": "Artist",
+    "fieldAlbum": "Album",
+    "fieldAlbumArtist": "Album Artist",
+    "fieldGenre": "Genre",
+    "fieldYear": "Year",
+    "fieldTrack": "Track",
+    "fieldDisc": "Disc",
+    "fieldComment": "Comment",
+    "fieldLyrics": "Lyrics",
+    "uiOnly": "ui-only",
+    "applyField": "Tick to overwrite this field",
+    "applyBatch": "Apply {n} field(s)",
+    "hintSingle": "Changes update the library immediately and are written back into mp3/flac files on R2 and WebDAV sources.",
+    "hintBatch": "Only ticked fields are written; un-ticked fields stay as they are.",
+    "batchHint": "Tick the ☐ on the left to apply that field to every selected track.",
+    "coverPlaceholder": "Cover write-back will land in a later task",
+    "batchSaved": "Batch saved: {succeeded} ok / {failed} failed",
+    "batchFailed": "Batch save failed"
   },
   "files": {
     "label": "// MANAGEMENT",
@@ -126,7 +154,10 @@
     "moved": "File moved",
     "copied": "File copied",
     "deleted": "File deleted",
-    "opFailed": "Operation failed"
+    "opFailed": "Operation failed",
+    "editTags": "Edit Tags",
+    "editLookupFailed": "Not yet in the library — run READ TAGS first",
+    "editLookupAmbiguous": "Found {n} matches, picked the first"
   },
   "users": {
     "label": "// MANAGEMENT",

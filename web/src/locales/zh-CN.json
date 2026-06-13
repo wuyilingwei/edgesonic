@@ -90,7 +90,35 @@
     "fieldTrack": "音轨号",
     "editHint": "修改会立即更新媒体库，并尽可能写回 R2 / WebDAV 上的 mp3、flac 文件。",
     "editSaved": "已保存，标签写回 {written}/{total} 个文件。",
-    "editFailed": "保存失败"
+    "editFailed": "保存失败",
+    "select": "选择",
+    "selected": "已选 {n} 首",
+    "clearSelection": "清除选择",
+    "batchEdit": "批量编辑",
+    "batchTooMany": "批量编辑上限 50 首"
+  },
+  "tagEditor": {
+    "singleTitle": "编辑歌曲信息",
+    "batchTitle": "批量编辑 · {n} 首",
+    "fieldTitle": "标题",
+    "fieldArtist": "歌手",
+    "fieldAlbum": "专辑",
+    "fieldAlbumArtist": "专辑歌手",
+    "fieldGenre": "流派",
+    "fieldYear": "年份",
+    "fieldTrack": "音轨号",
+    "fieldDisc": "碟号",
+    "fieldComment": "备注",
+    "fieldLyrics": "歌词",
+    "uiOnly": "暂不写回",
+    "applyField": "勾选后此字段会被覆盖",
+    "applyBatch": "应用 {n} 个字段",
+    "hintSingle": "修改会立即更新媒体库，并尽可能写回 R2 / WebDAV 上的 mp3、flac 文件。",
+    "hintBatch": "仅勾选的字段会被写入所选歌曲，未勾选字段保持原值。",
+    "batchHint": "勾选左侧 ☐ 后该字段会应用到所有选中歌曲。",
+    "coverPlaceholder": "封面写回将在后续版本支持",
+    "batchSaved": "批量保存：{succeeded} 成功 / {failed} 失败",
+    "batchFailed": "批量保存失败"
   },
   "files": {
     "label": "// 管理",
@@ -126,7 +154,10 @@
     "moved": "文件已移动",
     "copied": "文件已复制",
     "deleted": "文件已删除",
-    "opFailed": "操作失败"
+    "opFailed": "操作失败",
+    "editTags": "编辑标签",
+    "editLookupFailed": "未在媒体库中找到匹配条目，请先「读取标签」扫描",
+    "editLookupAmbiguous": "找到 {n} 条匹配，自动选第一条"
   },
   "users": {
     "label": "// 管理",

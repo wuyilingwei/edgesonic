@@ -2,9 +2,10 @@
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatSize } from "../api";
+import TagEditor from "../components/TagEditor.vue";
 
 const { t } = useI18n();
-const { authFetch, authPost, uploadFile, level } = useAuth();
+const { authFetch, authPost, uploadFile, writeTags, level } = useAuth();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
 interface DirEntry { name: string; }
@@ -229,6 +230,73 @@ async function deleteFile(f: FileEntry) {
   finally { opBusy.value = false; }
 }
 
+// ── Tag editor (single mode only — batch lives in Library) ─────────────────
+const editorOpen = ref(false);
+const editTargetId = ref<string | null>(null);
+const editInitial = ref<Record<string, string | number>>({});
+const editBusy = ref(false);
+const editMsg = ref("");
+const editErr = ref(false);
+
+const canEditTags = computed(() => level.value >= 2);
+const isAudio = (name: string) => /\.(mp3|flac|wav|ogg|opus|m4a|aac)$/i.test(name);
+
+async function openTagEditor(f: FileEntry) {
+  // Worker writeTags wants a song master_id; resolve it via search3 on the
+  // filename stem. If unique → open editor; if 0 hits → toast asks user to scan.
+  const stem = f.name.replace(/\.[^.]+$/, "");
+  try {
+    const xml = await authFetch("search3", { query: stem, songCount: "20", artistCount: "0", albumCount: "0" });
+    const songs = parseXmlAttrs(xml, "song");
+    if (!songs.length) {
+      showToast(t("files.editLookupFailed"), "error");
+      return;
+    }
+    // Best-effort match: prefer the entry whose title equals the stem.
+    const hit = songs.find((s) => (s.title || "").toLowerCase() === stem.toLowerCase()) || songs[0];
+    if (songs.length > 1) showToast(t("files.editLookupAmbiguous", { n: songs.length }), "success");
+    editTargetId.value = hit.id || null;
+    editInitial.value = {
+      title: hit.title || "",
+      artist: hit.artist || "",
+      album: hit.album || "",
+      albumArtist: hit.albumArtist || "",
+      genre: hit.genre || "",
+      year: hit.year || "",
+      track: hit.track || "",
+      disc: hit.discNumber || "",
+    };
+    editMsg.value = ""; editErr.value = false;
+    editorOpen.value = true;
+  } catch {
+    showToast(t("files.editLookupFailed"), "error");
+  }
+}
+
+function closeTagEditor() { editorOpen.value = false; }
+
+async function onTagEditorSubmit(patch: Record<string, string | number>) {
+  if (!editTargetId.value || !Object.keys(patch).length) return;
+  editBusy.value = true; editMsg.value = ""; editErr.value = false;
+  try {
+    const res = await writeTags(editTargetId.value, patch);
+    if (!res.ok) {
+      editErr.value = true;
+      editMsg.value = res.error || t("library.editFailed");
+    } else {
+      const files = res.files || [];
+      const written = files.filter((x) => x.written).length;
+      editMsg.value = t("library.editSaved", { written, total: files.length });
+      // brief delay so the user reads it, then close
+      setTimeout(() => { editorOpen.value = false; }, 1200);
+    }
+  } catch {
+    editErr.value = true;
+    editMsg.value = t("library.editFailed");
+  }
+  editBusy.value = false;
+}
+
 onMounted(async () => {
   await loadSources();
   loadDir();
@@ -311,6 +379,13 @@ onMounted(async () => {
             <template v-else>
               <span class="entry-name">{{ f.name }}</span>
               <span class="entry-size">{{ formatSize(f.size) }}</span>
+              <!-- Tag edit (audio + edit perm) — works on R2 & WebDAV; resolves master_id via search3 -->
+              <button
+                v-if="canEditTags && isAudio(f.name)"
+                class="op-btn op-edit-tag"
+                :title="t('files.editTags')"
+                @click.stop="openTagEditor(f)"
+              >♪</button>
               <!-- R2-only operations -->
               <template v-if="isR2 && canUpload">
                 <button class="op-btn op-rename" :title="t('files.rename')" @click.stop="startRename(f)">✎</button>
@@ -344,6 +419,19 @@ onMounted(async () => {
         <div class="corner corner-br"></div>
       </div>
     </div>
+
+    <!-- Tag editor (single mode — batch lives in Library) -->
+    <TagEditor
+      :open="editorOpen"
+      mode="single"
+      :song-ids="editTargetId ? [editTargetId] : []"
+      :initial-tags="editInitial"
+      :busy="editBusy"
+      :message="editMsg"
+      :error="editErr"
+      @submit="onTagEditorSubmit"
+      @close="closeTagEditor"
+    />
 
     <div v-if="toast.show" :class="['toast', `toast-${toast.type}`]">{{ toast.msg }}</div>
   </div>
