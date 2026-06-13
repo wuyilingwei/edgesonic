@@ -19,8 +19,8 @@
 //   * indexBasedQueue  — no client implementation yet
 
 import { Hono } from "hono";
-import { subsonicOK } from "../utils/xml";
-import type { User } from "../types/entities";
+import { subsonicOK } from "../../utils/xml";
+import type { User } from "../../types/entities";
 
 export const openSubsonicRoutes = new Hono<{
   Bindings: Env;
@@ -58,10 +58,10 @@ const extensionsHandler = (c: import("hono").Context) => {
   );
 };
 
-openSubsonicRoutes.get("/rest/getOpenSubsonicExtensions", extensionsHandler);
-openSubsonicRoutes.get("/rest/getOpenSubsonicExtensions.view", extensionsHandler);
-openSubsonicRoutes.post("/rest/getOpenSubsonicExtensions", extensionsHandler);
-openSubsonicRoutes.post("/rest/getOpenSubsonicExtensions.view", extensionsHandler);
+openSubsonicRoutes.get("/getOpenSubsonicExtensions", extensionsHandler);
+openSubsonicRoutes.get("/getOpenSubsonicExtensions.view", extensionsHandler);
+openSubsonicRoutes.post("/getOpenSubsonicExtensions", extensionsHandler);
+openSubsonicRoutes.post("/getOpenSubsonicExtensions.view", extensionsHandler);
 
 // ---------------------------------------------------------------------------
 // tokenInfo
@@ -99,7 +99,7 @@ const tokenInfoHandler = async (c: import("hono").Context) => {
   );
 };
 
-openSubsonicRoutes.get("/rest/tokenInfo", tokenInfoHandler);
-openSubsonicRoutes.get("/rest/tokenInfo.view", tokenInfoHandler);
-openSubsonicRoutes.post("/rest/tokenInfo", tokenInfoHandler);
-openSubsonicRoutes.post("/rest/tokenInfo.view", tokenInfoHandler);
+openSubsonicRoutes.get("/tokenInfo", tokenInfoHandler);
+openSubsonicRoutes.get("/tokenInfo.view", tokenInfoHandler);
+openSubsonicRoutes.post("/tokenInfo", tokenInfoHandler);
+openSubsonicRoutes.post("/tokenInfo.view", tokenInfoHandler);

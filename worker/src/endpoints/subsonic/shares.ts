@@ -17,18 +17,11 @@
 // unix seconds internally to align with every other timestamp in the schema.
 
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { subsonicOK } from "../utils/xml";
-import { mapShareDetail } from "../types/subsonic";
-import { permissionMiddleware, subsonicError } from "../auth";
-import { parseStorageUri } from "../adapters/index";
-import { createR2Adapter } from "../adapters/r2";
-import { urlAdapter } from "../adapters/url";
-import { createWebDAVAdapter } from "../adapters/webdav";
-import { createSubsonicAdapter } from "../adapters/subsonic";
-import { getFeature, parseChain } from "../utils/features";
-import type { StreamResult } from "../adapters/index";
-import type { User } from "../types/entities";
+import { createQueries } from "../../db/queries";
+import { subsonicOK } from "../../utils/xml";
+import { mapShareDetail } from "../../types/subsonic";
+import { permissionMiddleware, subsonicError } from "../../auth";
+import type { User } from "../../types/entities";
 
 export const sharesRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
@@ -254,124 +247,16 @@ const deleteShareHandler = async (c: import("hono").Context<{ Bindings: Env; Var
 };
 
 // ============================================================================
-// GET /share/:id  —  public byte stream of the first entry
-// ----------------------------------------------------------------------------
-// Bypasses authMiddleware because it sits outside /rest/* (authMiddleware is
-// bound to /rest/* in index.ts). We deliberately do NOT 302-redirect to
-// /rest/stream because that endpoint demands Subsonic credentials we cannot
-// attach on behalf of the anonymous caller. Instead we re-use the storage
-// adapters directly — the policy boundary (expiry + view counting) lives
-// inside this handler.
-//
-// Picks the best song_instance via the same heuristic as media.ts /rest/stream
-// (prefer larger bit-rate; prefer flac; prefer local). Range header is
-// honoured by the adapter chain. Transcoding is intentionally skipped — the
-// public share is meant to be "press play and listen to the original".
-// ============================================================================
-sharesRoutes.get("/share/:id", async (c) => {
-  const id = c.req.param("id");
-  const env = c.env as Env;
-  const queries = createQueries(env.DB);
-
-  const share = await queries.getShareById(id);
-  if (!share) {
-    return c.text("Share not found", 404, { "Content-Type": "text/plain; charset=UTF-8" });
-  }
-
-  // Expiry check (unix seconds). `expires_at = NULL` means never expires.
-  const now = Math.floor(Date.now() / 1000);
-  if (share.expires_at !== null && share.expires_at < now) {
-    return c.text("Share has expired", 410, { "Content-Type": "text/plain; charset=UTF-8" });
-  }
-
-  const songs = await queries.getShareEntries(id);
-  if (songs.length === 0) {
-    return c.text("Share has no entries", 404, { "Content-Type": "text/plain; charset=UTF-8" });
-  }
-
-  // v1 — single-song streaming. The first entry wins; multi-song shares act
-  // as a playlist where extra entries are visible via getShares but only the
-  // first is reachable through the public link. Clients with EdgeSonic
-  // credentials can hit /rest/stream for the rest.
-  const first = songs[0];
-  const instances = await queries.getSongInstances(first.id);
-  if (instances.length === 0) {
-    return c.text("Shared song has no playable source", 404, { "Content-Type": "text/plain; charset=UTF-8" });
-  }
-
-  // Same preference order as /rest/stream — prefer flac, then highest
-  // bitrate, then local source.
-  let selected = instances[0];
-  for (const inst of instances) {
-    if (inst.suffix === selected.suffix && (inst.bit_rate || 0) > (selected.bit_rate || 0)) selected = inst;
-    if (inst.suffix === "flac" && selected.suffix !== "flac") selected = inst;
-    if (inst.source_id === "local" && selected.source_id !== "local") selected = inst;
-  }
-
-  // Increment view count before opening the stream so partial reads still
-  // get audited. The +1 is best-effort (we don't await its outcome to gate
-  // the response); failure to log a view should never break playback.
-  c.executionCtx?.waitUntil?.(queries.incrementShareView(id));
-
-  const parsed = parseStorageUri(selected.storage_uri);
-  const range = c.req.header("Range") || undefined;
-  let result: StreamResult;
-
-  switch (parsed.scheme) {
-    case "r2":
-      result = await createR2Adapter(env.MUSIC_BUCKET).stream(selected.storage_uri, range);
-      break;
-    case "url":
-      result = await urlAdapter.stream(selected.storage_uri, range);
-      break;
-    case "webdav":
-      result = await createWebDAVAdapter(env.DB).stream(selected.storage_uri, range);
-      break;
-    case "subsonic": {
-      if (!(await getFeature(env, "enable_subsonic_upstream"))) {
-        return c.text("Subsonic upstream sources are disabled", 403, { "Content-Type": "text/plain; charset=UTF-8" });
-      }
-      // Public route still carries an esChain so an upstream EdgeSonic can
-      // detect loops; the chain is whatever the client provided (typically
-      // empty for browser visits).
-      const incomingChain = parseChain(c.req.query("esChain") || c.req.header("X-EdgeSonic-Chain"));
-      result = await createSubsonicAdapter(env.DB, {
-        instanceId: env.INSTANCE_ID,
-        incomingChain,
-      }).stream(selected.storage_uri, range);
-      break;
-    }
-    default:
-      return c.text("Unsupported storage scheme", 500, { "Content-Type": "text/plain; charset=UTF-8" });
-  }
-
-  if (!result.body || result.statusCode >= 400) {
-    return c.body(null, result.statusCode as never);
-  }
-
-  const headers = new Headers();
-  headers.set("Content-Type", result.contentType);
-  if (result.contentLength) headers.set("Content-Length", String(result.contentLength));
-  if (result.acceptRanges) headers.set("Accept-Ranges", "bytes");
-  if (result.contentRange) headers.set("Content-Range", result.contentRange);
-  // Tag the response so middleboxes (and the verify pass in 048) can identify
-  // share-served traffic vs the authenticated /rest/stream pathway.
-  headers.set("X-EdgeSonic-Share", id);
-
-  return new Response(result.body, { status: result.statusCode, headers });
-});
-
-// ============================================================================
-// Route registration. Each handler is bound to both `/rest/<name>` and the
-// `.view` legacy suffix × {GET, POST}. The public /share/:id is registered
-// directly above and not exposed through `register`.
+// Route registration. Each handler is bound to both `/<name>` and the
+// `.view` legacy suffix × {GET, POST}. The public /share/:id was extracted to
+// endpoints/share_public.ts during the 055 refactor.
 // ============================================================================
 function register(
   path: string,
   middleware: ReturnType<typeof permissionMiddleware> | null,
   handler: (c: import("hono").Context<{ Bindings: Env; Variables: { user: User } }>) => Promise<Response>,
 ) {
-  const paths = [`/rest/${path}`, `/rest/${path}.view`];
+  const paths = [`/${path}`, `/${path}.view`];
   for (const p of paths) {
     if (middleware) {
       sharesRoutes.get(p, middleware, handler);

@@ -16,10 +16,10 @@
 //   3. Otherwise return the empty shell.
 
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { fetchExternalLyric } from "../utils/lyricfetch";
-import { subsonicOK } from "../utils/xml";
-import { subsonicError } from "../auth";
+import { createQueries } from "../../db/queries";
+import { fetchExternalLyric } from "../../utils/lyricfetch";
+import { subsonicOK } from "../../utils/xml";
+import { subsonicError } from "../../auth";
 
 export const lyricsRoutes = new Hono();
 
@@ -54,7 +54,7 @@ async function resolveLyrics(
 // ---------------------------------------------------------------------------
 // GET /rest/getLyrics?artist=<a>&title=<t>
 // ---------------------------------------------------------------------------
-lyricsRoutes.get("/rest/getLyrics", async (c) => {
+lyricsRoutes.get("/getLyrics", async (c) => {
   const env = c.env as Env;
   const artist = c.req.query("artist") || "";
   const title = c.req.query("title") || "";
@@ -129,7 +129,7 @@ lyricsRoutes.get("/rest/getLyrics", async (c) => {
 // ---------------------------------------------------------------------------
 // GET /rest/getLyricsBySongId?id=<songMasterId>  (OpenSubsonic songLyrics)
 // ---------------------------------------------------------------------------
-lyricsRoutes.get("/rest/getLyricsBySongId", async (c) => {
+lyricsRoutes.get("/getLyricsBySongId", async (c) => {
   const id = c.req.query("id");
   if (!id) {
     return c.text(

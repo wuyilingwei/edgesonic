@@ -14,8 +14,8 @@
 // ============================================================================
 
 import { Hono } from "hono";
-import { permissionMiddleware } from "../auth";
-import { md5 } from "../utils/md5";
+import { permissionMiddleware } from "../../auth";
+import { md5 } from "../../utils/md5";
 
 export const metadataRoutes = new Hono();
 
@@ -47,7 +47,7 @@ export interface SubmittedMetadata {
 // minimal lookup (exact match on storage_uri) instead of teaching the front-
 // end to learn the master→instance relationship through Subsonic browsing.
 // ============================================================================
-metadataRoutes.get("/rest/findInstanceByUri", permissionMiddleware("manage_sources"), async (c) => {
+metadataRoutes.get("/findInstanceByUri", permissionMiddleware("manage_sources"), async (c) => {
   const env = c.env as Env;
   const uri = c.req.query("uri");
   if (!uri) return c.json({ ok: false, error: "Missing uri" }, 400);
@@ -64,7 +64,7 @@ metadataRoutes.get("/rest/findInstanceByUri", permissionMiddleware("manage_sourc
   });
 });
 
-metadataRoutes.post("/rest/submitMetadata", permissionMiddleware("edit_tags"), async (c) => {
+metadataRoutes.post("/submit", permissionMiddleware("edit_tags"), async (c) => {
   const env = c.env as Env;
   const db = env.DB;
 

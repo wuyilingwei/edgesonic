@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 
 const { t } = useI18n();
-const { isAdmin, authFetch, authPost } = useAuth();
+const { isAdmin, storageFetch, storagePost } = useAuth();
 
 interface Source { id: string; type: string; name: string; base_url: string; username: string; rootPath: string; enabled: boolean; lastSync: string; }
 
@@ -35,7 +35,7 @@ async function saveEdit() {
   if (editForm.value.root_path !== s.rootPath) body.root_path = editForm.value.root_path;
   if (editForm.value.enabled !== s.enabled) body.enabled = editForm.value.enabled ? 1 : 0;
   try {
-    const xml = await authPost("updateStorageSource", body);
+    const xml = await storagePost("sources/update", body);
     if (/status="failed"/.test(xml)) throw new Error("update failed");
     closeEdit(); load(); showToast(t("sources.updated"));
   } catch { showToast(t("sources.updateFailed"), "error"); }
@@ -43,7 +43,7 @@ async function saveEdit() {
 
 async function load() {
   try {
-    const xml = await authFetch("getStorageSources");
+    const xml = await storageFetch("sources/list");
     sources.value = parseXmlAttrs(xml, "source").map((s) => ({
       id: s.id || "", type: s.type || "", name: s.name || "",
       base_url: s.baseUrl || "", username: s.username || "", rootPath: s.rootPath || "",
@@ -54,13 +54,13 @@ async function load() {
 }
 
 async function addSource() {
-  try { await authPost("addStorageSource", form.value); showForm.value = false; load(); showToast(t("sources.added")); }
+  try { await storagePost("sources/add", form.value); showForm.value = false; load(); showToast(t("sources.added")); }
   catch { showToast(t("sources.addFailed"), "error"); }
 }
 
 async function deleteSource(id: string) {
   if (!confirm(t("sources.deleteConfirm"))) return;
-  try { await authPost("deleteStorageSource", { id }); load(); showToast(t("sources.deleted")); }
+  try { await storagePost("sources/delete", { id }); load(); showToast(t("sources.deleted")); }
   catch { showToast(t("sources.deleteFailed"), "error"); }
 }
 
@@ -69,7 +69,7 @@ const scanning = ref<string | null>(null);
 async function scanSource(s: Source) {
   scanning.value = s.id;
   try {
-    const xml = await authFetch("startScan", { id: s.id });
+    const xml = await storageFetch("scan/start", { id: s.id });
     const res = parseXmlAttrs(xml, "source")[0];
     if (!res || res.error) throw new Error(res?.error || "scan failed");
     showToast(t("sources.scanDone", { found: res.found || "0", added: res.added || "0" }));

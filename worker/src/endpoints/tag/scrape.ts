@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { User } from "../types/entities";
+import type { User } from "../../types/entities";
 
 // ============================================================================
 // Task 040 — Metadata Scrape endpoints (proxy + audit + history).
@@ -69,7 +69,7 @@ interface SubmitBody {
 // POST /rest/scrapeMetadata
 // Body: { source, query | songId, intent? }
 // ---------------------------------------------------------------------------
-scrapeRoutes.post("/rest/scrapeMetadata", async (c) => {
+scrapeRoutes.post("/scrape", async (c) => {
   const user = c.get("user");
   if (!user) return c.json({ ok: false, error: "Auth required" }, 401);
 
@@ -103,7 +103,7 @@ scrapeRoutes.post("/rest/scrapeMetadata", async (c) => {
 // Body: { songMasterId?, source, songId?, query?, result, mode }
 // Always inserts; status='applied' on success path, 'failed' if we caught.
 // ---------------------------------------------------------------------------
-scrapeRoutes.post("/rest/submitScrapeResult", async (c) => {
+scrapeRoutes.post("/submitScrape", async (c) => {
   const user = c.get("user");
   if (!user) return c.json({ ok: false, error: "Auth required" }, 401);
 
@@ -171,7 +171,7 @@ scrapeRoutes.post("/rest/submitScrapeResult", async (c) => {
 // GET /rest/getScrapeHistory
 // Query: ?limit=30&offset=0&songMasterId=…(optional filter)
 // ---------------------------------------------------------------------------
-scrapeRoutes.get("/rest/getScrapeHistory", async (c) => {
+scrapeRoutes.get("/scrapeHistory", async (c) => {
   const user = c.get("user");
   if (!user) return c.json({ ok: false, error: "Auth required" }, 401);
 

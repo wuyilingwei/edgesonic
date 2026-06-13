@@ -1,6 +1,11 @@
 import { ref, computed } from "vue";
 
-const API_BASE = "/rest";
+// 055 — API surface split into 4 buckets. /rest stays Subsonic; everything
+// management-shaped moved to /tag, /storage, /edgesonic.
+const REST_BASE = "/rest";
+const TAG_BASE = "/tag";
+const STORAGE_BASE = "/storage";
+const EDGESONIC_BASE = "/edgesonic";
 
 export function md5(input: string): string {
   const bytes = new TextEncoder().encode(input);
@@ -58,8 +63,9 @@ export function useAuth() {
   }
 
   async function login(u: string, p: string): Promise<LoginResult> {
-    // Web login: POST master_password → get session token
-    const resp = await fetch(`${API_BASE}/loginWeb`, {
+    // Web login: POST master_password → get session token (055 — moved to
+    // /edgesonic/auth/login during the API four-bucket refactor).
+    const resp = await fetch(`${EDGESONIC_BASE}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: u, password: p }),
@@ -95,7 +101,7 @@ export function useAuth() {
 
   /** Build a fully signed /rest URL (for <audio src>, <img src>, download links…). */
   function restUrl(path: string, params?: Record<string, string>): string {
-    return `${API_BASE}/${path}?${signedParams(params).toString()}`;
+    return `${REST_BASE}/${path}?${signedParams(params).toString()}`;
   }
 
   function streamUrl(songId: string): string {
@@ -106,19 +112,42 @@ export function useAuth() {
     return restUrl("getCoverArt", { id: coverId, ...(size ? { size: String(size) } : {}) });
   }
 
+  // -------- Subsonic protocol (/rest/*) --------
   async function authFetch(path: string, params?: Record<string, string>): Promise<string> {
-    const resp = await fetch(`${API_BASE}/${path}?${signedParams(params).toString()}`);
+    const resp = await fetch(`${REST_BASE}/${path}?${signedParams(params).toString()}`);
     return resp.text();
   }
 
   async function authPost(path: string, body: unknown): Promise<string> {
-    const resp = await fetch(`${API_BASE}/${path}?${signedParams().toString()}`, {
+    const resp = await fetch(`${REST_BASE}/${path}?${signedParams().toString()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
     return resp.text();
   }
+
+  // 055 — Bucket-aware helpers. Same signature as authFetch/authPost so the
+  // call sites only need to swap function names + paths.
+  async function fetchAt(base: string, path: string, params?: Record<string, string>): Promise<string> {
+    const resp = await fetch(`${base}/${path}?${signedParams(params).toString()}`);
+    return resp.text();
+  }
+  async function postAt(base: string, path: string, body: unknown): Promise<string> {
+    const resp = await fetch(`${base}/${path}?${signedParams().toString()}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return resp.text();
+  }
+
+  const tagFetch = (path: string, params?: Record<string, string>) => fetchAt(TAG_BASE, path, params);
+  const tagPost = (path: string, body: unknown) => postAt(TAG_BASE, path, body);
+  const storageFetch = (path: string, params?: Record<string, string>) => fetchAt(STORAGE_BASE, path, params);
+  const storagePost = (path: string, body: unknown) => postAt(STORAGE_BASE, path, body);
+  const edgesonicFetch = (path: string, params?: Record<string, string>) => fetchAt(EDGESONIC_BASE, path, params);
+  const edgesonicPost = (path: string, body: unknown) => postAt(EDGESONIC_BASE, path, body);
 
   // === Tag edit helpers (task 039) — thin sugar over authFetch/authPost ===
   // readTags returns the latest known song row (used by editors to prefill).
@@ -144,7 +173,7 @@ export function useAuth() {
   ): Promise<WriteTagsResult> {
     const body: Record<string, unknown> = { id, tags };
     if (cover) { body.coverData = cover.data; body.coverMime = cover.mime; }
-    return JSON.parse(await authPost("writeTags", body));
+    return JSON.parse(await tagPost("write", body));
   }
 
   interface BatchWriteResult { ok: boolean; error?: string; succeeded?: number; failed?: number; results?: Array<{ id: string; ok: boolean; error?: string; masterId?: string }>; }
@@ -155,7 +184,7 @@ export function useAuth() {
   ): Promise<BatchWriteResult> {
     const body: Record<string, unknown> = { ids, patch };
     if (cover) { body.coverData = cover.data; body.coverMime = cover.mime; }
-    return JSON.parse(await authPost("batchWriteTags", body));
+    return JSON.parse(await tagPost("batchWrite", body));
   }
 
   // 042 — tidy folder via template; dryRun:true returns plan only.
@@ -172,14 +201,14 @@ export function useAuth() {
     template: string,
     opts?: { dryRun?: boolean; source?: "r2" | "webdav" },
   ): Promise<TidyFolderResult> {
-    return JSON.parse(await authPost("tidyFolder", { ids, template, dryRun: !!opts?.dryRun, source: opts?.source }));
+    return JSON.parse(await tagPost("tidyFolder", { ids, template, dryRun: !!opts?.dryRun, source: opts?.source }));
   }
 
   // 041 — submit browser-parsed metadata for an instance (OGG/Opus/M4A/...).
   // `tags` is an ExtractedMetadata shape from web/src/lib/metadata.ts.
   interface SubmitMetadataResult { ok: boolean; error?: string; masterId?: string; albumId?: string; artistId?: string; }
   async function submitMetadata(instanceId: string, tags: Record<string, string | number>): Promise<SubmitMetadataResult> {
-    return JSON.parse(await authPost("submitMetadata", { instanceId, tags }));
+    return JSON.parse(await tagPost("submit", { instanceId, tags }));
   }
 
   async function uploadFile(file: File, target: string, path?: string, masterId?: string): Promise<string> {
@@ -189,7 +218,8 @@ export function useAuth() {
     if (path) qs.set("path", path);
     if (masterId) qs.set("master_id", masterId);
 
-    const resp = await fetch(`${API_BASE}/files/upload?${qs.toString()}`, {
+    // 055 — moved from /rest/files/upload to /storage/files/upload
+    const resp = await fetch(`${STORAGE_BASE}/files/upload?${qs.toString()}`, {
       method: "POST",
       headers: { "Content-Type": file.type || "application/octet-stream" },
       body: file,
@@ -199,6 +229,7 @@ export function useAuth() {
 
   return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
     login, logout, authFetch, authPost, uploadFile, makeSalt, md5,
+    tagFetch, tagPost, storageFetch, storagePost, edgesonicFetch, edgesonicPost,
     readTags, writeTags, batchWriteTags, submitMetadata, tidyFolder,
     signedParams, restUrl, streamUrl, coverArtUrl };
 }

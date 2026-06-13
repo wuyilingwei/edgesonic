@@ -10,12 +10,23 @@ export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 // Path Classification
 // ============================================================================
 
+// 055 — Path classification follows the 4-tier layout
+//   /rest/*      Subsonic protocol  → existing token+salt / apikey / guestToken
+//   /tag/*       Tag management     → web session ONLY
+//   /storage/*   Storage management → web session ONLY
+//   /edgesonic/* EdgeSonic private  → web session ONLY (login path skips auth)
+// The non-rest buckets uniformly require authMethod === "session" so a leaked
+// subsonic_credentials / apiKey cannot reach management surfaces.
+
 const NO_AUTH_PATHS = new Set([
   "/rest/ping",
   "/rest/getLicense",
   "/rest/getOpenSubsonicExtensions",
   "/rest/getOpenSubsonicExtensions.view",
-  "/rest/loginWeb",
+  // 055 — login bootstraps the very session token the middleware will check
+  // for every other request, so it has to live outside the auth filter.
+  "/edgesonic/auth/login",
+  "/edgesonic/auth/logout",
 ]);
 
 const GUEST_ALLOWED_PATHS = new Set([
@@ -37,69 +48,31 @@ const GUEST_ALLOWED_PATHS = new Set([
   "/rest/getLyricsBySongId",
 ]);
 
-// Endpoints reserved for web-session credentials (authMethod === "session").
-// Capability is bound to the credential type, not the User-Agent (DESIGN.md §3.1):
-// subsonic_credentials / apiKey can stream & browse but never touch files or admin.
-const SESSION_ONLY_PATHS = new Set([
-  "/rest/getStorageSources",
-  "/rest/addStorageSource",
-  "/rest/updateStorageSource",
-  "/rest/deleteStorageSource",
-  "/rest/getUsers",
-  "/rest/createUser",
-  "/rest/updateUser",
-  "/rest/deleteUser",
-  "/rest/getUser",
-  "/rest/getPermissions",
-  "/rest/updatePermission",
-  "/rest/files/upload",
-  "/rest/files/delete",
-  "/rest/files/move",
-  "/rest/files/copy",
-  "/rest/download",
-  "/rest/getCredentials",
-  "/rest/createCredential",
-  "/rest/deleteCredential",
-  "/rest/getSessions",
-  "/rest/revokeSession",
-  "/rest/getFeatures",
-  "/rest/updateFeature",
-  "/rest/updateFeatureString",
-  "/rest/getExternalSecret",
-  "/rest/setExternalSecret",
-  "/rest/listFiles",
-  "/rest/scanTags",
-  "/rest/writeTags",
-  "/rest/batchWriteTags",
-  // 049 — transcode admin endpoints (the engine is admin-controlled)
-  "/rest/transcodeFile",
-  "/rest/getTranscodeStatus",
-  // 040 — metadata scrape (proxy + audit). The proxy fetches public APIs but
-  // uploading the audit row mutates D1 per user → session-bound.
-  "/rest/scrapeMetadata",
-  "/rest/submitScrapeResult",
-  "/rest/getScrapeHistory",
-  // 041 — browser-extracted metadata submission (writes D1, no file I/O)
-  "/rest/submitMetadata",
-  "/rest/findInstanceByUri",
-  // 042 — template-driven folder tidy (R2/WebDAV move). manage_files perm.
-  "/rest/tidyFolder",
-  // 035 — changePassword: master password rotation must use a web session
-  // credential. Leaked subsonic_credentials / apiKey cannot escalate.
+// Inside /rest/* there are still a handful of endpoints that must reject
+// non-session credentials (changePassword, share/podcast/radio CUD, download).
+// Everything else management-shaped now lives outside /rest/* so the prefix
+// check handles it implicitly.
+const REST_SESSION_ONLY_PATHS = new Set([
+  // 035 — master-password rotation
   "/rest/changePassword",
   "/rest/changePassword.view",
-  // 045 — Internet Radio CUD. Read endpoint stays open to native Subsonic
-  // clients (subsonic_credentials / apiKey) so they can list stations; only
-  // mutation is pinned to web-session credentials.
+  // download (R2/WebDAV-backed binary, large bandwidth potential)
+  "/rest/download",
+  // 044 — Sharing CUD (mints public links). getShares stays open.
+  "/rest/createShare",
+  "/rest/createShare.view",
+  "/rest/updateShare",
+  "/rest/updateShare.view",
+  "/rest/deleteShare",
+  "/rest/deleteShare.view",
+  // 045 — Internet Radio CUD
   "/rest/createInternetRadioStation",
   "/rest/createInternetRadioStation.view",
   "/rest/updateInternetRadioStation",
   "/rest/updateInternetRadioStation.view",
   "/rest/deleteInternetRadioStation",
   "/rest/deleteInternetRadioStation.view",
-  // 046 — Podcast admin endpoints. Read (getPodcasts / getNewestPodcasts /
-  // getPodcastEpisode) stays open to all auth methods; only mutation +
-  // refresh + R2 download require a web-session credential.
+  // 046 — Podcast CUD + refresh + R2 download
   "/rest/createPodcastChannel",
   "/rest/createPodcastChannel.view",
   "/rest/deletePodcastChannel",
@@ -110,16 +83,6 @@ const SESSION_ONLY_PATHS = new Set([
   "/rest/refreshPodcasts.view",
   "/rest/downloadPodcastEpisode",
   "/rest/downloadPodcastEpisode.view",
-  // 044 — Sharing CUD. getShares stays open to any authenticated user (it
-  // self-scopes to the caller's own shares); only createShare / updateShare
-  // / deleteShare require a web-session credential so leaked
-  // subsonic_credentials / apiKey can't mint share links on behalf of a user.
-  "/rest/createShare",
-  "/rest/createShare.view",
-  "/rest/updateShare",
-  "/rest/updateShare.view",
-  "/rest/deleteShare",
-  "/rest/deleteShare.view",
 ]);
 
 // ============================================================================
@@ -191,83 +154,9 @@ async function lookupUser(db: D1Database, username: string): Promise<User | null
     .first<User>();
 }
 
-// ============================================================================
-// Web Login Handler
-// ============================================================================
-export const webLoginRoutes = new Hono<{ Bindings: Env }>();
-
-webLoginRoutes.post("/rest/loginWeb", async (c) => {
-  const db = c.env.DB;
-  const kv = c.env.KV;
-
-  let body: { username?: string; password?: string };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ ok: false, error: "Invalid JSON body" }, 400);
-  }
-
-  const { username, password } = body;
-  if (!username || !password) {
-    return c.json({ ok: false, error: "Missing username or password" }, 400);
-  }
-
-  const user = await lookupUser(db, username);
-  if (!user || !user.enabled) {
-    return c.json({ ok: false, error: "Invalid credentials" }, 401);
-  }
-
-  // Verify master password (SHA-256)
-  const hash = await sha256(password);
-  if (hash !== user.password) {
-    return c.json({ ok: false, error: "Invalid credentials" }, 401);
-  }
-
-  // Create session
-  const sessionId = crypto.randomUUID();
-  const sessionToken = crypto.randomUUID().replace(/-/g, "");
-  const expiresAt = Math.floor(Date.now() / 1000) + 86400; // 24 hours
-  const userAgent = c.req.header("User-Agent") || "";
-
-  await db
-    .prepare(
-      "INSERT INTO sessions (id, username, token, user_agent, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    )
-    .bind(sessionId, username, sessionToken, userAgent, expiresAt, Math.floor(Date.now() / 1000))
-    .run();
-
-  // Cache session in KV for fast lookup
-  await kv.put(`session:${username}`, sessionToken, { expirationTtl: 86400 });
-
-  return c.json({
-    ok: true,
-    username,
-    level: user.level,
-    sessionToken,
-    expiresAt,
-  });
-});
-
-webLoginRoutes.post("/rest/logoutWeb", async (c) => {
-  const db = c.env.DB;
-  const kv = c.env.KV;
-
-  let body: { sessionToken?: string; username?: string };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ ok: false, error: "Invalid JSON" }, 400);
-  }
-
-  if (body.sessionToken) {
-    await db.prepare("DELETE FROM sessions WHERE token = ?").bind(body.sessionToken).run();
-  }
-  if (body.username) {
-    await kv.delete(`session:${body.username}`);
-  }
-
-  return c.json({ ok: true });
-});
+// 055 — webLoginRoutes moved to endpoints/edgesonic/auth.ts so the new
+// /edgesonic/auth/login path lives next to the rest of the auth-management
+// endpoints. The middleware below still has to skip the new path.
 
 // ============================================================================
 // Main Auth Middleware (Subsonic API)
@@ -374,9 +263,16 @@ export const authMiddleware = createMiddleware<{
   }
 
   // --- Session-Only Guard (credential-type gating, replaces UA sniffing) ---
-  // File R/W and admin endpoints are reserved for web-session credentials:
-  // a leaked subsonic_credential or apiKey can never escalate to file access.
-  if (SESSION_ONLY_PATHS.has(path) && authMethod !== "session") {
+  // The /tag /storage /edgesonic buckets are management-only and uniformly
+  // demand a web session credential. Inside /rest/* a handful of management-
+  // shaped endpoints (changePassword, share/podcast/radio CUD, download) still
+  // need the same protection — REST_SESSION_ONLY_PATHS lists those.
+  const needsSession =
+    path.startsWith("/tag/") ||
+    path.startsWith("/storage/") ||
+    path.startsWith("/edgesonic/") ||
+    REST_SESSION_ONLY_PATHS.has(path);
+  if (needsSession && authMethod !== "session") {
     return c.text(subsonicError(50, "This endpoint requires a web session credential"), 403, {
       "Content-Type": "application/xml; charset=UTF-8",
     });

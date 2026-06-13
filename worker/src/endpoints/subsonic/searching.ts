@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { subsonicOK } from "../utils/xml";
-import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../types/subsonic";
-import type { User, Annotation } from "../types/entities";
+import { createQueries } from "../../db/queries";
+import { subsonicOK } from "../../utils/xml";
+import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../../types/subsonic";
+import type { User, Annotation } from "../../types/entities";
 
 export const searchRoutes = new Hono<{
   Bindings: Env;
@@ -23,7 +23,7 @@ function liteOf(row: Annotation | undefined): AnnotationLite | undefined {
   };
 }
 
-searchRoutes.get("/rest/search3", async (c) => {
+searchRoutes.get("/search3", async (c) => {
   // Empty query = full listing (Navidrome-compatible) — the web Songs view relies on it
   const query = c.req.query("query") || "";
 

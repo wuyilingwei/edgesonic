@@ -14,17 +14,17 @@
 // in media.ts; this file ships only the manual entry point.
 
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { permissionMiddleware, subsonicError } from "../auth";
-import { subsonicOK } from "../utils/xml";
-import type { User } from "../types/entities";
-import type { TranscodeInput } from "../transcode/engine";
-import { getProfile } from "../transcode/profiles";
-import { buildTranscodeEngine } from "../transcode/factory";
-import { parseStorageUri } from "../adapters/index";
-import { createR2Adapter } from "../adapters/r2";
-import { urlAdapter } from "../adapters/url";
-import { createWebDAVAdapter } from "../adapters/webdav";
+import { createQueries } from "../../db/queries";
+import { permissionMiddleware, subsonicError } from "../../auth";
+import { subsonicOK } from "../../utils/xml";
+import type { User } from "../../types/entities";
+import type { TranscodeInput } from "../../transcode/engine";
+import { getProfile } from "../../transcode/profiles";
+import { buildTranscodeEngine } from "../../transcode/factory";
+import { parseStorageUri } from "../../adapters/index";
+import { createR2Adapter } from "../../adapters/r2";
+import { urlAdapter } from "../../adapters/url";
+import { createWebDAVAdapter } from "../../adapters/webdav";
 
 export const transcodeRoutes = new Hono<{
   Bindings: Env;
@@ -67,7 +67,7 @@ async function openSourceStream(env: Env, instanceId: string): Promise<{ body: R
 }
 
 // POST /rest/transcodeFile — manual trigger.
-transcodeRoutes.post("/rest/transcodeFile", permissionMiddleware("manage_sources"), async (c) => {
+transcodeRoutes.post("/transcode/start", permissionMiddleware("manage_sources"), async (c) => {
   const env = c.env as Env;
   let body: { id?: string; profile?: string };
   try {
@@ -156,7 +156,7 @@ transcodeRoutes.post("/rest/transcodeFile", permissionMiddleware("manage_sources
 });
 
 // GET /rest/getTranscodeStatus — poll a job.
-transcodeRoutes.get("/rest/getTranscodeStatus", async (c) => {
+transcodeRoutes.get("/transcode/status", async (c) => {
   const jobId = c.req.query("jobId");
   if (!jobId) {
     return c.text(subsonicError(10, "Missing jobId"), 400, {

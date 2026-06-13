@@ -1,13 +1,13 @@
 import { Hono } from "hono";
-import { permissionMiddleware } from "../auth";
-import { md5 } from "../utils/md5";
-import { createQueries } from "../db/queries";
+import { permissionMiddleware } from "../../auth";
+import { md5 } from "../../utils/md5";
+import { createQueries } from "../../db/queries";
 
 type Queries = ReturnType<typeof createQueries>;
-import { requiredPrefixLen, rebuildTagPrefix } from "../utils/tagwrite";
-import type { TagWriteCover } from "../utils/tagwrite";
-import { encodePath } from "./scan";
-import type { SongTags } from "../utils/tags";
+import { requiredPrefixLen, rebuildTagPrefix } from "../../utils/tagwrite";
+import type { TagWriteCover } from "../../utils/tagwrite";
+import { encodePath } from "../storage/scan";
+import type { SongTags } from "../../utils/tags";
 
 export const tagEditRoutes = new Hono();
 
@@ -44,7 +44,7 @@ interface ApplyResult {
 // POST /rest/writeTags  body: { id: <masterId|instanceId>, tags: SongTags }
 // Single-song edit. The batch endpoint reuses applyTagsToSong below.
 // ============================================================================
-tagEditRoutes.post("/rest/writeTags", permissionMiddleware("edit_tags"), async (c) => {
+tagEditRoutes.post("/write", permissionMiddleware("edit_tags"), async (c) => {
   const env = c.env as Env;
   const db = env.DB;
   const queries = createQueries(db);
@@ -78,7 +78,7 @@ tagEditRoutes.post("/rest/writeTags", permissionMiddleware("edit_tags"), async (
 // POST /rest/batchWriteTags  body: { ids: string[], patch: Partial<SongTags> }
 // Applies the same tag patch to up to BATCH_MAX songs; per-song results.
 // ============================================================================
-tagEditRoutes.post("/rest/batchWriteTags", permissionMiddleware("edit_tags"), async (c) => {
+tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) => {
   const env = c.env as Env;
   const db = env.DB;
   const queries = createQueries(db);
