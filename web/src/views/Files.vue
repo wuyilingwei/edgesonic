@@ -3,9 +3,12 @@ import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatSize } from "../api";
 import TagEditor from "../components/TagEditor.vue";
+import ScrapeButton from "../components/ScrapeButton.vue";
+import type { ScrapeResult } from "../lib/scrape";
+import { extractMetadata, isBrowserParse, suffixOf } from "../lib/metadata";
 
 const { t } = useI18n();
-const { authFetch, authPost, uploadFile, writeTags, level } = useAuth();
+const { authFetch, authPost, uploadFile, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
 interface DirEntry { name: string; }
@@ -33,6 +36,14 @@ const uploadErr = ref(false);
 const scanning = ref(false);
 const scanProcessed = ref(0);
 const scanRemaining = ref<number | null>(null);
+
+// Browser-side tag parse (041): for OGG/Opus/M4A/APE/... — the Worker tag
+// parser only knows MP3/FLAC/WAV, so we let music-metadata (wasm-free, ~350KB
+// gzip) handle the long tail right in the user's browser.
+const browserScanning = ref(false);
+const browserScanProcessed = ref(0);
+const browserScanTagged = ref(0);
+const browserScanTotal = ref(0);
 
 // R2 file operations state
 const renamingFile = ref<string | null>(null); // file name currently being renamed
@@ -164,6 +175,45 @@ async function runTagScan() {
   }
 }
 
+// 041: walk the visible directory and process every browser-parseable file.
+// Each file: resolve instance_id by storage_uri → fetch via /rest/stream
+// (auth-signed) → music-metadata parse → POST /rest/submitMetadata.
+async function runBrowserRead() {
+  if (browserScanning.value) return;
+  const targets = files.value.filter((f) => isBrowserParse(suffixOf(f.name)));
+  if (!targets.length) {
+    showToast(t("files.browserReadNothing"), "success");
+    return;
+  }
+  browserScanning.value = true;
+  browserScanProcessed.value = 0;
+  browserScanTagged.value = 0;
+  browserScanTotal.value = targets.length;
+  try {
+    for (const f of targets) {
+      browserScanProcessed.value++;
+      try {
+        // 1. uri → instance_id
+        const lookup = JSON.parse(await authFetch("findInstanceByUri", { uri: f.uri }));
+        if (!lookup?.ok || !lookup.instanceId || !lookup.masterId) continue;
+        // 2. download via /rest/stream — gives us a proper authed audio blob
+        const resp = await fetch(restUrl("stream", { id: lookup.masterId }));
+        if (!resp.ok) continue;
+        const blob = await resp.blob();
+        const file = new File([blob], f.name, { type: f.contentType || blob.type });
+        // 3. parse
+        const meta = await extractMetadata(file);
+        // 4. submit
+        const submit = await submitMetadata(lookup.instanceId, meta as Record<string, string | number>);
+        if (submit.ok) browserScanTagged.value++;
+      } catch { /* per-file failures don't poison the batch */ }
+    }
+    showToast(t("files.browserReadDone", { tagged: browserScanTagged.value, total: targets.length }));
+  } finally {
+    browserScanning.value = false;
+  }
+}
+
 // ── R2 file operations ──────────────────────────────────────────────────────
 
 function startRename(f: FileEntry) {
@@ -275,11 +325,113 @@ async function openTagEditor(f: FileEntry) {
 
 function closeTagEditor() { editorOpen.value = false; }
 
-async function onTagEditorSubmit(patch: Record<string, string | number>) {
-  if (!editTargetId.value || !Object.keys(patch).length) return;
+// === 040 scrape-button helpers (single mode only — Files.vue has no batch) ===
+function scrapeQueryFromForm(form: Record<string, string>): string {
+  const t1 = (form.title || "").trim();
+  const a1 = (form.artist || "").trim();
+  if (t1 || a1) return [t1, a1].filter(Boolean).join(" ");
+  const init = editInitial.value;
+  return [init.title, init.artist].filter(Boolean).join(" ");
+}
+
+function applyScrapeResult(
+  form: Record<string, string>,
+  applyFlags: Record<string, boolean>,
+  r: ScrapeResult,
+) {
+  if (r.title) form.title = r.title;
+  if (r.artist) form.artist = r.artist;
+  if (r.album) form.album = r.album;
+  if (r.year) form.year = String(r.year);
+  if (r.title) applyFlags.title = true;
+  if (r.artist) applyFlags.artist = true;
+  if (r.album) applyFlags.album = true;
+  if (r.year) applyFlags.year = true;
+}
+
+// ── Tidy folder (042) — template-driven move on R2 / WebDAV ─────────────────
+// Two-step UX: open the modal → run a dry-run → review plan → "Apply" runs it
+// for real. Avoids accidental large-scale moves on a typo'd template.
+const DEFAULT_TIDY_TEMPLATE = "{albumArtist}/{album}/{track:02d} - {title}";
+const tidyOpen = ref(false);
+const tidyTemplate = ref(DEFAULT_TIDY_TEMPLATE);
+const tidyDryRun = ref(true);
+const tidyBusy = ref(false);
+const tidyMsg = ref("");
+const tidyErr = ref(false);
+const tidyPlanned = ref<Array<{ id: string; instanceId: string; from: string; to: string; skipped?: string }>>([]);
+const tidyApplied = ref<Array<{ id: string; instanceId: string; ok: boolean; error?: string }>>([]);
+const tidyTargetIds = ref<string[]>([]);
+
+const canTidy = computed(() => level.value >= 2);
+
+async function openTidyFolder() {
+  // Resolve master_ids for every audio file in the current dir, the same way
+  // we resolve them for the single-track tag editor (search3 on the filename
+  // stem). Anything that doesn't resolve is silently dropped — the user has
+  // already been told to run a scan first via the editor's affordance.
+  const ids: string[] = [];
+  for (const f of files.value) {
+    if (!isAudio(f.name)) continue;
+    const stem = f.name.replace(/\.[^.]+$/, "");
+    try {
+      const xml = await authFetch("search3", { query: stem, songCount: "5", artistCount: "0", albumCount: "0" });
+      const songs = parseXmlAttrs(xml, "song");
+      const hit = songs.find((s) => (s.title || "").toLowerCase() === stem.toLowerCase()) || songs[0];
+      if (hit?.id) ids.push(hit.id);
+    } catch {
+      // skip — partial coverage is still useful
+    }
+  }
+  if (!ids.length) {
+    showToast(t("files.tidyEmpty"), "error");
+    return;
+  }
+  tidyTargetIds.value = ids;
+  tidyTemplate.value = DEFAULT_TIDY_TEMPLATE;
+  tidyDryRun.value = true;
+  tidyPlanned.value = [];
+  tidyApplied.value = [];
+  tidyMsg.value = "";
+  tidyErr.value = false;
+  tidyOpen.value = true;
+}
+
+async function runTidyFolder() {
+  if (!tidyTargetIds.value.length || !tidyTemplate.value.trim()) return;
+  tidyBusy.value = true; tidyMsg.value = ""; tidyErr.value = false;
+  try {
+    const res = await tidyFolder(tidyTargetIds.value, tidyTemplate.value, {
+      dryRun: tidyDryRun.value,
+      source: currentSource.value === "r2" ? "r2" : undefined,
+    });
+    if (!res.ok) {
+      tidyErr.value = true;
+      tidyMsg.value = res.error || t("files.tidyFailed");
+      return;
+    }
+    tidyPlanned.value = res.planned || [];
+    tidyApplied.value = res.applied || [];
+    if (!tidyDryRun.value) {
+      const ok = (res.applied || []).filter((a) => a.ok).length;
+      tidyMsg.value = t("files.tidyDone", { ok, failed: res.failed ?? 0 });
+      loadDir();
+    }
+  } catch {
+    tidyErr.value = true;
+    tidyMsg.value = t("files.tidyFailed");
+  } finally {
+    tidyBusy.value = false;
+  }
+}
+
+function closeTidyFolder() { tidyOpen.value = false; }
+
+async function onTagEditorSubmit(patch: Record<string, string | number>, cover?: { data: string; mime: string }) {
+  if (!editTargetId.value || (!Object.keys(patch).length && !cover)) return;
   editBusy.value = true; editMsg.value = ""; editErr.value = false;
   try {
-    const res = await writeTags(editTargetId.value, patch);
+    const res = await writeTags(editTargetId.value, patch, cover);
     if (!res.ok) {
       editErr.value = true;
       editMsg.value = res.error || t("library.editFailed");
@@ -312,7 +464,10 @@ onMounted(async () => {
       </div>
       <div class="page-actions">
         <span v-if="scanning" class="scan-progress">{{ t("files.scanProgress", { processed: scanProcessed, remaining: scanRemaining ?? "…" }) }}</span>
-        <button v-if="canScan" class="btn-secondary" :disabled="scanning" @click="runTagScan">{{ t("files.scanTags") }}</button>
+        <span v-if="browserScanning" class="scan-progress">{{ t("files.browserReadProgress", { processed: browserScanProcessed, total: browserScanTotal }) }}</span>
+        <button v-if="canScan" class="btn-secondary" :disabled="scanning || browserScanning" @click="runTagScan">{{ t("files.scanTags") }}</button>
+        <button v-if="canScan" class="btn-secondary" :disabled="scanning || browserScanning" @click="runBrowserRead">{{ t("files.browserRead") }}</button>
+        <button v-if="canTidy" class="btn-secondary" :disabled="scanning || browserScanning || tidyBusy" @click="openTidyFolder">{{ t("files.tidy") }}</button>
         <button v-if="canUpload" class="btn-primary" @click="showUpload = !showUpload">{{ t("files.upload") }}</button>
       </div>
     </div>
@@ -431,7 +586,61 @@ onMounted(async () => {
       :error="editErr"
       @submit="onTagEditorSubmit"
       @close="closeTagEditor"
-    />
+    >
+      <!-- 040 scrape button in extras slot -->
+      <template #extras="{ form, apply }">
+        <ScrapeButton
+          :initial-query="scrapeQueryFromForm(form)"
+          :song-master-id="editTargetId || ''"
+          @apply="(r: ScrapeResult) => applyScrapeResult(form, apply, r)"
+        />
+      </template>
+    </TagEditor>
+
+    <!-- Tidy folder modal (042) -->
+    <div v-if="tidyOpen" class="modal-backdrop" @click.self="closeTidyFolder">
+      <div class="modal tidy-modal">
+        <div class="modal-title">{{ t("files.tidyTitle", { n: tidyTargetIds.length }) }}</div>
+
+        <div class="form-group" style="margin-top:0.75rem">
+          <label class="form-label">{{ t("files.tidyTemplate") }}</label>
+          <input v-model="tidyTemplate" class="form-input" :placeholder="DEFAULT_TIDY_TEMPLATE" />
+          <span class="field-hint">{{ t("files.tidyTemplateHint", { ph: "{albumArtist} {album} {artist} {title} {year} {track} {track:02d}", ex: DEFAULT_TIDY_TEMPLATE }) }}</span>
+        </div>
+
+        <label class="dry-run-row">
+          <input type="checkbox" v-model="tidyDryRun" />
+          <span>{{ t("files.tidyDryRun") }}</span>
+        </label>
+
+        <div v-if="tidyPlanned.length" class="tidy-plan">
+          <div class="tidy-plan-title mono-label">
+            {{ tidyDryRun ? t("files.tidyPlanned") : t("files.tidyApplied") }} ({{ tidyPlanned.length }})
+          </div>
+          <div class="tidy-plan-list">
+            <div v-for="(p, i) in tidyPlanned" :key="p.instanceId + i" class="tidy-row">
+              <div class="tidy-from mono-label">{{ p.from }}</div>
+              <div class="tidy-arrow">→</div>
+              <div class="tidy-to mono-label">
+                <template v-if="p.skipped">{{ t("files.tidySkipped", { reason: p.skipped }) }}</template>
+                <template v-else>{{ p.to }}</template>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <p v-if="tidyMsg" :class="['te-msg', { error: tidyErr }]">{{ tidyMsg }}</p>
+
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeTidyFolder">{{ t("common.cancel") }}</button>
+          <button class="btn-primary" :disabled="tidyBusy || !tidyTemplate.trim()" @click="runTidyFolder">
+            {{ tidyBusy ? t("common.loading") : t("files.tidyRun") }}
+          </button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
+      </div>
+    </div>
 
     <div v-if="toast.show" :class="['toast', `toast-${toast.type}`]">{{ toast.msg }}</div>
   </div>
@@ -590,4 +799,44 @@ onMounted(async () => {
   font-size: var(--fs-xs);
   color: var(--color-text-muted);
 }
+
+/* 042 — tidy folder modal */
+.tidy-modal { width: min(720px, 94vw); max-height: 90vh; overflow-y: auto; }
+.dry-run-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin-top: 0.75rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+.tidy-plan { margin-top: 0.85rem; }
+.tidy-plan-title { color: var(--color-accent-primary); margin-bottom: 0.4rem; }
+.tidy-plan-list {
+  max-height: 45vh;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-primary);
+  padding: 0.4rem;
+}
+.tidy-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--fs-xs);
+}
+.tidy-row:last-child { border-bottom: none; }
+.tidy-from { color: var(--color-text-muted); word-break: break-all; }
+.tidy-arrow { color: var(--color-accent-primary); font-family: var(--font-mono); }
+.tidy-to { color: var(--color-text-primary); word-break: break-all; }
+.te-msg {
+  margin-top: 0.6rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-status-success);
+}
+.te-msg.error { color: var(--color-status-error); }
 </style>

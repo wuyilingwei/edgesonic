@@ -3,6 +3,7 @@
     "loading": "加载中…",
     "save": "保存",
     "cancel": "取消",
+    "close": "关闭",
     "delete": "删除",
     "edit": "编辑",
     "retry": "重试",
@@ -117,8 +118,27 @@
     "hintBatch": "仅勾选的字段会被写入所选歌曲，未勾选字段保持原值。",
     "batchHint": "勾选左侧 ☐ 后该字段会应用到所有选中歌曲。",
     "coverPlaceholder": "封面写回将在后续版本支持",
+    "cover": {
+      "dropHint": "拖拽或点击选择封面（JPEG / PNG，自动压缩到 500KB 以内）",
+      "compressing": "正在压缩封面…",
+      "clear": "移除封面",
+      "info": "{kb} KB · {w}×{h}",
+      "errInvalidType": "请使用图片文件",
+      "errTooLarge": "封面压缩后仍超过 500KB（{kb} KB）"
+    },
     "batchSaved": "批量保存：{succeeded} 成功 / {failed} 失败",
     "batchFailed": "批量保存失败"
+  },
+  "scrape": {
+    "button": "刮削元数据",
+    "queryPlaceholder": "标题 + 歌手…",
+    "searchBtn": "搜索",
+    "hint": "源：{sources}（直前端 CORS 失败时自动走 Worker 代理）。",
+    "apply": "应用",
+    "noResults": "无结果。",
+    "allSourcesFailed": "所有源均失败 — 详见上方错误。",
+    "disabled": "设置中已禁用元数据刮削。",
+    "emptyQuery": "请先输入查询词。"
   },
   "files": {
     "label": "// 管理",
@@ -141,6 +161,10 @@
     "scanProgress": "已处理 {processed} / 剩余 {remaining}",
     "scanDone": "标签扫描完成，共识别 {tagged} 首",
     "scanFailed": "标签扫描失败",
+    "browserRead": "浏览器解析",
+    "browserReadProgress": "正在解析 {processed} / {total}",
+    "browserReadDone": "浏览器解析完成，{tagged}/{total} 首已入库",
+    "browserReadNothing": "当前目录没有可由浏览器解析的文件",
     "rename": "重命名",
     "moveTo": "移动到",
     "copyTo": "复制到",
@@ -157,7 +181,21 @@
     "opFailed": "操作失败",
     "editTags": "编辑标签",
     "editLookupFailed": "未在媒体库中找到匹配条目，请先「读取标签」扫描",
-    "editLookupAmbiguous": "找到 {n} 条匹配，自动选第一条"
+    "editLookupAmbiguous": "找到 {n} 条匹配，自动选第一条",
+    "tidy": "整理文件夹",
+    "tidyTitle": "按模板整理：{n} 个文件",
+    "tidyTemplate": "目标路径模板",
+    "tidyTemplateHint": "占位符：{ph}。例如 {ex}",
+    "tidyDryRun": "仅预览（不实际移动）",
+    "tidyRun": "开始整理",
+    "tidyPlanned": "计划",
+    "tidyApplied": "执行",
+    "tidyEmpty": "选中文件均无法解析（请先扫描标签）",
+    "tidyDone": "整理完成：{ok} 成功 / {failed} 失败",
+    "tidyFailed": "整理失败",
+    "tidyFrom": "原路径",
+    "tidyTo": "目标",
+    "tidySkipped": "跳过：{reason}"
   },
   "users": {
     "label": "// 管理",
@@ -252,6 +290,15 @@
         "externalKeySet": "已设置",
         "externalKeyUnset": "未设置",
         "externalKeyPlaceholder": "粘贴 openssl rand -hex 32 生成的密钥",
+        "save": "保存",
+        "saved": "已保存",
+        "saveFailed": "保存失败"
+      },
+      "scrape": {
+        "title": "元数据刮削源",
+        "desc": "选择标签编辑器“刮削”按钮使用的外部源以及优先级顺序。浏览器直连通常被 CORS 拒绝，所有源都会自动走 Worker 代理。",
+        "moveUp": "上移",
+        "moveDown": "下移",
         "save": "保存",
         "saved": "已保存",
         "saveFailed": "保存失败"

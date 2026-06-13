@@ -3,6 +3,7 @@
     "loading": "LOADING…",
     "save": "SAVE",
     "cancel": "CANCEL",
+    "close": "CLOSE",
     "delete": "DELETE",
     "edit": "EDIT",
     "retry": "RETRY",
@@ -117,8 +118,27 @@
     "hintBatch": "Only ticked fields are written; un-ticked fields stay as they are.",
     "batchHint": "Tick the ☐ on the left to apply that field to every selected track.",
     "coverPlaceholder": "Cover write-back will land in a later task",
+    "cover": {
+      "dropHint": "Drop or click to pick a cover (JPEG / PNG, auto-compressed to ≤500KB)",
+      "compressing": "Compressing cover…",
+      "clear": "Remove",
+      "info": "{kb} KB · {w}×{h}",
+      "errInvalidType": "Please pick an image file",
+      "errTooLarge": "Cover still exceeds 500KB after compression ({kb} KB)"
+    },
     "batchSaved": "Batch saved: {succeeded} ok / {failed} failed",
     "batchFailed": "Batch save failed"
+  },
+  "scrape": {
+    "button": "Scrape metadata",
+    "queryPlaceholder": "Title + artist…",
+    "searchBtn": "Search",
+    "hint": "Sources: {sources} (auto-proxied via the Worker when CORS blocks the browser).",
+    "apply": "Apply",
+    "noResults": "No results.",
+    "allSourcesFailed": "All sources failed — see source-specific errors above.",
+    "disabled": "Metadata scraping is disabled in Settings.",
+    "emptyQuery": "Enter a query first."
   },
   "files": {
     "label": "// MANAGEMENT",
@@ -141,6 +161,10 @@
     "scanProgress": "Processed {processed} / {remaining} left",
     "scanDone": "Tag scan complete, {tagged} tracks identified",
     "scanFailed": "Tag scan failed",
+    "browserRead": "BROWSER READ",
+    "browserReadProgress": "Parsing {processed} / {total}",
+    "browserReadDone": "Browser read complete, {tagged}/{total} tracks identified",
+    "browserReadNothing": "No browser-parseable files in this folder",
     "rename": "Rename",
     "moveTo": "Move To",
     "copyTo": "Copy To",
@@ -157,7 +181,21 @@
     "opFailed": "Operation failed",
     "editTags": "Edit Tags",
     "editLookupFailed": "Not yet in the library — run READ TAGS first",
-    "editLookupAmbiguous": "Found {n} matches, picked the first"
+    "editLookupAmbiguous": "Found {n} matches, picked the first",
+    "tidy": "Tidy Folders",
+    "tidyTitle": "Tidy {n} file(s) by template",
+    "tidyTemplate": "Target path template",
+    "tidyTemplateHint": "Placeholders: {ph}. Example: {ex}",
+    "tidyDryRun": "Preview only (don't move)",
+    "tidyRun": "Run",
+    "tidyPlanned": "Planned",
+    "tidyApplied": "Applied",
+    "tidyEmpty": "None of the selected files could be resolved (scan tags first)",
+    "tidyDone": "Tidy done: {ok} ok / {failed} failed",
+    "tidyFailed": "Tidy failed",
+    "tidyFrom": "From",
+    "tidyTo": "To",
+    "tidySkipped": "Skipped: {reason}"
   },
   "users": {
     "label": "// MANAGEMENT",
@@ -252,6 +290,15 @@
         "externalKeySet": "SET",
         "externalKeyUnset": "UNSET",
         "externalKeyPlaceholder": "Paste the openssl rand -hex 32 secret",
+        "save": "Save",
+        "saved": "Saved",
+        "saveFailed": "Save failed"
+      },
+      "scrape": {
+        "title": "Metadata Scrape Sources",
+        "desc": "Pick which external providers the editor's Scrape button queries, and in what order. Direct browser requests usually fail CORS; all sources route through the Worker proxy.",
+        "moveUp": "Move up",
+        "moveDown": "Move down",
         "save": "Save",
         "saved": "Saved",
         "saveFailed": "Save failed"
