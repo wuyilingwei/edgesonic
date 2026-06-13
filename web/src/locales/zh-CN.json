@@ -565,6 +565,8 @@
       "status": "状态",
       "errorPrefix": "错误",
       "startToast": "扫描已启动",
+      "forceStartToast": "已启动强制全扫（重读所有文件）",
+      "forceHint": "按住 Shift 点击可强制全扫",
       "expand": "展开历史",
       "collapse": "收起",
       "relative": {

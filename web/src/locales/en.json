@@ -565,6 +565,8 @@
       "status": "Status",
       "errorPrefix": "Error",
       "startToast": "Scan started",
+      "forceStartToast": "Force rescan started (every file re-read)",
+      "forceHint": "Shift+click to force a full rescan",
       "expand": "Show history",
       "collapse": "Hide",
       "relative": {
