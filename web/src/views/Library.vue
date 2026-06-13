@@ -21,11 +21,15 @@ import { usePlayerStore, type Track } from "../stores/player";
 
 const { t } = useI18n();
 
-const { authFetch, coverArtUrl } = useAuth();
+const { authFetch, authPost, coverArtUrl, isAdmin } = useAuth();
 const player = usePlayerStore();
 
 interface Artist { id: string; name: string; albumCount: string; }
 interface Album { id: string; name: string; artist: string; year: string; coverArt: string; songCount: string; }
+
+type Tab = "artists" | "albums" | "songs";
+const savedTab = localStorage.getItem("edgesonic_library_tab") as Tab | null;
+const tab = ref<Tab>(savedTab === "artists" || savedTab === "albums" || savedTab === "songs" ? savedTab : "songs");
 
 const artists = ref<Artist[]>([]);
 const albums = ref<Album[]>([]);
@@ -35,6 +39,31 @@ const currentArtist = ref<Artist | null>(null);
 const currentAlbum = ref<Album | null>(null);
 const loading = ref(false);
 const error = ref("");
+
+// === Albums tab (paged grid over the whole library) ===
+const ALBUM_PAGE = 48;
+const allAlbums = ref<Album[]>([]);
+const albumOffset = ref(0);
+const albumsDone = ref(false);
+
+// === Songs tab (paged flat list over the whole library) ===
+const SONG_PAGE = 500;
+const allSongs = ref<Track[]>([]);
+const songOffset = ref(0);
+const songsDone = ref(false);
+
+function switchTab(next: Tab) {
+  tab.value = next;
+  localStorage.setItem("edgesonic_library_tab", next);
+  currentArtist.value = null;
+  currentAlbum.value = null;
+  albums.value = [];
+  songs.value = [];
+  error.value = "";
+  if (next === "artists" && !artists.value.length) loadArtists();
+  if (next === "albums" && !allAlbums.value.length) loadMoreAlbums();
+  if (next === "songs" && !allSongs.value.length) loadMoreSongs();
+}
 
 async function loadArtists() {
   loading.value = true;
@@ -48,6 +77,45 @@ async function loadArtists() {
     error.value = t("library.loadFailed");
     artists.value = [];
   }
+  loading.value = false;
+}
+
+async function loadMoreAlbums() {
+  loading.value = true;
+  try {
+    const xml = await authFetch("getAlbumList2", {
+      type: "alphabeticalByName", size: String(ALBUM_PAGE), offset: String(albumOffset.value),
+    });
+    const page = parseXmlAttrs(xml, "album").map((a) => ({
+      id: a.id || "", name: a.name || "", artist: a.artist || "",
+      year: a.year || "", coverArt: a.coverArt || "", songCount: a.songCount || "",
+    }));
+    allAlbums.value.push(...page);
+    albumOffset.value += page.length;
+    if (page.length < ALBUM_PAGE) albumsDone.value = true;
+  } catch { error.value = t("library.loadFailed"); }
+  loading.value = false;
+}
+
+async function loadMoreSongs() {
+  loading.value = true;
+  try {
+    const xml = await authFetch("search3", {
+      query: "", artistCount: "0", albumCount: "0",
+      songCount: String(SONG_PAGE), songOffset: String(songOffset.value),
+    });
+    const page = parseXmlAttrs(xml, "song").map((s) => ({
+      id: s.id || "",
+      title: s.title || "",
+      artist: s.artist || "",
+      album: s.album || "",
+      coverArt: s.coverArt || undefined,
+      duration: parseInt(s.duration || "0"),
+    }));
+    allSongs.value.push(...page);
+    songOffset.value += page.length;
+    if (page.length < SONG_PAGE) songsDone.value = true;
+  } catch { error.value = t("library.loadFailed"); }
   loading.value = false;
 }
 
@@ -87,11 +155,82 @@ function playSong(i: number) {
   player.setQueue(songs.value, i);
 }
 
+function playFromAll(i: number) {
+  player.setQueue(allSongs.value, i);
+}
+
 function playAlbumFromStart() {
   if (songs.value.length) player.setQueue(songs.value, 0);
 }
 
-function backToArtists() {
+// === Tag editor ===
+const editTarget = ref<Track | null>(null);
+const editForm = ref({ title: "", artist: "", album: "", albumArtist: "", genre: "", year: "", track: "" });
+const editBusy = ref(false);
+const editMsg = ref("");
+const editErr = ref(false);
+
+async function openEditor(s: Track) {
+  editTarget.value = s;
+  editMsg.value = "";
+  editErr.value = false;
+  editForm.value = { title: s.title, artist: s.artist, album: s.album, albumArtist: "", genre: "", year: "", track: "" };
+  try {
+    const xml = await authFetch("getSong", { id: s.id });
+    const full = parseXmlAttrs(xml, "song")[0];
+    if (full && editTarget.value?.id === s.id) {
+      editForm.value.track = full.track || "";
+      editForm.value.genre = full.genre || "";
+      editForm.value.year = full.year || "";
+    }
+  } catch { /* prefill stays partial */ }
+}
+
+function closeEditor() {
+  editTarget.value = null;
+}
+
+async function saveEdit() {
+  const target = editTarget.value;
+  if (!target) return;
+  const f = editForm.value;
+  const tags: Record<string, string | number> = {};
+  if (f.title.trim()) tags.title = f.title.trim();
+  if (f.artist.trim()) tags.artist = f.artist.trim();
+  if (f.album.trim()) tags.album = f.album.trim();
+  if (f.albumArtist.trim()) tags.albumArtist = f.albumArtist.trim();
+  if (f.genre.trim()) tags.genre = f.genre.trim();
+  if (f.track.trim() && parseInt(f.track, 10) > 0) tags.track = parseInt(f.track, 10);
+  if (f.year.trim() && parseInt(f.year, 10) > 0) tags.year = parseInt(f.year, 10);
+  if (!Object.keys(tags).length) return;
+
+  editBusy.value = true;
+  editMsg.value = "";
+  editErr.value = false;
+  try {
+    const res = JSON.parse(await authPost("writeTags", { id: target.id, tags }));
+    if (!res.ok) {
+      editErr.value = true;
+      editMsg.value = res.error || t("library.editFailed");
+    } else {
+      // reflect the edit in the open lists without a full reload
+      if (tags.title) target.title = String(tags.title);
+      if (tags.artist) target.artist = String(tags.artist);
+      if (tags.album) target.album = String(tags.album);
+      const files = (res.files || []) as Array<{ written: boolean; reason?: string }>;
+      const written = files.filter((x) => x.written).length;
+      const skipped = files.filter((x) => !x.written).map((x) => x.reason).filter(Boolean);
+      editMsg.value = t("library.editSaved", { written, total: files.length })
+        + (skipped.length ? ` (${skipped.join("; ")})` : "");
+    }
+  } catch {
+    editErr.value = true;
+    editMsg.value = t("library.editFailed");
+  }
+  editBusy.value = false;
+}
+
+function backToList() {
   currentArtist.value = null;
   currentAlbum.value = null;
   albums.value = [];
@@ -103,7 +242,11 @@ function backToAlbums() {
   songs.value = [];
 }
 
-onMounted(loadArtists);
+onMounted(() => {
+  if (tab.value === "artists") loadArtists();
+  else if (tab.value === "albums") loadMoreAlbums();
+  else loadMoreSongs();
+});
 </script>
 
 <template>
@@ -111,7 +254,7 @@ onMounted(loadArtists);
     <div class="page-header">
       <div>
         <div class="mono-label breadcrumb">
-          <a @click="backToArtists">{{ t("library.breadcrumb") }}</a>
+          <a @click="backToList">{{ t("library.breadcrumb") }}</a>
           <template v-if="currentArtist"> / <a @click="backToAlbums">{{ currentArtist.name }}</a></template>
           <template v-if="currentAlbum"> / <span>{{ currentAlbum.name }}</span></template>
         </div>
@@ -120,48 +263,19 @@ onMounted(loadArtists);
       <button v-if="currentAlbum && songs.length" class="btn-primary" @click="playAlbumFromStart">{{ t("library.playAlbum") }}</button>
     </div>
 
+    <!-- View tabs (hidden while drilled into an artist/album) -->
+    <div v-if="!currentArtist && !currentAlbum" class="view-tabs">
+      <button :class="['view-tab', { active: tab === 'songs' }]" @click="switchTab('songs')">{{ t("library.tabSongs") }}</button>
+      <button :class="['view-tab', { active: tab === 'albums' }]" @click="switchTab('albums')">{{ t("library.tabAlbums") }}</button>
+      <button :class="['view-tab', { active: tab === 'artists' }]" @click="switchTab('artists')">{{ t("library.tabArtists") }}</button>
+    </div>
+
     <div v-if="error" class="status-badge error">{{ error }}</div>
-    <div v-if="loading" class="empty-state">{{ t("common.loading") }}</div>
 
-    <!-- Level 1: artists -->
-    <div v-if="!currentArtist && !loading" class="artist-grid">
-      <div v-for="a in artists" :key="a.id" class="card hoverable artist-card" @click="openArtist(a)">
-        <div class="artist-glyph">{{ a.name.charAt(0).toUpperCase() || "?" }}</div>
-        <div class="artist-name">{{ a.name }}</div>
-        <div class="mono-label" v-if="a.albumCount">{{ t("library.albumCount", { n: a.albumCount }) }}</div>
-        <div class="corner corner-tr"></div>
-        <div class="corner corner-bl"></div>
-      </div>
-      <div v-if="!artists.length && !error" class="empty-state" style="grid-column: 1/-1">
-        <div class="empty-state-icon">♪</div>
-        <div>{{ t("library.noArtists") }}</div>
-      </div>
-    </div>
-
-    <!-- Level 2: albums of an artist -->
-    <div v-else-if="currentArtist && !currentAlbum && !loading" class="album-grid">
-      <div v-for="al in albums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
-        <div class="album-cover">
-          <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 300)" :alt="al.name" loading="lazy" />
-          <span v-else class="album-cover-placeholder">♪</span>
-        </div>
-        <div class="album-body">
-          <div class="album-name">{{ al.name }}</div>
-          <div class="mono-label">{{ al.year || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
-        </div>
-        <div class="corner corner-tr"></div>
-        <div class="corner corner-bl"></div>
-      </div>
-      <div v-if="!albums.length" class="empty-state" style="grid-column: 1/-1">
-        <div class="empty-state-icon">◌</div>
-        <div>{{ t("library.noAlbums") }}</div>
-      </div>
-    </div>
-
-    <!-- Level 3: songs of an album -->
-    <div v-else-if="currentAlbum && !loading" class="table-wrap song-table" style="--grid-cols: 36px 1fr auto auto">
+    <!-- Drill-down: songs of an album (any tab) -->
+    <div v-if="currentAlbum" class="table-wrap song-table" :style="`--grid-cols: 36px 1fr auto auto${isAdmin ? ' 32px' : ''}`">
       <div class="table-header">
-        <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span>
+        <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span>
       </div>
       <div
         v-for="(s, i) in songs"
@@ -174,8 +288,147 @@ onMounted(loadArtists);
         <span class="song-title">{{ s.title }}</span>
         <span class="song-artist">{{ s.artist }}</span>
         <span class="song-time">{{ formatDuration(s.duration) }}</span>
+        <button v-if="isAdmin" class="edit-btn" :title="t('library.editSong')" @click.stop="openEditor(s)">✎</button>
       </div>
-      <div v-if="!songs.length" class="empty-state">{{ t("library.noTracks") }}</div>
+      <div v-if="loading" class="empty-state">{{ t("common.loading") }}</div>
+      <div v-else-if="!songs.length" class="empty-state">{{ t("library.noTracks") }}</div>
+    </div>
+
+    <!-- Drill-down: albums of an artist -->
+    <div v-else-if="currentArtist" class="album-grid">
+      <div v-for="al in albums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
+        <div class="album-cover">
+          <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 300)" :alt="al.name" loading="lazy" />
+          <span v-else class="album-cover-placeholder">♪</span>
+        </div>
+        <div class="album-body">
+          <div class="album-name">{{ al.name }}</div>
+          <div class="mono-label">{{ al.year || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
+        </div>
+        <div class="corner corner-tr"></div>
+        <div class="corner corner-bl"></div>
+      </div>
+      <div v-if="loading" class="empty-state" style="grid-column: 1/-1">{{ t("common.loading") }}</div>
+      <div v-else-if="!albums.length" class="empty-state" style="grid-column: 1/-1">
+        <div class="empty-state-icon">◌</div>
+        <div>{{ t("library.noAlbums") }}</div>
+      </div>
+    </div>
+
+    <!-- Tab: artists -->
+    <div v-else-if="tab === 'artists'" class="artist-grid">
+      <div v-for="a in artists" :key="a.id" class="card hoverable artist-card" @click="openArtist(a)">
+        <div class="artist-glyph">{{ a.name.charAt(0).toUpperCase() || "?" }}</div>
+        <div class="artist-name">{{ a.name }}</div>
+        <div class="mono-label" v-if="a.albumCount">{{ t("library.albumCount", { n: a.albumCount }) }}</div>
+        <div class="corner corner-tr"></div>
+        <div class="corner corner-bl"></div>
+      </div>
+      <div v-if="loading" class="empty-state" style="grid-column: 1/-1">{{ t("common.loading") }}</div>
+      <div v-else-if="!artists.length && !error" class="empty-state" style="grid-column: 1/-1">
+        <div class="empty-state-icon">♪</div>
+        <div>{{ t("library.noArtists") }}</div>
+      </div>
+    </div>
+
+    <!-- Tab: all albums -->
+    <div v-else-if="tab === 'albums'">
+      <div class="album-grid">
+        <div v-for="al in allAlbums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
+          <div class="album-cover">
+            <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 300)" :alt="al.name" loading="lazy" />
+            <span v-else class="album-cover-placeholder">♪</span>
+          </div>
+          <div class="album-body">
+            <div class="album-name">{{ al.name }}</div>
+            <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
+          </div>
+          <div class="corner corner-tr"></div>
+          <div class="corner corner-bl"></div>
+        </div>
+        <div v-if="!allAlbums.length && !loading" class="empty-state" style="grid-column: 1/-1">
+          <div class="empty-state-icon">◌</div>
+          <div>{{ t("library.noAlbums") }}</div>
+        </div>
+      </div>
+      <div class="load-more">
+        <span v-if="loading" class="mono-label">{{ t("common.loading") }}</span>
+        <button v-else-if="!albumsDone" class="btn-secondary" @click="loadMoreAlbums">{{ t("library.loadMore") }}</button>
+      </div>
+    </div>
+
+    <!-- Tab: all songs -->
+    <div v-else-if="tab === 'songs'">
+      <div class="table-wrap song-table" :style="`--grid-cols: 36px 1fr 1fr auto auto${isAdmin ? ' 32px' : ''}`">
+        <div class="table-header">
+          <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span>
+        </div>
+        <div
+          v-for="(s, i) in allSongs"
+          :key="s.id"
+          class="table-row song-row"
+          :class="{ playing: player.current?.id === s.id }"
+          @click="playFromAll(i)"
+        >
+          <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
+          <span class="song-title">{{ s.title }}</span>
+          <span class="song-album">{{ s.album }}</span>
+          <span class="song-artist">{{ s.artist }}</span>
+          <span class="song-time">{{ formatDuration(s.duration) }}</span>
+          <button v-if="isAdmin" class="edit-btn" :title="t('library.editSong')" @click.stop="openEditor(s)">✎</button>
+        </div>
+        <div v-if="!allSongs.length && !loading" class="empty-state">{{ t("library.noTracks") }}</div>
+      </div>
+      <div class="load-more">
+        <span v-if="loading" class="mono-label">{{ t("common.loading") }}</span>
+        <button v-else-if="!songsDone" class="btn-secondary" @click="loadMoreSongs">{{ t("library.loadMore") }}</button>
+      </div>
+    </div>
+    <!-- Tag edit modal -->
+    <div v-if="editTarget" class="modal-backdrop" @click.self="closeEditor">
+      <div class="modal edit-modal">
+        <div class="modal-title">{{ t("library.editSong") }}</div>
+        <div class="form-group">
+          <label class="form-label">{{ t("library.fieldTitle") }}</label>
+          <input v-model="editForm.title" class="form-input" />
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:1">
+            <label class="form-label">{{ t("library.fieldArtist") }}</label>
+            <input v-model="editForm.artist" class="form-input" />
+          </div>
+          <div class="form-group" style="flex:1">
+            <label class="form-label">{{ t("library.fieldAlbumArtist") }}</label>
+            <input v-model="editForm.albumArtist" class="form-input" :placeholder="editForm.artist" />
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">{{ t("library.fieldAlbum") }}</label>
+          <input v-model="editForm.album" class="form-input" />
+        </div>
+        <div class="form-row">
+          <div class="form-group" style="flex:2">
+            <label class="form-label">{{ t("library.fieldGenre") }}</label>
+            <input v-model="editForm.genre" class="form-input" />
+          </div>
+          <div class="form-group" style="flex:1">
+            <label class="form-label">{{ t("library.fieldYear") }}</label>
+            <input v-model="editForm.year" class="form-input" inputmode="numeric" />
+          </div>
+          <div class="form-group" style="flex:1">
+            <label class="form-label">{{ t("library.fieldTrack") }}</label>
+            <input v-model="editForm.track" class="form-input" inputmode="numeric" />
+          </div>
+        </div>
+        <p class="field-hint">{{ t("library.editHint") }}</p>
+        <p v-if="editMsg" :class="['edit-msg', { error: editErr }]">{{ editMsg }}</p>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeEditor">{{ t("common.cancel") }}</button>
+          <button class="btn-primary" :disabled="editBusy" @click="saveEdit">{{ editBusy ? t("common.loading") : t("common.save") }}</button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
+      </div>
     </div>
   </div>
 </template>
@@ -186,6 +439,29 @@ onMounted(loadArtists);
 .breadcrumb a { color: var(--color-text-muted); cursor: pointer; }
 .breadcrumb a:hover { color: var(--color-accent-primary); }
 .breadcrumb span { color: var(--color-accent-primary); }
+
+/* view tabs */
+.view-tabs {
+  display: flex; gap: 0;
+  margin-bottom: 1.25rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+.view-tab {
+  padding: 0.55rem 1.3rem;
+  background: none; border: none; cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 0.15s;
+}
+.view-tab:hover { color: var(--color-text-primary); }
+.view-tab.active { color: var(--color-accent-primary); border-bottom-color: var(--color-accent-primary); }
+
+.load-more { display: flex; justify-content: center; padding: 1.25rem 0 0.5rem; }
 
 /* artists */
 .artist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1rem; }
@@ -230,6 +506,21 @@ onMounted(loadArtists);
 .song-row.playing { background: var(--color-accent-dim); }
 .song-no { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); text-align: right; }
 .song-title { font-size: var(--fs-md); color: var(--color-text-primary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.song-album { font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-artist { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); }
 .song-time { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); }
+
+/* tag editor */
+.edit-btn {
+  background: none; border: none; cursor: pointer;
+  color: var(--color-text-muted); font-size: var(--fs-sm);
+  padding: 0 0.25rem; opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.song-row:hover .edit-btn { opacity: 1; }
+.edit-btn:hover { color: var(--color-accent-primary); }
+.edit-modal { width: min(520px, 92vw); }
+.edit-modal .form-row { display: flex; gap: 0.75rem; }
+.edit-msg { margin-top: 0.6rem; font-size: var(--fs-sm); color: var(--color-status-success, #7dc97d); }
+.edit-msg.error { color: var(--color-status-error, #e06c6c); }
 </style>

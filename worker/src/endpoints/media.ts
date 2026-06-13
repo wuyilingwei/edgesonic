@@ -85,6 +85,7 @@ mediaRoutes.get("/rest/stream", async (c) => {
   headers.set("Content-Type", result.contentType);
   if (result.contentLength) headers.set("Content-Length", String(result.contentLength));
   if (result.acceptRanges) headers.set("Accept-Ranges", "bytes");
+  if (result.contentRange) headers.set("Content-Range", result.contentRange);
 
   return new Response(result.body, { status: result.statusCode, headers });
 });
@@ -100,8 +101,24 @@ mediaRoutes.get("/rest/getCoverArt", async (c) => {
 
   let coverKey: string | null = null;
   if (prefix === "al-") {
-    const album = await queries.getAlbum(entityId);
-    coverKey = album?.cover_r2_key ?? null;
+    // Scan-era album ids already carry the "al-" prefix — try both forms
+    let albumId = entityId;
+    let album = await queries.getAlbum(albumId);
+    if (!album) { albumId = id; album = await queries.getAlbum(albumId); }
+    if (!album) return c.body(null, 404 as never);
+    coverKey = album.cover_r2_key ?? null;
+    if (!coverKey) {
+      // On-demand: pull a directory image or embedded art from the source, cache in R2
+      const noCover = await env.KV.get(`nocover:${albumId}`);
+      if (noCover) return c.body(null, 404 as never);
+      const { resolveAlbumCover } = await import("../utils/covers");
+      try {
+        coverKey = await resolveAlbumCover(env, albumId);
+      } catch { coverKey = null; }
+      if (!coverKey) {
+        await env.KV.put(`nocover:${albumId}`, "1", { expirationTtl: 86400 });
+      }
+    }
   } else if (prefix === "ar-") {
     const artist = await queries.getArtist(entityId);
     coverKey = artist?.image_r2_key ?? null;

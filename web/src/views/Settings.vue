@@ -23,11 +23,11 @@ import PermissionsMatrix from "../components/PermissionsMatrix.vue";
 
 const router = useRouter();
 const { t, locale } = useI18n();
-const { isSuperAdmin, authFetch, authPost, logout } = useAuth();
+const { isSuperAdmin, authFetch, authPost, logout, username } = useAuth();
 
 // === Accordion ===
-type SectionKey = "common" | "sessions" | "permissions";
-const open = ref<Record<SectionKey, boolean>>({ common: true, sessions: false, permissions: false });
+type SectionKey = "common" | "sessions" | "clients" | "permissions";
+const open = ref<Record<SectionKey, boolean>>({ common: true, sessions: false, clients: false, permissions: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
 
 // === Toast ===
@@ -146,7 +146,75 @@ async function revokeSession(id: string) {
   } catch { showToast(t("settings.sessions.revokeFailed"), "error"); }
 }
 
-onMounted(() => { loadFeatures(); loadSessions(); });
+// === Subsonic client credentials ===
+interface Credential { id: string; label: string; lastUsed: number; createdAt: number; }
+const credentials = ref<Credential[]>([]);
+const credLoading = ref(true);
+const credError = ref("");
+const credLabel = ref("");
+const credBusy = ref(false);
+const issued = ref<{ password: string; label: string } | null>(null);
+const serverUrl = window.location.origin;
+
+async function loadCredentials() {
+  credLoading.value = true;
+  credError.value = "";
+  try {
+    const xml = await authFetch("getCredentials");
+    if (/status="failed"/.test(xml)) throw new Error("rejected");
+    credentials.value = parseXmlAttrs(xml, "credential").map((r) => ({
+      id: r.id || "",
+      label: r.label || "",
+      lastUsed: parseInt(r.lastUsed || "0"),
+      createdAt: parseInt(r.createdAt || "0"),
+    }));
+  } catch {
+    credentials.value = [];
+    credError.value = t("settings.clients.loadFailed");
+  }
+  credLoading.value = false;
+}
+
+function genPassword(): string {
+  // unambiguous alphanumerics; 20 chars ≈ 119 bits of entropy
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const buf = new Uint32Array(20);
+  crypto.getRandomValues(buf);
+  return Array.from(buf, (v) => chars[v % chars.length]).join("");
+}
+
+async function createCredential() {
+  credBusy.value = true;
+  const password = genPassword();
+  const label = credLabel.value.trim();
+  try {
+    const xml = await authPost("createCredential", { password, label });
+    if (/status="failed"/.test(xml)) throw new Error("rejected");
+    issued.value = { password, label };
+    credLabel.value = "";
+    await loadCredentials();
+  } catch {
+    showToast(t("settings.clients.loadFailed"), "error");
+  }
+  credBusy.value = false;
+}
+
+async function deleteCredential(id: string) {
+  if (!confirm(t("settings.sessions.confirmRevoke"))) return;
+  try {
+    const xml = await authPost("deleteCredential", { id });
+    if (/status="failed"/.test(xml)) throw new Error("rejected");
+    if (issued.value) issued.value = null;
+    await loadCredentials();
+  } catch { showToast(t("settings.clients.loadFailed"), "error"); }
+}
+
+async function copyText(text: string) {
+  try { await navigator.clipboard.writeText(text); showToast(t("common.copied")); }
+  catch { showToast(t("settings.common.copyFailed"), "error"); }
+}
+
+onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
 </script>
 
 <template>
@@ -279,6 +347,82 @@ onMounted(() => { loadFeatures(); loadSessions(); });
       <div class="corner corner-br"></div>
     </section>
 
+    <!-- ============ SUBSONIC CLIENTS ============ -->
+    <section class="settings-section card" :class="{ open: open.clients }">
+      <button class="section-header" @click="toggleSection('clients')">
+        <span class="section-title">{{ t("settings.clients.title") }}</span>
+        <span class="section-caret">{{ open.clients ? "−" : "+" }}</span>
+      </button>
+
+      <div v-show="open.clients" class="section-body">
+        <p class="feature-desc section-desc">{{ t("settings.clients.desc") }}</p>
+
+        <!-- Issue form -->
+        <div class="cred-create">
+          <input
+            v-model="credLabel"
+            class="form-input cred-label-input"
+            :placeholder="t('settings.clients.labelPlaceholder')"
+            @keydown.enter="createCredential"
+          />
+          <button class="btn-primary" :disabled="credBusy" @click="createCredential">{{ t("settings.clients.create") }}</button>
+        </div>
+
+        <!-- One-time reveal of the issued credential -->
+        <div v-if="issued" class="issued-panel">
+          <div class="issued-title">{{ t("settings.clients.createdTitle") }}</div>
+          <div class="issued-row">
+            <span class="mono-label">{{ t("settings.clients.server") }}</span>
+            <code class="issued-value">{{ serverUrl }}</code>
+            <button class="btn-secondary btn-sm" @click="copyText(serverUrl)">{{ t("common.copy") }}</button>
+          </div>
+          <div class="issued-row">
+            <span class="mono-label">{{ t("settings.clients.username") }}</span>
+            <code class="issued-value">{{ username }}</code>
+            <button class="btn-secondary btn-sm" @click="copyText(username)">{{ t("common.copy") }}</button>
+          </div>
+          <div class="issued-row">
+            <span class="mono-label">{{ t("settings.clients.password") }}</span>
+            <code class="issued-value">{{ issued.password }}</code>
+            <button class="btn-secondary btn-sm" @click="copyText(issued.password)">{{ t("common.copy") }}</button>
+          </div>
+        </div>
+
+        <div v-if="credLoading" class="empty-state">{{ t("common.loading") }}</div>
+
+        <div v-else-if="credError" class="error-panel">
+          <span class="status-badge error">{{ t("settings.common.apiError") }}</span>
+          <p class="error-text">{{ credError }}</p>
+          <button class="btn-secondary btn-sm" @click="loadCredentials">{{ t("common.retry") }}</button>
+        </div>
+
+        <div v-else-if="!credentials.length" class="empty-state">
+          <div class="empty-state-icon">◌</div>
+          <div>{{ t("settings.clients.empty") }}</div>
+        </div>
+
+        <div v-else class="table-wrap session-table" style="--grid-cols: 1fr 1.4fr 1fr 1fr auto">
+          <div class="table-header">
+            <span>ID</span>
+            <span>{{ t("settings.clients.colLabel") }}</span>
+            <span>{{ t("settings.clients.colCreated") }}</span>
+            <span>{{ t("settings.clients.colLastUsed") }}</span>
+            <span></span>
+          </div>
+          <div v-for="cr in credentials" :key="cr.id" class="table-row">
+            <span class="session-id" :title="cr.id">{{ cr.id }}</span>
+            <span class="session-ua">{{ cr.label || "—" }}</span>
+            <span class="session-time">{{ formatTs(cr.createdAt) }}</span>
+            <span class="session-time">{{ cr.lastUsed ? formatTs(cr.lastUsed) : t("settings.clients.never") }}</span>
+            <span><button class="btn-danger btn-sm" @click="deleteCredential(cr.id)">{{ t("common.delete") }}</button></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="corner corner-tl"></div>
+      <div class="corner corner-br"></div>
+    </section>
+
     <!-- ============ PERMISSIONS ============ -->
     <section class="settings-section card" :class="{ open: open.permissions }">
       <button class="section-header" @click="toggleSection('permissions')">
@@ -382,6 +526,36 @@ onMounted(() => { loadFeatures(); loadSessions(); });
 }
 .session-ua { color: var(--color-text-secondary); }
 .session-time { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); white-space: nowrap; }
+
+/* --- Subsonic clients --- */
+.cred-create { display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.cred-label-input { flex: 1; min-width: 220px; }
+.issued-panel {
+  border: 1px solid var(--color-accent-primary);
+  background: var(--color-bg-primary);
+  padding: 0.9rem 1rem;
+  margin-bottom: 1rem;
+  display: flex; flex-direction: column; gap: 0.55rem;
+}
+.issued-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-accent-primary);
+}
+.issued-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
+.issued-row .mono-label { min-width: 80px; }
+.issued-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  padding: 0.25rem 0.6rem;
+  user-select: all;
+}
 
 .error-panel { display: flex; flex-direction: column; align-items: flex-start; gap: 0.7rem; padding: 0.5rem 0; }
 .error-text { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); }

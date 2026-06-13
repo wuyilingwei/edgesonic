@@ -23,12 +23,13 @@ export const adminRoutes = new Hono<{ Bindings: Env; Variables: { user: import("
 adminRoutes.get("/rest/getStorageSources", permissionMiddleware("manage_sources"), async (c) => {
   const db = (c.env as Env).DB;
   const result = await db.prepare("SELECT * FROM storage_sources ORDER BY created_at ASC").all<{
-    id: string; type: string; base_url: string; username: string | null;
+    id: string; type: string; name: string; base_url: string; username: string | null;
     root_path: string | null; last_sync: number | null; enabled: number;
   }>();
   const sources = result.results.map((s) => ({
     _attributes: {
-      id: s.id, type: s.type, baseUrl: s.base_url,
+      id: s.id, type: s.type, name: s.name ?? "",
+      baseUrl: s.base_url,
       rootPath: s.root_path ?? "",
       username: s.username ?? "", enabled: String(!!s.enabled),
       lastSync: s.last_sync ? String(s.last_sync) : "0",
@@ -40,7 +41,7 @@ adminRoutes.get("/rest/getStorageSources", permissionMiddleware("manage_sources"
 });
 
 adminRoutes.post("/rest/addStorageSource", permissionMiddleware("manage_sources"), async (c) => {
-  const body = await c.req.json<{ type: string; base_url: string; username?: string; password?: string; root_path?: string }>();
+  const body = await c.req.json<{ type: string; base_url: string; name?: string; username?: string; password?: string; root_path?: string }>();
   if (!body.type || !body.base_url) {
     return c.text(subsonicError(0, "Missing type or base_url"), 400, {
       "Content-Type": "application/xml; charset=UTF-8",
@@ -50,14 +51,14 @@ adminRoutes.post("/rest/addStorageSource", permissionMiddleware("manage_sources"
   const id = crypto.randomUUID().substring(0, 8);
   const now = Math.floor(Date.now() / 1000);
   await db.prepare(
-    "INSERT INTO storage_sources (id, type, base_url, username, password, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
-  ).bind(id, body.type, body.base_url, body.username || null, body.password || null, body.root_path || "", now, now).run();
+    "INSERT INTO storage_sources (id, type, name, base_url, username, password, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+  ).bind(id, body.type, body.name || "", body.base_url, body.username || null, body.password || null, body.root_path || "", now, now).run();
   return c.text(subsonicOK({}), 200, { "Content-Type": "application/xml; charset=UTF-8" });
 });
 
 adminRoutes.post("/rest/updateStorageSource", permissionMiddleware("manage_sources"), async (c) => {
   const body = await c.req.json<{
-    id: string; base_url?: string; username?: string; password?: string;
+    id: string; name?: string; base_url?: string; username?: string; password?: string;
     root_path?: string; enabled?: number;
   }>();
   if (!body.id) {
@@ -68,6 +69,7 @@ adminRoutes.post("/rest/updateStorageSource", permissionMiddleware("manage_sourc
   const db = (c.env as Env).DB;
   const sets: string[] = [];
   const binds: unknown[] = [];
+  if (body.name !== undefined) { sets.push("name = ?"); binds.push(body.name); }
   if (body.base_url !== undefined) { sets.push("base_url = ?"); binds.push(body.base_url); }
   if (body.username !== undefined) { sets.push("username = ?"); binds.push(body.username || null); }
   if (body.password !== undefined && body.password !== "") { sets.push("password = ?"); binds.push(body.password); }

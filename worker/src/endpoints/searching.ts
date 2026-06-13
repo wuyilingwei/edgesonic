@@ -21,12 +21,8 @@ import { mapArtist, mapAlbum, mapSong } from "../types/subsonic";
 export const searchRoutes = new Hono();
 
 searchRoutes.get("/rest/search3", async (c) => {
+  // Empty query = full listing (Navidrome-compatible) — the web Songs view relies on it
   const query = c.req.query("query") || "";
-  if (!query) {
-    return c.text(subsonicOK({ searchResult3: {} }), 200, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
-  }
 
   const artistCount = parseInt(c.req.query("artistCount") || "20", 10);
   const artistOffset = parseInt(c.req.query("artistOffset") || "0", 10);
@@ -43,9 +39,15 @@ searchRoutes.get("/rest/search3", async (c) => {
   return c.text(
     subsonicOK({
       searchResult3: {
-        artist: result.artists.map(mapArtist),
-        album: result.albums.map((a) => mapAlbum(a)),
-        song: result.songs.map((s) => mapSong(s, s.album_id)),
+        artist: result.artists.map((a) => ({ _attributes: mapArtist(a) as unknown as Record<string, string> })),
+        album: result.albums.map((a) => ({ _attributes: mapAlbum(a) as unknown as Record<string, string> })),
+        song: result.songs.map((s) => ({
+          _attributes: {
+            ...(mapSong(s, s.album_id) as unknown as Record<string, string>),
+            artist: s.artist_name ?? undefined,
+            album: s.album_name ?? undefined,
+          },
+        })),
       },
     }),
     200,

@@ -53,6 +53,7 @@ export function createSubsonicAdapter(db: D1Database, opts: SubsonicAdapterOptio
         contentLength: parseInt(resp.headers.get("Content-Length") || "0", 10) || null,
         contentType: resp.headers.get("Content-Type") || "application/octet-stream",
         acceptRanges: resp.headers.get("Accept-Ranges") === "bytes",
+        contentRange: resp.headers.get("Content-Range"),
       };
     },
   };

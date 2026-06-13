@@ -14,31 +14,46 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
-import { useAuth, parseXmlAttrs, formatDuration } from "../api";
+import { useAuth, parseXmlAttrs, formatSize } from "../api";
 
 const { t } = useI18n();
 const { authFetch, authPost, uploadFile, level } = useAuth();
 
-// File browser state
-const artists = ref<Array<{ id: string; name: string }>>([]);
-const albums = ref<Array<{ id: string; name: string; year: string }>>([]);
-const songs = ref<Array<{ id: string; title: string; artist: string; album: string; suffix: string; duration: string; track: string; genre: string }>>([]);
-const currentArtist = ref("");
-const currentAlbum = ref("");
-const loading = ref(false);
+interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
+interface DirEntry { name: string; }
+interface FileEntry { name: string; size: number; contentType: string | null; uri: string; }
 
-// Tag editing state
-const editingSong = ref<string | null>(null);
-const editForm = ref({ title: "", artist: "", album: "", genre: "", track: "" });
+// Source selector state
+const sources = ref<StorageSource[]>([]);
+const currentSource = ref("r2");
+
+// Browser state
+const path = ref("music");
+const dirs = ref<DirEntry[]>([]);
+const files = ref<FileEntry[]>([]);
+const loading = ref(false);
 
 // Upload state
 const showUpload = ref(false);
-const uploadTarget = ref("r2");
 const uploadFileRef = ref<File | null>(null);
+const uploadInput = ref<HTMLInputElement | null>(null);
+const uploadBusy = ref(false);
 const uploadMsg = ref("");
 const uploadErr = ref(false);
+
+// Tag scan state
+const scanning = ref(false);
+const scanProcessed = ref(0);
+const scanRemaining = ref<number | null>(null);
+
+// R2 file operations state
+const renamingFile = ref<string | null>(null); // file name currently being renamed
+const renameInput = ref("");
+const opModal = ref<{ file: FileEntry; mode: "move" | "copy" } | null>(null);
+const opDestInput = ref("");
+const opBusy = ref(false);
 
 // Toast
 const toast = ref({ show: false, msg: "", type: "success" });
@@ -47,57 +62,69 @@ function showToast(msg: string, type = "success") {
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-async function loadArtists() {
+const canUpload = computed(() => level.value >= 2);
+const canScan = computed(() => level.value >= 2);
+const isR2 = computed(() => currentSource.value === "r2");
+const crumbs = computed(() => (path.value ? path.value.split("/") : []));
+const uploadTarget = computed(() => (currentSource.value === "r2" ? "r2" : "webdav"));
+
+function shortUrl(u: string): string {
+  try { return new URL(u).host; } catch { return u; }
+}
+
+function sourceLabel(id: string): string {
+  if (id === "r2") return "R2";
+  const s = sources.value.find((x) => x.id === id);
+  if (!s) return id;
+  return s.name || `${s.type.toUpperCase()} · ${shortUrl(s.baseUrl)}`;
+}
+
+// R2 key from a FileEntry URI
+function r2Key(f: FileEntry): string {
+  return f.uri.startsWith("r2://") ? f.uri.slice(5) : f.uri;
+}
+
+async function loadSources() {
+  try {
+    const xml = await authFetch("getStorageSources");
+    sources.value = parseXmlAttrs(xml, "source")
+      .filter((s) => s.enabled === "true" || s.enabled === "1")
+      .map((s) => ({ id: s.id || "", type: s.type || "", name: s.name || "", baseUrl: s.baseUrl || "" }));
+  } catch { sources.value = []; }
+}
+
+async function loadDir() {
   loading.value = true;
+  renamingFile.value = null;
   try {
-    const xml = await authFetch("getArtists");
-    artists.value = parseXmlAttrs(xml, "artist").map((a) => ({ id: a.id || "", name: a.name || "" }));
-  } catch { artists.value = []; }
-  loading.value = false;
+    const text = await authFetch("listFiles", { source: currentSource.value, path: path.value });
+    const data = JSON.parse(text);
+    if (data.ok !== true) throw new Error(data.error || "list failed");
+    dirs.value = (data.dirs || []).slice().sort((a: DirEntry, b: DirEntry) => a.name.localeCompare(b.name));
+    files.value = (data.files || []).slice().sort((a: FileEntry, b: FileEntry) => a.name.localeCompare(b.name));
+  } catch {
+    dirs.value = [];
+    files.value = [];
+    showToast(t("files.loadFailed"), "error");
+  } finally {
+    loading.value = false;
+  }
 }
 
-async function selectArtist(id: string) {
-  currentArtist.value = id; currentAlbum.value = ""; songs.value = []; loading.value = true;
-  try {
-    const xml = await authFetch("getArtist", { id });
-    albums.value = parseXmlAttrs(xml, "album").map((a) => ({
-      id: a.id || "", name: a.name || a.title || "", year: a.year || "",
-    }));
-  } catch { albums.value = []; }
-  loading.value = false;
+function selectSource(id: string) {
+  currentSource.value = id;
+  path.value = id === "r2" ? "music" : "";
+  loadDir();
 }
 
-async function selectAlbum(id: string) {
-  currentAlbum.value = id; loading.value = true;
-  try {
-    const xml = await authFetch("getAlbum", { id });
-    songs.value = parseXmlAttrs(xml, "song").map((s) => ({
-      id: s.id || "", title: s.title || "", artist: s.artist || "",
-      album: s.album || "", suffix: s.suffix || "",
-      duration: s.duration || "0", track: s.track || "", genre: s.genre || "",
-    }));
-  } catch { songs.value = []; }
-  loading.value = false;
+function enterDir(name: string) {
+  path.value = path.value ? `${path.value}/${name}` : name;
+  loadDir();
 }
 
-function downloadSong(song: { id: string; title: string; suffix: string }) {
-  const { restUrl } = useAuth();
-  const a = document.createElement("a");
-  a.href = restUrl("download", { id: song.id });
-  a.download = `${song.title}.${song.suffix}`; a.click();
-  showToast(t("files.downloading", { title: song.title }));
-}
-
-function startEdit(song: { id: string; title: string; artist: string; album: string; genre: string; track: string }) {
-  editingSong.value = song.id;
-  editForm.value = { title: song.title, artist: song.artist, album: song.album, genre: song.genre, track: song.track };
-}
-function cancelEdit() { editingSong.value = null; }
-
-async function saveEdit() {
-  if (!editingSong.value) return;
-  try { await authPost("updateUser", { username: "meta_update" }); showToast(t("files.tagsUpdated")); editingSong.value = null; if (currentAlbum.value) selectAlbum(currentAlbum.value); }
-  catch { showToast(t("files.tagsFailed"), "error"); }
+function goCrumb(index: number) {
+  path.value = index < 0 ? "" : crumbs.value.slice(0, index + 1).join("/");
+  loadDir();
 }
 
 function onUploadFile(e: Event) {
@@ -107,17 +134,120 @@ function onUploadFile(e: Event) {
 
 async function doUpload() {
   if (!uploadFileRef.value) { uploadMsg.value = t("files.selectFileFirst"); uploadErr.value = true; return; }
+  uploadBusy.value = true;
   uploadMsg.value = t("files.uploading");
   uploadErr.value = false;
-  try { await uploadFile(uploadFileRef.value, uploadTarget.value); showToast(t("files.uploaded")); uploadFileRef.value = null; showUpload.value = false; uploadMsg.value = ""; }
-  catch { uploadMsg.value = t("files.uploadFailed"); uploadErr.value = true; showToast(t("files.uploadFailed"), "error"); }
+  try {
+    await uploadFile(uploadFileRef.value, uploadTarget.value, path.value || undefined);
+    showToast(t("files.uploaded"));
+    uploadFileRef.value = null;
+    if (uploadInput.value) uploadInput.value.value = "";
+    uploadMsg.value = "";
+    loadDir();
+  } catch {
+    uploadMsg.value = t("files.uploadFailed");
+    uploadErr.value = true;
+    showToast(t("files.uploadFailed"), "error");
+  } finally {
+    uploadBusy.value = false;
+  }
 }
 
-const canEdit = computed(() => level.value >= 2);
-const canUpload = computed(() => level.value >= 2);
-const canDownload = computed(() => level.value >= 1);
+async function runTagScan() {
+  if (scanning.value) return;
+  scanning.value = true;
+  scanProcessed.value = 0;
+  scanRemaining.value = null;
+  let totalTagged = 0;
+  try {
+    for (;;) {
+      const text = await authFetch("scanTags", { batch: "4" });
+      const data = JSON.parse(text);
+      if (data.ok !== true) { showToast(t("files.scanFailed"), "error"); return; }
+      scanProcessed.value += data.processed || 0;
+      totalTagged += data.tagged || 0;
+      scanRemaining.value = data.remaining ?? 0;
+      if (!data.remaining) break;
+    }
+    showToast(t("files.scanDone", { tagged: totalTagged }));
+  } catch {
+    showToast(t("files.scanFailed"), "error");
+  } finally {
+    scanning.value = false;
+    scanRemaining.value = null;
+  }
+}
 
-onMounted(loadArtists);
+// ── R2 file operations ──────────────────────────────────────────────────────
+
+function startRename(f: FileEntry) {
+  renamingFile.value = f.name;
+  renameInput.value = f.name;
+}
+
+function cancelRename() {
+  renamingFile.value = null;
+  renameInput.value = "";
+}
+
+async function confirmRename(f: FileEntry) {
+  const newName = renameInput.value.trim();
+  if (!newName || newName === f.name) { cancelRename(); return; }
+  const fromKey = r2Key(f);
+  const dir = path.value ? path.value + "/" : "";
+  const toKey = dir + newName;
+  opBusy.value = true;
+  try {
+    const res = await authPost("files/move", { key: fromKey, dest: toKey });
+    if (!JSON.parse(res).ok) throw new Error();
+    showToast(t("files.renamed"));
+    loadDir();
+  } catch { showToast(t("files.opFailed"), "error"); }
+  finally { opBusy.value = false; cancelRename(); }
+}
+
+function openMoveModal(f: FileEntry, mode: "move" | "copy") {
+  opModal.value = { file: f, mode };
+  opDestInput.value = path.value;
+}
+
+function closeOpModal() { opModal.value = null; opDestInput.value = ""; }
+
+async function confirmOp() {
+  if (!opModal.value) return;
+  const { file, mode } = opModal.value;
+  const destDir = opDestInput.value.replace(/\/$/, "");
+  const fromKey = r2Key(file);
+  const toKey = (destDir ? destDir + "/" : "") + file.name;
+  opBusy.value = true;
+  try {
+    const endpoint = mode === "move" ? "files/move" : "files/copy";
+    const res = await authPost(endpoint, { key: fromKey, dest: toKey });
+    if (!JSON.parse(res).ok) throw new Error();
+    showToast(mode === "move" ? t("files.moved") : t("files.copied"));
+    closeOpModal();
+    loadDir();
+  } catch { showToast(t("files.opFailed"), "error"); }
+  finally { opBusy.value = false; }
+}
+
+async function deleteFile(f: FileEntry) {
+  if (!confirm(t("files.deleteConfirm", { name: f.name }))) return;
+  const key = r2Key(f);
+  opBusy.value = true;
+  try {
+    const res = await authPost("files/delete", { key });
+    if (!JSON.parse(res).ok) throw new Error();
+    showToast(t("files.deleted"));
+    loadDir();
+  } catch { showToast(t("files.opFailed"), "error"); }
+  finally { opBusy.value = false; }
+}
+
+onMounted(async () => {
+  await loadSources();
+  loadDir();
+});
 </script>
 
 <template>
@@ -128,86 +258,105 @@ onMounted(loadArtists);
         <h1 class="page-title">{{ t("files.title") }}</h1>
       </div>
       <div class="page-actions">
+        <span v-if="scanning" class="scan-progress">{{ t("files.scanProgress", { processed: scanProcessed, remaining: scanRemaining ?? "…" }) }}</span>
+        <button v-if="canScan" class="btn-secondary" :disabled="scanning" @click="runTagScan">{{ t("files.scanTags") }}</button>
         <button v-if="canUpload" class="btn-primary" @click="showUpload = !showUpload">{{ t("files.upload") }}</button>
       </div>
     </div>
 
-    <div v-if="showUpload" class="card upload-panel">
+    <div class="source-bar">
+      <span class="source-bar-label">{{ t("files.source") }}</span>
+      <button :class="['source-tab', { active: currentSource === 'r2' }]" @click="selectSource('r2')">R2</button>
+      <button
+        v-for="s in sources" :key="s.id"
+        :class="['source-tab', { active: currentSource === s.id }]"
+        @click="selectSource(s.id)"
+      >{{ s.name || `${s.type.toUpperCase()} · ${shortUrl(s.baseUrl)}` }}</button>
+    </div>
+
+    <div v-if="showUpload && canUpload" class="card upload-panel">
       <div class="card-header"><span class="card-title">{{ t("files.uploadFile") }}</span></div>
       <div class="form-row">
         <div class="form-group" style="flex:1">
           <label class="form-label">{{ t("files.target") }}</label>
-          <select v-model="uploadTarget" class="form-select"><option value="r2">R2</option><option value="webdav">WebDAV</option></select>
+          <div class="upload-dest">{{ sourceLabel(currentSource) }} : /{{ path }}</div>
         </div>
         <div class="form-group" style="flex:2">
           <label class="form-label">{{ t("files.file") }}</label>
-          <input type="file" accept="audio/*" class="form-input" @change="onUploadFile" />
+          <input ref="uploadInput" type="file" accept="audio/*" class="form-input" @change="onUploadFile" />
         </div>
-        <button class="btn-primary" @click="doUpload" :disabled="!uploadFileRef">{{ t("files.uploadBtn") }}</button>
+        <button class="btn-primary" :disabled="!uploadFileRef || uploadBusy" @click="doUpload">{{ t("files.uploadBtn") }}</button>
       </div>
       <p v-if="uploadMsg" :class="['upload-msg', { error: uploadErr }]">{{ uploadMsg }}</p>
       <div class="corner corner-tl"></div>
       <div class="corner corner-br"></div>
     </div>
 
-    <div class="browser">
-      <div class="browser-col">
-        <div class="col-header">{{ t("files.artists") }} <span class="count">{{ artists.length }}</span></div>
-        <div class="col-list">
-          <div v-if="loading && !artists.length" class="col-loading">{{ t("common.loading") }}</div>
-          <div v-for="a in artists" :key="a.id" :class="['col-item', { active: currentArtist === a.id }]" @click="selectArtist(a.id)">
-            <span class="col-item-text">{{ a.name }}</span>
-          </div>
-          <div v-if="!loading && !artists.length" class="empty-state">{{ t("files.noArtists") }}</div>
-        </div>
+    <div class="card browser-card">
+      <div class="breadcrumb">
+        <button class="crumb" :disabled="!path" @click="goCrumb(-1)">{{ t("files.root") }}</button>
+        <template v-for="(seg, i) in crumbs" :key="i">
+          <span class="crumb-sep">/</span>
+          <button class="crumb" :disabled="i === crumbs.length - 1" @click="goCrumb(i)">{{ seg }}</button>
+        </template>
+        <span class="browser-stats">{{ t("files.stats", { dirs: dirs.length, files: files.length }) }}</span>
       </div>
 
-      <div class="browser-col">
-        <div class="col-header">{{ t("files.albums") }} <span class="count">{{ albums.length }}</span></div>
-        <div class="col-list">
-          <div v-if="loading && !albums.length" class="col-loading">{{ t("common.loading") }}</div>
-          <div v-for="a in albums" :key="a.id" :class="['col-item', { active: currentAlbum === a.id }]" @click="selectAlbum(a.id)">
-            <div class="col-item-detail"><span class="col-item-text">{{ a.name }}</span><span class="col-item-meta">{{ a.year }}</span></div>
+      <div class="entry-list">
+        <div v-if="loading" class="list-loading">{{ t("common.loading") }}</div>
+        <template v-else>
+          <div v-for="d in dirs" :key="`d-${d.name}`" class="entry-row dir-row" @click="enterDir(d.name)">
+            <span class="entry-icon">📁</span>
+            <span class="entry-name">{{ d.name }}</span>
           </div>
-          <div v-if="!currentArtist" class="empty-state">{{ t("files.selectArtist") }}</div>
-          <div v-else-if="!loading && !albums.length" class="empty-state">{{ t("files.noAlbums") }}</div>
-        </div>
+          <div v-for="f in files" :key="`f-${f.name}`" class="entry-row file-row" :class="{ 'row-renaming': renamingFile === f.name }">
+            <span class="entry-icon file-icon">▪</span>
+            <!-- Rename: inline input -->
+            <template v-if="renamingFile === f.name">
+              <input
+                v-model="renameInput"
+                class="rename-input"
+                @keydown.enter="confirmRename(f)"
+                @keydown.escape="cancelRename"
+                autofocus
+              />
+              <button class="op-btn op-confirm" :disabled="opBusy" @click="confirmRename(f)">✓</button>
+              <button class="op-btn op-cancel" @click="cancelRename">✕</button>
+            </template>
+            <template v-else>
+              <span class="entry-name">{{ f.name }}</span>
+              <span class="entry-size">{{ formatSize(f.size) }}</span>
+              <!-- R2-only operations -->
+              <template v-if="isR2 && canUpload">
+                <button class="op-btn op-rename" :title="t('files.rename')" @click.stop="startRename(f)">✎</button>
+                <button class="op-btn op-move" :title="t('files.moveTo')" @click.stop="openMoveModal(f, 'move')">→</button>
+                <button class="op-btn op-copy" :title="t('files.copyTo')" @click.stop="openMoveModal(f, 'copy')">⊕</button>
+                <button class="op-btn op-delete" :title="t('files.deleteFile')" :disabled="opBusy" @click.stop="deleteFile(f)">✕</button>
+              </template>
+            </template>
+          </div>
+          <div v-if="!dirs.length && !files.length" class="empty-state">{{ t("files.empty") }}</div>
+        </template>
       </div>
+      <div class="corner corner-tr"></div>
+      <div class="corner corner-bl"></div>
+    </div>
 
-      <div class="browser-col songs-col">
-        <div class="col-header">{{ t("files.songs") }} <span class="count">{{ songs.length }}</span></div>
-        <div class="col-list">
-          <div v-if="!currentAlbum" class="empty-state">{{ t("files.selectAlbum") }}</div>
-          <div v-else-if="loading" class="col-loading">{{ t("common.loading") }}</div>
-          <div v-for="s in songs" :key="s.id" class="song-item">
-            <div class="song-main">
-              <div class="song-info">
-                <span class="song-track">{{ s.track ? s.track.padStart(2, "0") : "–" }}</span>
-                <div class="song-detail">
-                  <span class="song-title">{{ s.title }}</span>
-                  <span class="song-meta">{{ s.artist }} · {{ formatDuration(parseInt(s.duration)) }} · {{ s.suffix.toUpperCase() }}</span>
-                </div>
-              </div>
-              <div class="song-actions">
-                <button v-if="canDownload" class="btn-secondary btn-sm" :title="t('files.download')" @click="downloadSong(s)">DL</button>
-                <button v-if="canEdit" class="btn-secondary btn-sm" :title="t('files.editTags')" @click="startEdit(s)">TAG</button>
-              </div>
-            </div>
-            <div v-if="editingSong === s.id" class="tag-editor">
-              <div class="tag-grid">
-                <div class="form-group"><label class="form-label">{{ t("files.tagTitle") }}</label><input v-model="editForm.title" class="form-input" /></div>
-                <div class="form-group"><label class="form-label">{{ t("files.tagArtist") }}</label><input v-model="editForm.artist" class="form-input" /></div>
-                <div class="form-group"><label class="form-label">{{ t("files.tagAlbum") }}</label><input v-model="editForm.album" class="form-input" /></div>
-                <div class="form-group"><label class="form-label">{{ t("files.tagGenre") }}</label><input v-model="editForm.genre" class="form-input" /></div>
-                <div class="form-group"><label class="form-label">{{ t("files.tagTrack") }}</label><input v-model="editForm.track" class="form-input" style="width:80px" /></div>
-              </div>
-              <div class="tag-actions">
-                <button class="btn-primary btn-sm" @click="saveEdit">{{ t("common.save") }}</button>
-                <button class="btn-secondary btn-sm" @click="cancelEdit">{{ t("common.cancel") }}</button>
-              </div>
-            </div>
-          </div>
+    <!-- Move / Copy modal -->
+    <div v-if="opModal" class="modal-backdrop" @click.self="closeOpModal">
+      <div class="modal">
+        <div class="modal-title">{{ opModal.mode === "move" ? t("files.moveTo") : t("files.copyTo") }}: {{ opModal.file.name }}</div>
+        <div class="form-group" style="margin-top:0.75rem">
+          <label class="form-label">{{ t("files.destPath") }}</label>
+          <input v-model="opDestInput" class="form-input" placeholder="music/subfolder" @keydown.enter="confirmOp" @keydown.escape="closeOpModal" />
+          <span class="field-hint">{{ t("files.destPathHint") }}</span>
         </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeOpModal">{{ t("common.cancel") }}</button>
+          <button class="btn-primary" :disabled="opBusy" @click="confirmOp">{{ opModal.mode === "move" ? t("files.move") : t("files.copy") }}</button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
       </div>
     </div>
 
@@ -216,62 +365,156 @@ onMounted(loadArtists);
 </template>
 
 <style scoped>
-.files-page { max-width: 1400px; }
-.page-actions { display: flex; gap: 0.5rem; }
+.files-page { max-width: 1100px; }
+.page-actions { display: flex; gap: 0.5rem; align-items: center; }
+.scan-progress {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-accent-primary);
+  letter-spacing: 0.05em;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.source-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+.source-bar-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-right: 0.25rem;
+}
+.source-tab {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.05em;
+  padding: 0.4rem 0.9rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 2px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.1s;
+}
+.source-tab:hover { background: var(--color-bg-tertiary); color: var(--color-text-primary); }
+.source-tab.active {
+  background: var(--color-accent-dim);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+
 .upload-panel { margin-bottom: 1.25rem; }
+.upload-dest {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-accent-primary);
+  padding: 0.45rem 0;
+  word-break: break-all;
+}
 .upload-msg { font-family: var(--font-mono); font-size: var(--fs-sm); margin-top: 0.5rem; color: var(--color-status-success); }
 .upload-msg.error { color: var(--color-status-error); }
 
-.browser {
-  display: flex; gap: 1px;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 2px;
-  overflow: hidden;
-  background: var(--color-border-subtle);
-}
-.browser-col { flex: 1; background: var(--color-bg-secondary); min-width: 0; display: flex; flex-direction: column; }
-.songs-col { flex: 1.5; }
-.col-header {
+.browser-card { padding: 0; overflow: hidden; }
+.breadcrumb {
+  display: flex; align-items: center; gap: 0.3rem; flex-wrap: wrap;
   padding: 0.75rem 1rem;
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
-  color: var(--color-text-muted);
-  letter-spacing: 0.1em;
   border-bottom: 1px solid var(--color-border-subtle);
   background: var(--color-bg-primary);
-  display: flex; align-items: center; gap: 0.5rem;
 }
-.count { color: var(--color-text-secondary); }
-.col-list { flex: 1; overflow-y: auto; max-height: 60vh; }
-.col-loading {
-  padding: 1.25rem; text-align: center;
+.crumb {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.05em;
+  background: none; border: none; padding: 0;
+  color: var(--color-accent-primary);
+  cursor: pointer;
+}
+.crumb:hover { text-decoration: underline; }
+.crumb:disabled { color: var(--color-text-primary); cursor: default; text-decoration: none; }
+.crumb-sep { color: var(--color-text-muted); }
+.browser-stats {
+  margin-left: auto;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  letter-spacing: 0.08em;
+}
+
+.entry-list { max-height: 65vh; overflow-y: auto; }
+.list-loading {
+  padding: 1.5rem; text-align: center;
   font-family: var(--font-mono); font-size: var(--fs-sm);
   color: var(--color-text-muted);
   animation: pulse 2s ease-in-out infinite;
 }
-.col-item {
-  display: flex; align-items: center; gap: 0.6rem;
-  padding: 0.55rem 1rem;
-  cursor: pointer; transition: all 0.1s;
+.entry-row {
+  display: flex; align-items: center; gap: 0.7rem;
+  padding: 0.45rem 1rem;
   border-bottom: 1px solid var(--color-border-subtle);
   border-left: 2px solid transparent;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
 }
-.col-item:hover { background: var(--color-bg-tertiary); }
-.col-item.active { background: var(--color-accent-dim); color: var(--color-accent-primary); border-left-color: var(--color-accent-primary); }
-.col-item-text { font-size: var(--fs-md); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.col-item-detail { min-width: 0; }
-.col-item-meta { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); display: block; }
+.entry-row:last-child { border-bottom: none; }
+.dir-row { cursor: pointer; transition: all 0.1s; }
+.dir-row:hover {
+  background: var(--color-bg-tertiary);
+  border-left-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+.row-renaming { background: var(--color-bg-tertiary); border-left-color: var(--color-accent-primary); }
+.entry-icon { flex-shrink: 0; }
+.file-icon { color: var(--color-text-muted); }
+.entry-name {
+  min-width: 0; flex: 1;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: var(--color-text-primary);
+}
+.dir-row:hover .entry-name { color: var(--color-accent-primary); }
+.entry-size { flex-shrink: 0; font-size: var(--fs-xs); color: var(--color-text-muted); }
+.empty-state { padding: 2rem; text-align: center; }
 
-.song-item { border-bottom: 1px solid var(--color-border-subtle); }
-.song-main { display: flex; align-items: center; justify-content: space-between; padding: 0.6rem 1rem; }
-.song-info { display: flex; align-items: center; gap: 0.8rem; min-width: 0; flex: 1; }
-.song-track { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); width: 24px; text-align: right; flex-shrink: 0; }
-.song-detail { min-width: 0; }
-.song-title { font-size: var(--fs-md); color: var(--color-text-primary); display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.song-meta { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); }
-.song-actions { display: flex; gap: 0.3rem; flex-shrink: 0; }
+/* R2 operation buttons */
+.op-btn {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 2px;
+  padding: 0.15rem 0.45rem;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  color: var(--color-text-muted);
+  opacity: 0;
+  transition: all 0.1s;
+  line-height: 1.4;
+}
+.entry-row:hover .op-btn { opacity: 1; }
+.op-btn:hover { color: var(--color-text-primary); border-color: var(--color-border-default); background: var(--color-bg-tertiary); }
+.op-delete:hover { color: var(--color-status-error); border-color: var(--color-status-error); }
+.op-confirm:hover { color: var(--color-status-success); border-color: var(--color-status-success); }
+.op-confirm, .op-cancel { opacity: 1; }
 
-.tag-editor { padding: 0.8rem 1rem; background: var(--color-bg-primary); border-top: 1px solid var(--color-border-subtle); }
-.tag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0.7rem; margin-bottom: 0.7rem; }
-.tag-actions { display: flex; gap: 0.5rem; }
+.rename-input {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-accent-primary);
+  border-radius: 2px;
+  padding: 0.2rem 0.5rem;
+  color: var(--color-text-primary);
+  outline: none;
+}
+
+.field-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
 </style>

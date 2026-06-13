@@ -60,11 +60,12 @@ function buildElement(key: string, value: unknown): string {
       }
     }
 
-    const childKeys = Object.keys(obj).filter((k) => k !== "_attributes");
-    if (childKeys.length === 0 && attrs) {
+    const childKeys = Object.keys(obj).filter((k) => k !== "_attributes" && k !== "_text");
+    if (childKeys.length === 0 && obj._text === undefined && attrs) {
       el += "/>";
     } else {
       el += ">";
+      if (obj._text !== undefined && obj._text !== null) el += esc(String(obj._text));
       for (const ck of childKeys) {
         el += buildElement(ck, obj[ck]);
       }
