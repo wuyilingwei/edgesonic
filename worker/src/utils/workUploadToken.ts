@@ -10,19 +10,32 @@
 // `work_queue.claimed_by === session.user.username` so even a leaked token
 // can only be redeemed by the worker that actually claimed the row.
 //
-// HMAC secret derivation — see findings.md decision: we currently use
-//   INSTANCE_ID + ':' + 'esp-upload-v1'
-// because wrangler.toml does not expose a MASTER_KEY today. Task 054 will
-// rotate this to a real wrangler secret; the API here is stable so callers
-// don't need to change.
+// HMAC secret derivation (updated 066) — preferred:
+//   env.WORK_UPLOAD_HMAC_KEY  (wrangler secret, ≥32 random bytes)
+// fallback (compatibility with 053-era deployments that haven't yet pushed
+// the secret):
+//   `${env.INSTANCE_ID}:${STATIC_SALT}`
+//
+// Production setup (one-time per environment):
+//   wrangler secret put WORK_UPLOAD_HMAC_KEY
+//   # paste e.g. `openssl rand -base64 48` on stdin
+//
+// Rotating the secret immediately invalidates all outstanding upload tokens
+// (TTL 5 min) — acceptable because work_queue rows survive and can be
+// re-issued. See worker/SECRETS.md for full guidance.
 
 const STATIC_SALT = "esp-upload-v1";
 const DEFAULT_TTL_SECONDS = 300;
 
-// Derive the HMAC key from the instance identity. Returns a CryptoKey ready
-// for sign / verify calls.
+// Derive the HMAC key. Returns a CryptoKey ready for sign / verify calls.
+// Empty/missing WORK_UPLOAD_HMAC_KEY falls back to the legacy salt so that
+// service does not break during the deployment window before the secret is
+// pushed.
 async function deriveKey(env: Env): Promise<CryptoKey> {
-  const material = `${env.INSTANCE_ID}:${STATIC_SALT}`;
+  const secret = env.WORK_UPLOAD_HMAC_KEY;
+  const material = secret && secret.length > 0
+    ? secret
+    : `${env.INSTANCE_ID}:${STATIC_SALT}`;
   return crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(material),

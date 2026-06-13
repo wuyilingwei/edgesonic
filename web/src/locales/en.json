@@ -197,7 +197,27 @@
     "tidyFailed": "Tidy failed",
     "tidyFrom": "From",
     "tidyTo": "To",
-    "tidySkipped": "Skipped: {reason}"
+    "tidySkipped": "Skipped: {reason}",
+    "workQueue": {
+      "title": "Worker Queue",
+      "progress": "Parsed {completed} / {queued} pending",
+      "progressNoQueue": "Completed {completed} · failed {failed}",
+      "speed": "Speed: {speed}/min",
+      "speedPending": "Speed: measuring…",
+      "current": "Running: {type}",
+      "recent": "Recent tasks",
+      "pause": "Pause",
+      "resume": "Resume",
+      "paused": "Paused — already-claimed tasks will finish",
+      "failed": "Failed queue ({n})",
+      "failedEmpty": "No failed tasks",
+      "failedRow": "{type} · {error}",
+      "cancel": "Cancel",
+      "canceled": "Task canceled",
+      "cancelFailed": "Cancel failed",
+      "statusLoadFailed": "Failed to load queue status",
+      "refresh": "Refresh"
+    }
   },
   "users": {
     "label": "// MANAGEMENT",
@@ -227,6 +247,19 @@
       "user": "User",
       "admin": "Admin",
       "super": "Super Admin"
+    },
+    "avatar": {
+      "title": "Avatar",
+      "current": "Current avatar",
+      "upload": "Upload image",
+      "clear": "Clear selection",
+      "change": "Change avatar",
+      "tooLarge": "Image too large (>500KB)",
+      "invalidMime": "Only JPEG or PNG allowed",
+      "uploaded": "Avatar updated",
+      "uploadFailed": "Avatar upload failed",
+      "noAvatar": "Not set",
+      "open": "Manage avatar"
     }
   },
   "transcoder": {
@@ -491,6 +524,34 @@
     "scan": "Scan",
     "scanning": "Scanning…",
     "scanDone": "Scan complete: {found} files found, {added} added",
-    "scanFailed": "Scan failed"
+    "scanFailed": "Scan failed",
+    "scanStatus": {
+      "idle": "Scan",
+      "running": "Scanning ({scanned} / {total})",
+      "runningUnknown": "Scanning…",
+      "completed": "Done · {total} files · {relative}",
+      "failed": "Scan failed",
+      "retry": "Retry",
+      "history": "Scan history",
+      "historyEmpty": "No scan history yet",
+      "progress": "Progress",
+      "started": "Started",
+      "duration": "Duration",
+      "jobId": "Job ID",
+      "status": "Status",
+      "errorPrefix": "Error",
+      "startToast": "Scan started",
+      "expand": "Show history",
+      "collapse": "Hide",
+      "relative": {
+        "justNow": "just now",
+        "secondsAgo": "{n}s ago",
+        "minutesAgo": "{n}m ago",
+        "hoursAgo": "{n}h ago",
+        "daysAgo": "{n}d ago"
+      },
+      "durationSeconds": "{n}s",
+      "durationMinutes": "{n}m"
+    }
   }
 }

@@ -1,18 +1,155 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 
 const { t } = useI18n();
 const { isAdmin, storageFetch, storagePost } = useAuth();
 
-interface Source { id: string; type: string; name: string; base_url: string; username: string; rootPath: string; enabled: boolean; lastSync: string; }
+type ScanState = "idle" | "running" | "completed" | "failed";
+
+interface ScanJobSnapshot {
+  jobId: string;
+  status: ScanState;
+  total: number;
+  scanned: number;
+  startedAt: number;       // unix seconds
+  endedAt: number | null;
+  error: string | null;
+}
+
+interface Source {
+  id: string;
+  type: string;
+  name: string;
+  base_url: string;
+  username: string;
+  rootPath: string;
+  enabled: boolean;
+  lastSync: string;
+  // 060 — Last scan_jobs row snapshot for this source. Populated by
+  // pollScanStatus() so the action column can render idle/running/completed/
+  // failed without an extra round-trip per row.
+  scanStatus: ScanState;
+  scanJobId: string | null;
+  scanTotal: number;
+  scanScanned: number;
+  scanStartedAt: number;   // 0 = unknown
+  scanEndedAt: number | null;
+  scanError: string | null;
+}
 
 const sources = ref<Source[]>([]);
 const showForm = ref(false);
 const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "" });
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
+
+// === 060 — Scan polling + history ===
+// In-memory history: scan_jobs we've observed during this session. Keyed by
+// source id, capped at 5 entries (newest first). We deliberately don't add a
+// /storage/scan/history endpoint (task scope says "don't extend endpoints"),
+// so the array only grows from /storage/scan/status snapshots seen while the
+// page is mounted. That's enough for the common "user clicks scan → watches
+// progress" loop; cron-triggered scans that finish while the user is on
+// another page won't appear here.
+const HISTORY_CAP = 5;
+const scanHistory = ref<Record<string, ScanJobSnapshot[]>>({});
+const expandedSources = ref<Set<string>>(new Set());
+const pollHandle = ref<number | null>(null);
+const POLL_INTERVAL_MS = 3000;
+const STATUS_LAUNCHING = "__launching__"; // placeholder while scan/start hasn't yet returned
+const launching = ref<Set<string>>(new Set());
+
+const anyRunning = computed(() => sources.value.some((s) => s.scanStatus === "running") || launching.value.size > 0);
+
+function toggleHistory(id: string) {
+  const set = new Set(expandedSources.value);
+  if (set.has(id)) set.delete(id); else set.add(id);
+  expandedSources.value = set;
+}
+
+function recordHistory(sourceId: string, snap: ScanJobSnapshot) {
+  const list = scanHistory.value[sourceId] ? [...scanHistory.value[sourceId]] : [];
+  const existing = list.findIndex((j) => j.jobId === snap.jobId);
+  if (existing >= 0) {
+    list[existing] = snap;
+  } else {
+    list.unshift(snap);
+    if (list.length > HISTORY_CAP) list.length = HISTORY_CAP;
+  }
+  // Sort by startedAt desc so newly inserted jobs land at the top regardless
+  // of insert order (server-side ties are possible during fast retries).
+  list.sort((a, b) => b.startedAt - a.startedAt);
+  scanHistory.value = { ...scanHistory.value, [sourceId]: list };
+}
+
+function parseScanState(raw: string): ScanState {
+  if (raw === "running" || raw === "completed" || raw === "failed") return raw;
+  return "idle";
+}
+
+async function pollScanStatus() {
+  try {
+    const xml = await storageFetch("scan/status");
+    const rows = parseXmlAttrs(xml, "source");
+    if (!rows.length) return;
+    // Map source.id → latest job row
+    const byId = new Map<string, Record<string, string>>();
+    for (const r of rows) if (r.id) byId.set(r.id, r);
+
+    sources.value = sources.value.map((s) => {
+      const r = byId.get(s.id);
+      if (!r) return s;
+      const status = parseScanState(r.status || "idle");
+      const snap: ScanJobSnapshot = {
+        jobId: r.jobId || "",
+        status,
+        total: parseInt(r.total || "0", 10) || 0,
+        scanned: parseInt(r.scanned || "0", 10) || 0,
+        startedAt: parseInt(r.startedAt || "0", 10) || 0,
+        endedAt: r.endedAt ? parseInt(r.endedAt, 10) || null : null,
+        error: r.error || null,
+      };
+      if (snap.jobId) recordHistory(s.id, snap);
+      // If status flipped from running → completed, refresh last_sync.
+      const flippedDone = s.scanStatus === "running" && status === "completed";
+      if (flippedDone) {
+        // Best-effort: re-pull /sources/list in background to refresh lastSync.
+        load();
+      }
+      // Clear the launching marker once the server confirms a job exists.
+      if (snap.jobId) launching.value.delete(s.id);
+      return {
+        ...s,
+        scanStatus: status,
+        scanJobId: snap.jobId || s.scanJobId,
+        scanTotal: snap.total,
+        scanScanned: snap.scanned,
+        scanStartedAt: snap.startedAt || s.scanStartedAt,
+        scanEndedAt: snap.endedAt,
+        scanError: snap.error,
+      };
+    });
+  } catch {
+    // Network blip: keep current state, wait for next tick.
+  }
+}
+
+function startPolling() {
+  if (pollHandle.value !== null) return;
+  pollHandle.value = window.setInterval(async () => {
+    await pollScanStatus();
+    if (!anyRunning.value) stopPolling();
+  }, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+  if (pollHandle.value !== null) {
+    clearInterval(pollHandle.value);
+    pollHandle.value = null;
+  }
+}
 
 // === Edit modal ===
 const editing = ref<Source | null>(null);
@@ -44,12 +181,28 @@ async function saveEdit() {
 async function load() {
   try {
     const xml = await storageFetch("sources/list");
-    sources.value = parseXmlAttrs(xml, "source").map((s) => ({
-      id: s.id || "", type: s.type || "", name: s.name || "",
-      base_url: s.baseUrl || "", username: s.username || "", rootPath: s.rootPath || "",
-      enabled: s.enabled === "true" || s.enabled === "1",
-      lastSync: s.lastSync && s.lastSync !== "0" ? new Date(parseInt(s.lastSync) * 1000).toLocaleString() : "Never",
-    }));
+    const prevById = new Map(sources.value.map((s) => [s.id, s]));
+    sources.value = parseXmlAttrs(xml, "source").map((s) => {
+      const id = s.id || "";
+      const prev = prevById.get(id);
+      return {
+        id,
+        type: s.type || "",
+        name: s.name || "",
+        base_url: s.baseUrl || "",
+        username: s.username || "",
+        rootPath: s.rootPath || "",
+        enabled: s.enabled === "true" || s.enabled === "1",
+        lastSync: s.lastSync && s.lastSync !== "0" ? new Date(parseInt(s.lastSync) * 1000).toLocaleString() : "Never",
+        scanStatus: prev?.scanStatus ?? "idle",
+        scanJobId: prev?.scanJobId ?? null,
+        scanTotal: prev?.scanTotal ?? 0,
+        scanScanned: prev?.scanScanned ?? 0,
+        scanStartedAt: prev?.scanStartedAt ?? 0,
+        scanEndedAt: prev?.scanEndedAt ?? null,
+        scanError: prev?.scanError ?? null,
+      };
+    });
   } catch { sources.value = []; }
 }
 
@@ -64,24 +217,83 @@ async function deleteSource(id: string) {
   catch { showToast(t("sources.deleteFailed"), "error"); }
 }
 
-const scanning = ref<string | null>(null);
-
 async function scanSource(s: Source) {
-  scanning.value = s.id;
+  // 060 — flip to a launching placeholder so the row immediately shows a
+  // spinner instead of staying on "Scan". The 1st pollScanStatus() will
+  // replace this with the real running snapshot (jobs are inserted
+  // synchronously inside scan/start before the response returns, see
+  // worker/src/endpoints/storage/scan.ts:50-107).
+  launching.value.add(s.id);
+  // Optimistically mark the row as running so the badge updates without
+  // waiting for the next 3s tick.
+  sources.value = sources.value.map((x) => x.id === s.id
+    ? { ...x, scanStatus: "running" as ScanState, scanScanned: 0, scanTotal: 0, scanError: null }
+    : x);
   try {
     const xml = await storageFetch("scan/start", { id: s.id });
     const res = parseXmlAttrs(xml, "source")[0];
-    if (!res || res.error) throw new Error(res?.error || "scan failed");
-    showToast(t("sources.scanDone", { found: res.found || "0", added: res.added || "0" }));
-    load();
+    if (!res) throw new Error("no scan job created");
+    if (res.error) throw new Error(res.error);
+    showToast(t("sources.scanStatus.startToast"));
+    // Pull status right away so the X/Y counter starts moving.
+    await pollScanStatus();
+    startPolling();
   } catch (e) {
+    launching.value.delete(s.id);
+    sources.value = sources.value.map((x) => x.id === s.id
+      ? { ...x, scanStatus: "failed" as ScanState, scanError: e instanceof Error ? e.message : String(e) }
+      : x);
     showToast(t("sources.scanFailed") + (e instanceof Error && e.message !== "scan failed" ? `: ${e.message}` : ""), "error");
-  } finally {
-    scanning.value = null;
   }
 }
 
-onMounted(load);
+// --- Display helpers ---
+function relativeTime(ts: number): string {
+  if (!ts) return "";
+  const now = Math.floor(Date.now() / 1000);
+  const diff = Math.max(0, now - ts);
+  if (diff < 10) return t("sources.scanStatus.relative.justNow");
+  if (diff < 60) return t("sources.scanStatus.relative.secondsAgo", { n: diff });
+  if (diff < 3600) return t("sources.scanStatus.relative.minutesAgo", { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t("sources.scanStatus.relative.hoursAgo", { n: Math.floor(diff / 3600) });
+  return t("sources.scanStatus.relative.daysAgo", { n: Math.floor(diff / 86400) });
+}
+
+function formatDuration(startedAt: number, endedAt: number | null): string {
+  if (!startedAt) return "—";
+  const end = endedAt || Math.floor(Date.now() / 1000);
+  const diff = Math.max(0, end - startedAt);
+  if (diff < 60) return t("sources.scanStatus.durationSeconds", { n: diff });
+  return t("sources.scanStatus.durationMinutes", { n: Math.floor(diff / 60) });
+}
+
+function formatStarted(ts: number): string {
+  if (!ts) return "—";
+  return new Date(ts * 1000).toLocaleString();
+}
+
+function statusLabel(s: Source): string {
+  if (s.scanStatus === "running") {
+    if (s.scanTotal > 0) return t("sources.scanStatus.running", { scanned: s.scanScanned, total: s.scanTotal });
+    return t("sources.scanStatus.runningUnknown");
+  }
+  if (s.scanStatus === "completed") {
+    return t("sources.scanStatus.completed", {
+      total: s.scanTotal,
+      relative: relativeTime(s.scanEndedAt || s.scanStartedAt),
+    });
+  }
+  if (s.scanStatus === "failed") return t("sources.scanStatus.failed");
+  return t("sources.scanStatus.idle");
+}
+
+onMounted(async () => {
+  await load();
+  await pollScanStatus();
+  if (anyRunning.value) startPolling();
+});
+
+onUnmounted(stopPolling);
 </script>
 
 <template>
@@ -124,7 +336,24 @@ onMounted(load);
           <div class="source-right">
             <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
             <template v-if="isAdmin">
-              <button v-if="s.type === 'webdav'" class="btn-primary btn-sm" :disabled="scanning === s.id" @click="scanSource(s)">{{ scanning === s.id ? t("sources.scanning") : t("sources.scan") }}</button>
+              <!-- 060: scan action column -->
+              <template v-if="s.type === 'webdav'">
+                <span v-if="s.scanStatus === 'running'" class="scan-pill scan-pill-running" :title="t('sources.scanStatus.progress')">
+                  <span class="scan-spinner" aria-hidden="true"></span>
+                  <span class="scan-pill-text">{{ statusLabel(s) }}</span>
+                </span>
+                <span v-else-if="s.scanStatus === 'completed'" class="scan-pill scan-pill-completed" :title="t('sources.scanStatus.completed', { total: s.scanTotal, relative: relativeTime(s.scanEndedAt || s.scanStartedAt) })">
+                  <span class="scan-icon" aria-hidden="true">✓</span>
+                  <span class="scan-pill-text">{{ statusLabel(s) }}</span>
+                  <button class="btn-secondary btn-sm" @click="scanSource(s)">{{ t("sources.scanStatus.idle") }}</button>
+                </span>
+                <span v-else-if="s.scanStatus === 'failed'" class="scan-pill scan-pill-failed" :title="s.scanError || ''">
+                  <span class="scan-icon" aria-hidden="true">✗</span>
+                  <span class="scan-pill-text">{{ s.scanError ? `${t('sources.scanStatus.failed')} — ${s.scanError}` : t("sources.scanStatus.failed") }}</span>
+                  <button class="btn-primary btn-sm" @click="scanSource(s)">{{ t("sources.scanStatus.retry") }}</button>
+                </span>
+                <button v-else class="btn-primary btn-sm" @click="scanSource(s)">{{ t("sources.scanStatus.idle") }}</button>
+              </template>
               <button class="btn-secondary btn-sm" @click="openEdit(s)">{{ t("common.edit") }}</button>
               <button class="btn-danger btn-sm" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
             </template>
@@ -139,6 +368,39 @@ onMounted(load);
           <span v-if="s.rootPath">{{ t("sources.root") }}: {{ s.rootPath }}</span>
           <span v-if="s.lastSync !== 'Never'">{{ t("sources.lastSync") }}: {{ s.lastSync }}</span>
           <span v-else class="text-muted">{{ t("sources.notSynced") }}</span>
+        </div>
+        <!-- 060: scan history toggle (webdav only) -->
+        <div v-if="s.type === 'webdav'" class="scan-history-toggle">
+          <button class="link-button" @click="toggleHistory(s.id)">
+            {{ expandedSources.has(s.id) ? t("sources.scanStatus.collapse") : t("sources.scanStatus.expand") }}
+            <span class="mono-subtle">[{{ (scanHistory[s.id] || []).length }}]</span>
+          </button>
+        </div>
+        <div v-if="s.type === 'webdav' && expandedSources.has(s.id)" class="scan-history">
+          <div class="scan-history-title">{{ t("sources.scanStatus.history") }}</div>
+          <div v-if="!(scanHistory[s.id] && scanHistory[s.id].length)" class="scan-history-empty">{{ t("sources.scanStatus.historyEmpty") }}</div>
+          <table v-else class="scan-history-table">
+            <thead>
+              <tr>
+                <th>{{ t("sources.scanStatus.jobId") }}</th>
+                <th>{{ t("sources.scanStatus.status") }}</th>
+                <th>{{ t("sources.scanStatus.started") }}</th>
+                <th>{{ t("sources.scanStatus.progress") }}</th>
+                <th>{{ t("sources.scanStatus.duration") }}</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="j in scanHistory[s.id]" :key="j.jobId">
+                <td class="mono-cell">{{ j.jobId }}</td>
+                <td>
+                  <span :class="['status-badge', j.status === 'completed' ? 'success' : j.status === 'failed' ? 'error' : 'info']">{{ j.status }}</span>
+                </td>
+                <td class="mono-cell">{{ formatStarted(j.startedAt) }}</td>
+                <td class="mono-cell">{{ j.scanned }} / {{ j.total }}</td>
+                <td class="mono-cell">{{ formatDuration(j.startedAt, j.endedAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
         <div class="corner corner-tr"></div>
         <div class="corner corner-bl"></div>
@@ -219,4 +481,109 @@ onMounted(load);
   color: var(--color-text-muted);
 }
 .enabled-row { display: flex; align-items: center; gap: 0.8rem; }
+
+/* 060 — scan status pill (running/completed/failed) */
+.scan-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.05em;
+  border: 1px solid var(--color-border, rgba(255,255,255,0.12));
+  background: rgba(255, 255, 255, 0.03);
+}
+.scan-pill-text { white-space: nowrap; }
+.scan-pill-running {
+  color: var(--color-accent-primary);
+  border-color: var(--color-accent-primary);
+}
+.scan-pill-completed {
+  color: var(--color-success, #4ade80);
+  border-color: rgba(74, 222, 128, 0.4);
+}
+.scan-pill-failed {
+  color: var(--color-error, #f87171);
+  border-color: rgba(248, 113, 113, 0.4);
+}
+.scan-icon { font-weight: 700; }
+.scan-spinner {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: scanSpin 0.85s linear infinite;
+}
+@keyframes scanSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* 060 — history toggle + table */
+.scan-history-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.05em;
+  color: var(--color-accent-primary);
+  text-decoration: underline dotted;
+}
+.link-button:hover { color: var(--color-text-primary); }
+.mono-subtle {
+  margin-left: 0.3rem;
+  color: var(--color-text-muted);
+}
+.scan-history {
+  margin-top: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px dashed var(--color-border, rgba(255,255,255,0.12));
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+.scan-history-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.1em;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.4rem;
+}
+.scan-history-empty {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+}
+.scan-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.scan-history-table th,
+.scan-history-table td {
+  text-align: left;
+  padding: 0.25rem 0.4rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+.scan-history-table th {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.mono-cell {
+  font-family: var(--font-mono);
+  color: var(--color-text-primary);
+}
 </style>

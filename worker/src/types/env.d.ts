@@ -10,4 +10,9 @@ interface Env {
   // setup from the Settings page.
   CF_API_TOKEN?: string;
   CF_ACCOUNT_ID?: string;
+  // 066 — HMAC key for browser-pool upload tokens. Push via
+  //   wrangler secret put WORK_UPLOAD_HMAC_KEY
+  // (≥32 random bytes, e.g. `openssl rand -base64 48`). Unset → falls back
+  // to INSTANCE_ID + static salt; see worker/src/utils/workUploadToken.ts.
+  WORK_UPLOAD_HMAC_KEY?: string;
 }
