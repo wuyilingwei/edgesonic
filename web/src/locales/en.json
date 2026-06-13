@@ -786,5 +786,11 @@
     "songRemoved": "Removed",
     "songRemoveFailed": "Remove failed",
     "reorderFailed": "Reorder failed"
+  },
+  "update": {
+    "title": "Update available",
+    "message": "Refresh to load the latest features and fixes",
+    "refresh": "Refresh now",
+    "later": "Later"
   }
 }
