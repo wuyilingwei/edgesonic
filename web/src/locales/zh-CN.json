@@ -491,7 +491,15 @@
         "reclaimRunning": "回收中…",
         "reclaimDoneToast": "回收 {reclaimed} 条：重新入队 {requeued}，标记失败 {failed}",
         "reclaimFailed": "失败：{error}",
-        "reclaimHint": "若 Cron 已配置（Cloudflare 集成 → 当前调度非空），通常无需手动回收。"
+        "reclaimHint": "若 Cron 已配置（Cloudflare 集成 → 当前调度非空），通常无需手动回收。",
+        "resetFailedTitle": "重启失败任务",
+        "resetFailedDesc": "把 work_queue 中所有 status='failed' 的任务重置为 queued（attempts=0、清空 error / claimed_*），让浏览器节点重新派发。",
+        "resetFailedButton": "🔁 重启失败任务",
+        "resetFailedRunning": "重置中…",
+        "resetFailedDoneToast": "已重置 {reset} 条失败任务",
+        "resetFailedFailed": "失败：{error}",
+        "resetFailedHint": "建议先确认浏览器为最新版本（看顶部更新提示）后再重启失败任务，避免立即又失败。",
+        "resetFailedConfirm": "确认重启所有失败的工作任务？请先确保浏览器节点已升级到最新版本。"
       }
     },
     "sessions": {
@@ -550,7 +558,10 @@
       "colCreated": "创建时间",
       "colLastUsed": "最近使用",
       "never": "从未",
-      "loadFailed": "凭据加载失败"
+      "loadFailed": "凭据加载失败",
+      "labelEditPlaceholder": "点击编辑备注",
+      "labelSaved": "备注已更新",
+      "labelTooLong": "备注最长 200 字符"
     }
   },
   "sources": {
