@@ -383,6 +383,17 @@
         "saved": "已保存",
         "saveFailed": "保存失败"
       },
+      "crossOriginIsolation": {
+        "title": "跨域隔离 (COOP/COEP)",
+        "hint": "启用后浏览器获得 SharedArrayBuffer 能力，工作池可运行 ffmpeg.wasm 多线程编码。Worker 会给每个响应加 Cross-Origin-Opener-Policy: same-origin、Cross-Origin-Embedder-Policy: require-corp、Cross-Origin-Resource-Policy: same-origin。若有手工接入的跨源图片受影响，可关闭快速回滚。",
+        "toggleLabel": "启用隔离",
+        "toggleDesc": "关闭立即恢复 065 之前的 headers；开启后下一个响应生效（可能需要刷新页面才能翻 crossOriginIsolated 状态）。",
+        "live": "已生效",
+        "notLive": "未生效",
+        "save": "保存",
+        "saved": "跨域隔离已保存",
+        "saveFailed": "保存失败"
+      },
       "cf": {
         "title": "Cloudflare 集成",
         "desc": "通过 Cloudflare API 把 token 写入 Workers Secrets、动态修改 cron、读取 Worker 24h 分析数据。Token 始终留在 CF 自家密钥体系，不落 D1/KV。仅超级管理员可见。",
