@@ -319,6 +319,85 @@ onMounted(() => {
   else if (tab.value === "albums") loadMoreAlbums();
   else loadMoreSongs();
 });
+
+// ============================================================================
+// 061 — Share creation (song / album). Inline modal, no router push.
+//
+// Backend: GET /rest/createShare?id=<song|album>&description=&expires=<ms>
+// Returns: <shares><share id url description ...><entry .../></share></shares>
+//
+// We deliberately do NOT touch any of the rendering / playback / batch-edit
+// state above — 061's footprint is strictly additive (this block + a couple
+// of buttons in the template + a modal at the bottom).
+// ============================================================================
+const shareOpen = ref(false);
+const shareTarget = ref<{ kind: "song" | "album"; id: string; label: string } | null>(null);
+const shareDescription = ref("");
+const shareExpiresType = ref<"never" | "days" | "datetime">("never");
+const shareExpiresDays = ref(7);
+const shareExpiresAt = ref("");
+const shareBusy = ref(false);
+const shareError = ref("");
+const shareCreatedUrl = ref("");
+
+function openShare(kind: "song" | "album", id: string, label: string) {
+  shareTarget.value = { kind, id, label };
+  shareDescription.value = "";
+  shareExpiresType.value = "never";
+  shareExpiresDays.value = 7;
+  shareExpiresAt.value = "";
+  shareError.value = "";
+  shareCreatedUrl.value = "";
+  shareOpen.value = true;
+}
+function closeShare() {
+  shareOpen.value = false;
+  shareTarget.value = null;
+  shareCreatedUrl.value = "";
+}
+function shareFailed(xml: string): boolean { return /status="failed"/.test(xml); }
+function shareExtractError(xml: string): string | null {
+  const m = /<error[^>]+message="([^"]+)"/.exec(xml);
+  return m ? m[1] : null;
+}
+function shareExtractUrl(xml: string): string {
+  // <share id="..." url="https://host/share/xx" .../>
+  const m = /<share\s+[^>]*\burl="([^"]+)"/.exec(xml);
+  return m ? m[1].replace(/&amp;/g, "&") : "";
+}
+async function submitShare() {
+  if (!shareTarget.value) return;
+  shareBusy.value = true;
+  shareError.value = "";
+  shareCreatedUrl.value = "";
+  try {
+    const params: Record<string, string> = { id: shareTarget.value.id };
+    const desc = shareDescription.value.trim();
+    if (desc) params.description = desc;
+    if (shareExpiresType.value === "days") {
+      const d = Number(shareExpiresDays.value);
+      if (Number.isFinite(d) && d > 0) {
+        params.expires = String(Date.now() + Math.floor(d * 86400000));
+      }
+    } else if (shareExpiresType.value === "datetime" && shareExpiresAt.value) {
+      const ts = Date.parse(shareExpiresAt.value);
+      if (Number.isFinite(ts) && ts > Date.now()) params.expires = String(ts);
+    }
+    const xml = await authFetch("createShare", params);
+    if (shareFailed(xml)) {
+      shareError.value = shareExtractError(xml) || t("library.shareCreateFailed");
+    } else {
+      shareCreatedUrl.value = shareExtractUrl(xml);
+    }
+  } catch {
+    shareError.value = t("library.shareCreateFailed");
+  }
+  shareBusy.value = false;
+}
+async function copyShareUrl() {
+  if (!shareCreatedUrl.value) return;
+  try { await navigator.clipboard.writeText(shareCreatedUrl.value); } catch { /* silent */ }
+}
 </script>
 
 <template>
@@ -349,6 +428,8 @@ onMounted(() => {
       <div class="table-header">
         <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span>
       </div>
+      <!-- 061: album-level share affordance, sits above the track table. -->
+      <button v-if="currentAlbum" class="album-share-btn" :title="t('library.share')" @click.stop="openShare('album', currentAlbum.id, currentAlbum.name)">⤴ {{ t("library.share") }}</button>
       <div
         v-for="(s, i) in songs"
         :key="s.id"
@@ -361,6 +442,8 @@ onMounted(() => {
         <span class="song-artist">{{ s.artist }}</span>
         <span class="song-time">{{ formatDuration(s.duration) }}</span>
         <button v-if="isAdmin" class="edit-btn" :title="t('library.editSong')" @click.stop="openEditor(s)">✎</button>
+        <!-- 061: per-song share, absolute-positioned so we don't touch grid-cols. -->
+        <button class="share-btn" :title="t('library.share')" @click.stop="openShare('song', s.id, s.title)">⤴</button>
       </div>
       <div v-if="loading" class="empty-state">{{ t("common.loading") }}</div>
       <div v-else-if="!songs.length" class="empty-state">{{ t("library.noTracks") }}</div>
@@ -377,6 +460,8 @@ onMounted(() => {
           <div class="album-name">{{ al.name }}</div>
           <div class="mono-label">{{ al.year || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
         </div>
+        <!-- 061: per-album share. -->
+        <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
         <div class="corner corner-tr"></div>
         <div class="corner corner-bl"></div>
       </div>
@@ -415,6 +500,8 @@ onMounted(() => {
             <div class="album-name">{{ al.name }}</div>
             <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
           </div>
+          <!-- 061: per-album share. -->
+          <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
           <div class="corner corner-tr"></div>
           <div class="corner corner-bl"></div>
         </div>
@@ -468,6 +555,8 @@ onMounted(() => {
           <span class="song-artist">{{ s.artist }}</span>
           <span class="song-time">{{ formatDuration(s.duration) }}</span>
           <button v-if="isAdmin" class="edit-btn" :title="t('library.editSong')" @click.stop="openEditor(s)">✎</button>
+          <!-- 061: per-song share. -->
+          <button class="share-btn" :title="t('library.share')" @click.stop="openShare('song', s.id, s.title)">⤴</button>
         </div>
         <div v-if="!allSongs.length && !loading" class="empty-state">{{ t("library.noTracks") }}</div>
       </div>
@@ -498,6 +587,48 @@ onMounted(() => {
         />
       </template>
     </TagEditor>
+
+    <!-- 061: Share modal. Lightweight standalone (no extra component) — opens
+         on row/card share button click; on success, shows the public URL with
+         a copy button. -->
+    <div v-if="shareOpen" class="modal-backdrop" @click.self="closeShare">
+      <div class="modal share-modal">
+        <div class="modal-title">{{ t("library.share") }} — {{ shareTarget?.label }}</div>
+        <div v-if="!shareCreatedUrl" style="display:flex; flex-direction:column; gap:0.7rem">
+          <div class="form-group">
+            <label class="form-label">{{ t("shares.description") }} <span class="optional">({{ t("shares.optional") }})</span></label>
+            <input v-model="shareDescription" class="form-input" :placeholder="t('shares.descriptionPlaceholder')" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("shares.expires") }}</label>
+            <div class="seg-row">
+              <button type="button" :class="['seg-btn', { active: shareExpiresType === 'never' }]" @click="shareExpiresType = 'never'">{{ t("shares.expiresNever") }}</button>
+              <button type="button" :class="['seg-btn', { active: shareExpiresType === 'days' }]" @click="shareExpiresType = 'days'">{{ t("shares.expiresIn") }}</button>
+              <button type="button" :class="['seg-btn', { active: shareExpiresType === 'datetime' }]" @click="shareExpiresType = 'datetime'">{{ t("shares.expiresAt") }}</button>
+            </div>
+            <div v-if="shareExpiresType === 'days'" style="margin-top:0.5rem; display:flex; align-items:center; gap:0.5rem">
+              <input v-model.number="shareExpiresDays" type="number" min="1" max="3650" class="form-input" style="max-width:100px" />
+              <span class="mono-label">{{ t("shares.days") }}</span>
+            </div>
+            <input v-if="shareExpiresType === 'datetime'" v-model="shareExpiresAt" type="datetime-local" class="form-input" style="margin-top:0.5rem" />
+          </div>
+          <div v-if="shareError" class="status-badge error">{{ shareError }}</div>
+        </div>
+        <div v-else class="share-created">
+          <div class="mono-label">{{ t("shares.publicUrl") }}:</div>
+          <div class="share-url-box">{{ shareCreatedUrl }}</div>
+          <button class="btn-secondary btn-sm" @click="copyShareUrl">{{ t("shares.copyUrl") }}</button>
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeShare">{{ shareCreatedUrl ? t("common.close") : t("shares.cancel") }}</button>
+          <button v-if="!shareCreatedUrl" class="btn-primary" :disabled="shareBusy" @click="submitShare">
+            {{ shareBusy ? t("common.loading") : t("shares.save") }}
+          </button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -604,4 +735,96 @@ onMounted(() => {
 }
 .song-row.selected { background: var(--color-accent-dim); }
 .song-row.selected:hover { background: var(--color-accent-dim); }
+
+/* === 061: Share affordances ===
+   share-btn (per-song): absolute-positioned on the right edge so we don't
+   have to widen the grid — gives us an extra action without rewriting the
+   --grid-cols template that downstream tasks (069 Playlist) will also touch.
+   card-share-btn (per-album): top-right of the cover area.
+   album-share-btn: standalone button above the song table in album drilldown. */
+.song-row { position: relative; }
+.share-btn {
+  position: absolute;
+  right: 0.4rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none; border: none; cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: var(--fs-md);
+  padding: 0 0.25rem;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.song-row:hover .share-btn { opacity: 1; }
+.share-btn:hover { color: var(--color-accent-primary); }
+/* Nudge share-btn left when an edit-btn is also visible so they don't overlap.
+   The edit-btn lives inside the grid cell; share-btn floats outside it. */
+.song-row .edit-btn ~ .share-btn { right: 1.8rem; }
+
+.album-card { position: relative; }
+.card-share-btn {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.5rem;
+  z-index: 2;
+  background: rgba(10, 10, 11, 0.7);
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-accent-primary);
+  width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  border-radius: 2px;
+}
+.album-card:hover .card-share-btn { opacity: 1; }
+.card-share-btn:hover { background: var(--color-bg-tertiary); }
+
+.album-share-btn {
+  display: block;
+  width: 100%;
+  text-align: right;
+  padding: 0.45rem 1rem;
+  background: var(--color-bg-primary);
+  border: none;
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-accent-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.05em;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.album-share-btn:hover { background: var(--color-bg-tertiary); }
+
+/* Share modal (singleton at root) */
+.share-modal { max-width: 480px; }
+.seg-row { display: inline-flex; border: 1px solid var(--color-border-subtle); }
+.seg-row .seg-btn {
+  background: none; border: none; padding: 0.35rem 0.85rem; cursor: pointer;
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--color-text-secondary);
+  border-right: 1px solid var(--color-border-subtle);
+}
+.seg-row .seg-btn:last-child { border-right: none; }
+.seg-row .seg-btn:hover { color: var(--color-text-primary); }
+.seg-row .seg-btn.active { background: var(--color-accent-dim); color: var(--color-accent-primary); }
+.share-created { display: flex; flex-direction: column; gap: 0.45rem; }
+.share-url-box {
+  padding: 0.5rem 0.65rem;
+  background: var(--color-bg-tertiary);
+  border-left: 2px solid var(--color-accent-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-accent-primary);
+  word-break: break-all;
+}
+.optional {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  letter-spacing: 0.05em;
+}
 </style>

@@ -27,7 +27,8 @@
       "settings": "Settings",
       "transcoder": "Transcoder",
       "radio": "Radio",
-      "podcasts": "Podcasts"
+      "podcasts": "Podcasts",
+      "shares": "Shares"
     },
     "logout": "LOGOUT",
     "levels": {
@@ -98,7 +99,10 @@
     "selected": "{n} selected",
     "clearSelection": "Clear selection",
     "batchEdit": "Batch Edit",
-    "batchTooMany": "Batch is capped at 50 tracks"
+    "batchTooMany": "Batch is capped at 50 tracks",
+    "share": "Share",
+    "shareCreated": "Share created",
+    "shareCreateFailed": "Share creation failed"
   },
   "tagEditor": {
     "singleTitle": "Edit Track Info",
@@ -621,5 +625,52 @@
       "completed": "Downloaded",
       "error": "Error"
     }
+  },
+  "shares": {
+    "label": "// public shares",
+    "title": "Shares",
+    "loading": "Loading…",
+    "empty": "No shares yet — click \"New share\" to create one",
+    "create": "+ New share",
+    "targetType": "Target type",
+    "targetSong": "Song",
+    "targetAlbum": "Album",
+    "targetSelect": "Pick a target",
+    "targetSelectRequired": "Pick a target first",
+    "search": "Search",
+    "searching": "Searching…",
+    "searchSongHint": "Type a song title or artist…",
+    "searchAlbumHint": "Type an album name or artist…",
+    "description": "Description",
+    "descriptionPlaceholder": "Internal note for this share",
+    "optional": "optional",
+    "expires": "Expiration",
+    "expiresNever": "Never",
+    "expiresIn": "In N days",
+    "expiresAt": "At a date/time",
+    "expiresLabel": "Expires",
+    "neverExpires": "Never",
+    "days": "days",
+    "invalidExpires": "Invalid expiration",
+    "publicUrl": "Public URL",
+    "copyUrl": "Copy URL",
+    "copied": "URL copied ✓",
+    "copyFailed": "Copy failed",
+    "viewCount": "Views",
+    "created": "Created",
+    "updateExpires": "Update expires",
+    "delete": "Delete",
+    "confirmDelete": "Delete this share? The public URL will stop working immediately.",
+    "save": "Save",
+    "cancel": "Cancel",
+    "added": "Share created",
+    "addFailed": "Create failed",
+    "updated": "Share updated",
+    "updateFailed": "Update failed",
+    "deleted": "Share deleted",
+    "deleteFailed": "Delete failed",
+    "moreTracks": "more tracks",
+    "unknownArtist": "Unknown artist",
+    "unknownAlbum": "Unknown album"
   }
 }
