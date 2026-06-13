@@ -41,6 +41,7 @@ const groups = computed<NavGroup[]>(() => {
         { label: t("app.menu.library"), path: "/library", minLevel: 0 },
         { label: t("app.menu.radio"), path: "/radio", minLevel: 0 },
         { label: t("app.menu.podcasts"), path: "/podcasts", minLevel: 0 },
+        { label: t("app.menu.shares"), path: "/shares", minLevel: 0 },
       ],
     },
     {
