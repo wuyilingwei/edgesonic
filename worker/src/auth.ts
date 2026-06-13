@@ -65,6 +65,7 @@ const SESSION_ONLY_PATHS = new Set([
   "/rest/listFiles",
   "/rest/scanTags",
   "/rest/writeTags",
+  "/rest/batchWriteTags",
   // 049 — transcode admin endpoints (the engine is admin-controlled)
   "/rest/transcodeFile",
   "/rest/getTranscodeStatus",
