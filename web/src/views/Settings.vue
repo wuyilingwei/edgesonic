@@ -525,6 +525,33 @@ async function onPollNow() {
   if (isSuperAdmin.value) await loadWorkerStatus();
 }
 
+// 077 — admin trigger for /edgesonic/work/backfillCompleted. Replays
+// applyMetadataResult against every completed metadata row whose apply step
+// was skipped before 077 landed (~82 rows in the production deployment when
+// this code was written). Refreshes the queue overview when done so the
+// counts move visibly.
+const workerBackfillBusy = ref(false);
+const workerBackfillToast = ref("");
+async function onBackfillCompleted() {
+  if (!isSuperAdmin.value || workerBackfillBusy.value) return;
+  workerBackfillBusy.value = true;
+  workerBackfillToast.value = "";
+  try {
+    const text = await edgesonicPost("work/backfillCompleted", {});
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "rejected");
+    workerBackfillToast.value = t("settings.common.workerPool.backfillDoneToast", {
+      applied: data.applied || 0,
+      processed: data.processed || 0,
+      failed: data.failed || 0,
+    });
+    await loadWorkerStatus();
+  } catch (e: unknown) {
+    workerBackfillToast.value = e instanceof Error ? e.message : String(e);
+  }
+  workerBackfillBusy.value = false;
+}
+
 async function clearLastfm() {
   lastfmBusy.value = true;
   try {
@@ -1262,6 +1289,25 @@ onMounted(() => {
               <span v-for="l in workerStatus.load" :key="l.username" class="tc-profile-pill">
                 {{ t("settings.common.workerPool.loadEntry", { user: l.username, n: l.n }) }}
               </span>
+            </div>
+
+            <!-- 077 — backfill completed metadata rows that finished before the
+                 /work/submit cascade was wired in. Admin-only; idempotent. -->
+            <div class="tc-row" style="margin-top: 0.6rem">
+              <span class="tc-key">{{ t("settings.common.workerPool.backfillLabel") }}</span>
+              <span class="feature-desc">{{ t("settings.common.workerPool.backfillDesc") }}</span>
+            </div>
+            <div class="tc-actions">
+              <button
+                class="btn-secondary"
+                :disabled="workerBackfillBusy"
+                @click="onBackfillCompleted"
+              >
+                {{ workerBackfillBusy
+                  ? t("settings.common.workerPool.backfillRunning")
+                  : t("settings.common.workerPool.backfillButton") }}
+              </button>
+              <span v-if="workerBackfillToast" class="feature-desc" style="margin-left: 0.6rem">{{ workerBackfillToast }}</span>
             </div>
           </div>
         </div>

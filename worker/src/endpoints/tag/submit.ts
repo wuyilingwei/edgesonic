@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 // ============================================================================
-// 041 — POST /rest/submitMetadata
+// 041 — POST /rest/submitMetadata + GET /rest/findInstanceByUri
 // ----------------------------------------------------------------------------
 // 浏览器侧已经用 music-metadata 解析过一个本地音频文件，把解析结果发回来落 D1：
 //   * 用 instanceId 反查 master_id
@@ -23,36 +23,29 @@
 //   * 更新 song_instances 的物理参数（bit_rate/sample_rate/channels/duration）
 //   * 标记 tag_scanned = 1
 //
-// 设计原则：
+// 077 — relinkArtistAlbum / SubmittedMetadata 已搬至 worker/src/utils/metadataApply.ts，
+// 这里只做端点壳子：参数校验 → cleanInput → applyMetadataResult → 包成 041 既有响应。
+// 对调用方（Files 浏览器）签名 / 返回字段全部保持兼容。本文件保留两符号的 re-export
+// 给历史路径，避免外部代码迁移负担。
+//
+// 设计原则保持不变：
 //   * 不调用 worker/src/utils/tags.ts → 041 的核心动机就是节约 Workers CPU
 //   * 不复用 tagedit.applyTagsToSong → 那条路径会 rewriteInstance 强写文件，041 只落 D1
 // ============================================================================
 
 import { Hono } from "hono";
 import { permissionMiddleware } from "../../auth";
-import { md5 } from "../../utils/md5";
+import {
+  applyMetadataResult,
+  relinkArtistAlbum,
+  type SubmittedMetadata,
+} from "../../utils/metadataApply";
+
+// Re-export so any caller historically pulling SubmittedMetadata / relinkArtistAlbum
+// from "endpoints/tag/submit" keeps working — 077 only moved the source of truth.
+export { relinkArtistAlbum, type SubmittedMetadata };
 
 export const metadataRoutes = new Hono();
-
-// Browser-extracted metadata payload — duplicated here (and in web/src/lib/metadata.ts)
-// so the worker doesn't need to import a web-only module. Keep both in sync.
-export interface SubmittedMetadata {
-  title?: string;
-  artist?: string;
-  album?: string;
-  albumArtist?: string;
-  genre?: string;
-  year?: number;
-  track?: number;
-  disc?: number;
-  duration?: number;     // seconds
-  bitrate?: number;      // kbps
-  sampleRate?: number;   // Hz
-  channels?: number;
-  lyrics?: string;       // accepted but NOT persisted (song_masters has no lyrics column yet — 036)
-  container?: string;
-  codec?: string;
-}
 
 // ============================================================================
 // GET /rest/findInstanceByUri?uri=r2://...|webdav://...
@@ -95,114 +88,38 @@ metadataRoutes.post("/submit", permissionMiddleware("edit_tags"), async (c) => {
     return c.json({ ok: false, error: "No usable tag fields" }, 400);
   }
 
-  const inst = await db.prepare(
-    "SELECT id, master_id FROM song_instances WHERE id = ?"
-  ).bind(body.instanceId).first<{ id: string; master_id: string }>();
-  if (!inst) return c.json({ ok: false, error: "Instance not found" }, 400);
+  // 077 — common + format both come from the same scrubbed SubmittedMetadata;
+  // applyMetadataResult re-coerces internally but our pre-scrub is already
+  // type-clean so the second pass is effectively a no-op.
+  const res = await applyMetadataResult(db, body.instanceId, tags, tags);
+  if (!res.updated) {
+    const code = res.reason === "instance not found" ? 400
+               : res.reason === "master not found"   ? 500
+               : 400;
+    return c.json({ ok: false, error: res.reason || "apply failed" }, code);
+  }
 
-  const master = await db.prepare(
-    "SELECT id, album_id, artist_id, title FROM song_masters WHERE id = ?"
-  ).bind(inst.master_id).first<{ id: string; album_id: string; artist_id: string; title: string }>();
-  if (!master) return c.json({ ok: false, error: "Master not found" }, 500);
-
-  const res = await relinkArtistAlbum(db, master, tags);
-
-  // Update physical params on the instance row (only the fields the browser gave us).
-  const instSets: string[] = [];
-  const instBinds: unknown[] = [];
-  if (typeof tags.bitrate === "number")    { instSets.push("bit_rate = ?");    instBinds.push(tags.bitrate); }
-  if (typeof tags.sampleRate === "number") { instSets.push("sample_rate = ?"); instBinds.push(tags.sampleRate); }
-  if (typeof tags.channels === "number")   { instSets.push("channels = ?");    instBinds.push(tags.channels); }
-  if (typeof tags.duration === "number")   { instSets.push("duration = ?");    instBinds.push(tags.duration); }
-  instSets.push("tag_scanned = 1");
-  instSets.push("updated_at = ?");
-  instBinds.push(Math.floor(Date.now() / 1000));
-  instBinds.push(inst.id);
-  await db.prepare(`UPDATE song_instances SET ${instSets.join(", ")} WHERE id = ?`)
-    .bind(...instBinds).run();
+  // 041 response shape included album/artist ids. The helper only returns
+  // masterId so we look the freshly-relinked fk's up here. This adds one D1
+  // read on the happy path — negligible vs. the work it just did.
+  const ids = await db.prepare(
+    "SELECT artist_id, album_id FROM song_masters WHERE id = ?",
+  ).bind(res.masterId!).first<{ artist_id: string; album_id: string }>();
 
   return c.json({
     ok: true,
-    masterId: master.id,
-    albumId: res.albumId,
-    artistId: res.artistId,
+    masterId: res.masterId!,
+    albumId: ids?.album_id,
+    artistId: ids?.artist_id,
   });
 });
 
 // ============================================================================
-// Exported helper — used by submitMetadata above. Mirrors the relink core of
-// scanTags / applyTagsToSong but skips file rewrites entirely.
-// ============================================================================
-export async function relinkArtistAlbum(
-  db: D1Database,
-  master: { id: string; album_id: string; artist_id: string; title: string },
-  tags: SubmittedMetadata,
-): Promise<{ albumId: string; artistId: string }> {
-  const now = Math.floor(Date.now() / 1000);
-
-  // Look up the current artist/album names so we can keep them when the patch
-  // omits the field (same fallback chain as tagedit.ts).
-  const curArtist = await db.prepare("SELECT name FROM artists WHERE id = ?")
-    .bind(master.artist_id).first<{ name: string }>();
-  const curAlbum = await db.prepare("SELECT name FROM albums WHERE id = ?")
-    .bind(master.album_id).first<{ name: string }>();
-
-  const title = tags.title || master.title;
-  const artistName = tags.artist || curArtist?.name || "Unknown Artist";
-  const linkArtistName = tags.albumArtist || artistName;
-  const albumName = tags.album || curAlbum?.name || "Unknown Album";
-  const artistId = "ar-" + md5(linkArtistName).substring(0, 10);
-  const albumId = "al-" + md5(linkArtistName + " " + albumName).substring(0, 10);
-  const oldAlbumId = master.album_id;
-
-  await db.batch([
-    db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(artistId, linkArtistName, linkArtistName.toLowerCase(), now, now),
-    db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name, year, genre, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .bind(albumId, albumName, albumName.toLowerCase(), tags.year ?? null, tags.genre ?? null, now, now),
-    db.prepare(
-      `UPDATE song_masters SET
-         album_id = ?, artist_id = ?, title = ?, sort_title = ?,
-         track = COALESCE(?, track), disc = COALESCE(?, disc),
-         genre = COALESCE(?, genre), duration = COALESCE(?, duration),
-         updated_at = ?
-       WHERE id = ?`
-    ).bind(
-      albumId, artistId, title, title.toLowerCase(),
-      tags.track ?? null, tags.disc ?? null,
-      tags.genre ?? null, tags.duration ?? null,
-      now, master.id,
-    ),
-  ]);
-
-  // Backfill year / genre onto the freshly anchored album row (INSERT OR IGNORE
-  // above skipped them when the row already existed).
-  if (tags.year || tags.genre) {
-    await db.prepare("UPDATE albums SET year = COALESCE(?, year), genre = COALESCE(?, genre), updated_at = ? WHERE id = ?")
-      .bind(tags.year ?? null, tags.genre ?? null, now, albumId).run();
-  }
-
-  // Refresh aggregates for both the new and the vacated album, then sweep empties.
-  for (const aid of new Set([albumId, oldAlbumId])) {
-    await db.prepare(
-      `UPDATE albums SET
-         song_count = (SELECT COUNT(*) FROM song_masters WHERE album_id = ?),
-         size = (SELECT COALESCE(SUM(si.size), 0) FROM song_instances si
-                 JOIN song_masters sm ON sm.id = si.master_id WHERE sm.album_id = ?),
-         updated_at = ?
-       WHERE id = ?`
-    ).bind(aid, aid, now, aid).run();
-  }
-  await db.prepare("DELETE FROM albums WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE album_id = albums.id)").run();
-  await db.prepare(
-    "DELETE FROM artists WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE artist_id = artists.id OR album_artist_id = artists.id)"
-  ).run();
-
-  return { albumId, artistId };
-}
-
-// ============================================================================
 // Input scrubbing — same shape as tagedit.cleanInput, plus the 041-only fields.
+// Kept inline because /submit's 400 "No usable tag fields" guard depends on it
+// running before applyMetadataResult (the helper would silently flip
+// tag_scanned=1 with no other UPDATE — fine for /work/submit, NOT fine for an
+// explicit user-driven /tag/submit call).
 // ============================================================================
 function cleanInput(t: SubmittedMetadata): SubmittedMetadata {
   const out: SubmittedMetadata = {};
