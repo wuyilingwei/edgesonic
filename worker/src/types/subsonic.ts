@@ -1,15 +1,30 @@
 import type { Artist, Album, SongMaster, Playlist, Bookmark, PlayQueue } from "./entities";
 
+// 035 — Subset of `annotations` row used by Subsonic responses.
+// All three mapXxx functions accept this as an optional 3rd arg so existing
+// callers (037 detail maps, etc.) compile unchanged.
+export interface AnnotationLite {
+  starred: number;                  // 0|1
+  starred_at: number | null;        // unix seconds
+  rating: number | null;            // 1-5 or null
+  play_count: number;
+}
+
 export interface SubsonicArtist {
   id: string; name: string; coverArt?: string;
-  albumCount?: number; starred?: string; userRating?: number;
+  albumCount?: number;
+  starred?: string;
+  userRating?: number;
+  playCount?: number;
 }
 
 export interface SubsonicAlbum {
   id: string; name: string; artist?: string; artistId?: string;
   coverArt?: string; songCount: number; duration: number;
   created: string; year?: number; genre?: string;
-  starred?: string; userRating?: number;
+  starred?: string;
+  userRating?: number;
+  playCount?: number;
 }
 
 export interface SubsonicChild {
@@ -18,18 +33,37 @@ export interface SubsonicChild {
   track?: number; year?: number; genre?: string;
   coverArt?: string; size?: number; contentType?: string;
   suffix?: string; duration?: number; bitRate?: number;
-  isVideo: boolean; starred?: string; userRating?: number;
+  isVideo: boolean;
+  starred?: string;
+  userRating?: number;
+  playCount?: number;
 }
 
-export function mapArtist(a: Artist): SubsonicArtist {
-  return {
+// 035 — Inject starred / userRating / playCount when an annotation row exists.
+// Subsonic spec emits `starred` only when truly starred (uses starred_at ISO).
+// Absent annotation → all three fields stay undefined (back-compat with 1.16.1).
+function applyAnnotation<
+  T extends { starred?: string; userRating?: number; playCount?: number },
+>(obj: T, ann: AnnotationLite | undefined): T {
+  if (!ann) return obj;
+  if (ann.starred === 1 && ann.starred_at !== null) {
+    obj.starred = formatISODate(ann.starred_at);
+  }
+  if (ann.rating !== null && ann.rating > 0) obj.userRating = ann.rating;
+  if (ann.play_count > 0) obj.playCount = ann.play_count;
+  return obj;
+}
+
+export function mapArtist(a: Artist, annotation?: AnnotationLite): SubsonicArtist {
+  const obj: SubsonicArtist = {
     id: a.id, name: a.name,
     coverArt: a.image_r2_key ? `ar-${a.id}` : undefined,
   };
+  return applyAnnotation(obj, annotation);
 }
 
-export function mapAlbum(a: Album, artistName?: string): SubsonicAlbum {
-  return {
+export function mapAlbum(a: Album, artistName?: string, annotation?: AnnotationLite): SubsonicAlbum {
+  const obj: SubsonicAlbum = {
     id: a.id, name: a.name,
     artist: artistName ?? undefined,
     // Always advertise a coverArt id — getCoverArt resolves & caches on demand
@@ -38,16 +72,18 @@ export function mapAlbum(a: Album, artistName?: string): SubsonicAlbum {
     created: formatISODate(a.created_at),
     year: a.year ?? undefined, genre: a.genre ?? undefined,
   };
+  return applyAnnotation(obj, annotation);
 }
 
-export function mapSong(s: SongMaster, parentId: string): SubsonicChild {
-  return {
+export function mapSong(s: SongMaster, parentId: string, annotation?: AnnotationLite): SubsonicChild {
+  const obj: SubsonicChild = {
     id: s.id, parent: parentId, isDir: false,
     title: s.title, album: parentId,
     track: s.track ?? undefined, genre: s.genre ?? undefined,
     coverArt: s.album_id.startsWith("al-") ? s.album_id : `al-${s.album_id}`,
     duration: s.duration ?? undefined, isVideo: false,
   };
+  return applyAnnotation(obj, annotation);
 }
 
 function formatISODate(ts: number): string {

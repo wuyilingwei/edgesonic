@@ -1,9 +1,33 @@
 import { Hono } from "hono";
 import { createQueries } from "../db/queries";
 import { subsonicOK } from "../utils/xml";
-import { mapArtist, mapAlbum, mapSong } from "../types/subsonic";
+import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../types/subsonic";
+import type { User, Annotation } from "../types/entities";
 
-export const browsingRoutes = new Hono();
+export const browsingRoutes = new Hono<{
+  Bindings: Env;
+  Variables: { user: User };
+}>();
+
+// 035 — pull authenticated username for per-user annotation back-fill.
+// Guest (level 0) bypasses auth on browse paths but still has c.get("user")
+// populated by the middleware; if absent (e.g. unit tests without harness)
+// we fall back to "" which yields an empty annotations Map.
+function currentUserId(c: import("hono").Context): string {
+  return (c.get("user") as User | undefined)?.username ?? "";
+}
+
+// Convert a `annotations` row (snake_case columns) into the AnnotationLite
+// shape mapXxx expects. Kept inline to avoid a per-row allocation explosion.
+function liteOf(row: Annotation | undefined): AnnotationLite | undefined {
+  if (!row) return undefined;
+  return {
+    starred: row.starred,
+    starred_at: row.starred_at,
+    rating: row.rating,
+    play_count: row.play_count,
+  };
+}
 
 const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 
@@ -14,9 +38,16 @@ const attrs = (o: object) => ({ _attributes: o as Record<string, string | number
 browsingRoutes.get("/rest/getArtists", async (c) => {
   const queries = createQueries((c.env as Env).DB);
   const artists = await queries.getArtists();
+  const ann = await queries.getAnnotationsMap(currentUserId(c), "artist", artists.map((a) => a.id));
 
   return c.text(
-    subsonicOK({ artists: { index: groupByLetter(artists.map(mapArtist)) } }),
+    subsonicOK({
+      artists: {
+        index: groupByLetter(
+          artists.map((a) => mapArtist(a, liteOf(ann.get(`artist:${a.id}`)))),
+        ),
+      },
+    }),
     200, XML
   );
 });
@@ -30,11 +61,19 @@ browsingRoutes.get("/rest/getArtist", async (c) => {
   if (!artist) return c.text(subsonicOK({}), 200, XML);
 
   const albums = await queries.getAlbumsByArtist(id);
+  const userId = currentUserId(c);
+  const artistAnn = await queries.getAnnotationsMap(userId, "artist", [id]);
+  const albumAnn = await queries.getAnnotationsMap(userId, "album", albums.map((a) => a.id));
   return c.text(
     subsonicOK({
       artist: {
-        _attributes: { ...mapArtist(artist), albumCount: albums.length },
-        album: albums.map((a) => attrs(mapAlbum(a, artist.name))),
+        _attributes: {
+          ...mapArtist(artist, liteOf(artistAnn.get(`artist:${id}`))),
+          albumCount: albums.length,
+        },
+        album: albums.map((a) =>
+          attrs(mapAlbum(a, artist.name, liteOf(albumAnn.get(`album:${a.id}`))))
+        ),
       },
     }),
     200, XML
@@ -50,11 +89,16 @@ browsingRoutes.get("/rest/getAlbum", async (c) => {
   if (!album) return c.text(subsonicOK({}), 200, XML);
 
   const songs = await queries.getSongMastersByAlbum(id);
+  const userId = currentUserId(c);
+  const albumAnn = await queries.getAnnotationsMap(userId, "album", [id]);
+  const songAnn = await queries.getAnnotationsMap(userId, "song", songs.map((s) => s.id));
   return c.text(
     subsonicOK({
       album: {
-        _attributes: mapAlbum(album),
-        song: songs.map((s) => attrs(mapSong(s, album.id))),
+        _attributes: mapAlbum(album, undefined, liteOf(albumAnn.get(`album:${id}`))),
+        song: songs.map((s) =>
+          attrs(mapSong(s, album.id, liteOf(songAnn.get(`song:${s.id}`))))
+        ),
       },
     }),
     200, XML
@@ -69,8 +113,9 @@ browsingRoutes.get("/rest/getSong", async (c) => {
   const song = await queries.getSongMaster(id);
   if (!song) return c.text(subsonicOK({}), 200, XML);
 
+  const ann = await queries.getAnnotationsMap(currentUserId(c), "song", [id]);
   return c.text(
-    subsonicOK({ song: attrs(mapSong(song, song.album_id)) }),
+    subsonicOK({ song: attrs(mapSong(song, song.album_id, liteOf(ann.get(`song:${id}`)))) }),
     200, XML
   );
 });
@@ -80,13 +125,17 @@ browsingRoutes.get("/rest/getIndexes", async (c) => {
   // Optional musicFolderId filter (038): "default" / "0" / "" → aggregate view.
   const musicFolderId = c.req.query("musicFolderId") || undefined;
   const indexes = await queries.getArtistIndexes(musicFolderId);
+  const allIds = indexes.flatMap((g) => g.artists.map((a) => a.id));
+  const ann = await queries.getAnnotationsMap(currentUserId(c), "artist", allIds);
 
   return c.text(
     subsonicOK({
       indexes: {
         index: indexes.map((g) => ({
           _attributes: { name: g.letter },
-          artist: g.artists.map((a) => attrs(mapArtist(a))),
+          artist: g.artists.map((a) =>
+            attrs(mapArtist(a, liteOf(ann.get(`artist:${a.id}`))))
+          ),
         })),
       },
     }),
@@ -130,12 +179,16 @@ const albumList2Handler = async (c: import("hono").Context, tag: "albumList" | "
   const albums = await queries.listAlbums(type, size, offset, {
     fromYear, toYear, genre, musicFolderId,
   });
+  const ann = await queries.getAnnotationsMap(currentUserId(c), "album", albums.map((a) => a.id));
 
   return c.text(
     subsonicOK({
       [tag]: {
         album: albums.map((a) =>
-          attrs({ ...mapAlbum(a, a.artist_name ?? undefined), artistId: a.artist_id ?? undefined })
+          attrs({
+            ...mapAlbum(a, a.artist_name ?? undefined, liteOf(ann.get(`album:${a.id}`))),
+            artistId: a.artist_id ?? undefined,
+          })
         ),
       },
     }),
@@ -171,11 +224,14 @@ browsingRoutes.get("/rest/getSongsByGenre", async (c) => {
 
   const queries = createQueries((c.env as Env).DB);
   const songs = await queries.getSongsByGenre(genre, count, offset);
+  const ann = await queries.getAnnotationsMap(currentUserId(c), "song", songs.map((s) => s.id));
 
   return c.text(
     subsonicOK({
       songsByGenre: {
-        song: songs.map((s) => attrs(mapSong(s, s.album_id))),
+        song: songs.map((s) =>
+          attrs(mapSong(s, s.album_id, liteOf(ann.get(`song:${s.id}`))))
+        ),
       },
     }),
     200, XML
@@ -187,14 +243,18 @@ browsingRoutes.get("/rest/getMusicDirectory", async (c) => {
   if (!id) return c.text(subsonicOK({}), 200, XML);
 
   const queries = createQueries((c.env as Env).DB);
+  const userId = currentUserId(c);
   const album = await queries.getAlbum(id);
   if (album) {
     const songs = await queries.getSongMastersByAlbum(id);
+    const ann = await queries.getAnnotationsMap(userId, "song", songs.map((s) => s.id));
     return c.text(
       subsonicOK({
         directory: {
           _attributes: { id: album.id, name: album.name },
-          child: songs.map((s) => attrs(mapSong(s, album.id))),
+          child: songs.map((s) =>
+            attrs(mapSong(s, album.id, liteOf(ann.get(`song:${s.id}`))))
+          ),
         },
       }),
       200, XML

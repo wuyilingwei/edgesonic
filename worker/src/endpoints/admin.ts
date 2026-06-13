@@ -177,6 +177,103 @@ adminRoutes.post("/rest/updateUser", permissionMiddleware("manage_users"), async
   return c.text(subsonicOK({}), 200, { "Content-Type": "application/xml; charset=UTF-8" });
 });
 
+// 035 — changePassword (OpenSubsonic-friendly password update).
+//   * Any user may change their own password (no admin perm required).
+//   * Changing another user's password requires level=3 (admin).
+//   * Accepts GET and POST per Subsonic convention; auth.ts pins this to
+//     SESSION_ONLY_PATHS so leaked subsonic_credentials / apiKey cannot rotate
+//     master passwords.
+const changePasswordHandler = async (c: import("hono").Context) => {
+  // Support both query (Subsonic convention) and JSON body (web client).
+  const qUsername = c.req.query("username");
+  const qPassword = c.req.query("password");
+  let username = qUsername;
+  let password = qPassword;
+  if (!username || !password) {
+    const body = await c.req.json<{ username?: string; password?: string }>()
+      .catch(() => ({} as { username?: string; password?: string }));
+    username = username || body.username;
+    password = password || body.password;
+  }
+  if (!username || !password) {
+    return c.text(subsonicError(10, "Missing username or password"), 400, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+
+  const caller = c.get("user");
+  const isSelf = caller.username === username;
+  // Only admin (level=3) may change another user's password.
+  if (!isSelf && caller.level < 3) {
+    return c.text(subsonicError(50, "Not authorized to change another user's password"), 403, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+
+  const db = (c.env as Env).DB;
+  // Ensure target exists before silently no-oping.
+  const target = await db
+    .prepare("SELECT username FROM users WHERE username = ?")
+    .bind(username)
+    .first<{ username: string }>();
+  if (!target) {
+    return c.text(subsonicError(70, "User not found"), 404, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+
+  await db
+    .prepare("UPDATE users SET master_password = ?, updated_at = ? WHERE username = ?")
+    .bind(await sha256(password), Math.floor(Date.now() / 1000), username)
+    .run();
+  return c.text(subsonicOK({}), 200, { "Content-Type": "application/xml; charset=UTF-8" });
+};
+
+adminRoutes.get("/rest/changePassword", changePasswordHandler);
+adminRoutes.get("/rest/changePassword.view", changePasswordHandler);
+adminRoutes.post("/rest/changePassword", changePasswordHandler);
+adminRoutes.post("/rest/changePassword.view", changePasswordHandler);
+
+// 035 — getAvatar. Streams the avatar binary from R2 when present, or returns
+// Subsonic XML error 70 (not found) when no avatar is stored. The avatar_r2_key
+// column (migration 0014) gates lookup; upload is left to a future task.
+const getAvatarHandler = async (c: import("hono").Context) => {
+  const username = c.req.query("username");
+  if (!username) {
+    return c.text(subsonicError(10, "Missing username"), 400, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+  const db = (c.env as Env).DB;
+  const row = await db
+    .prepare("SELECT avatar_r2_key FROM users WHERE username = ?")
+    .bind(username)
+    .first<{ avatar_r2_key: string | null }>();
+  if (!row || !row.avatar_r2_key) {
+    return c.text(subsonicError(70, "Avatar not found"), 404, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+
+  const r2 = (c.env as Env).MUSIC_BUCKET;
+  const obj = await r2.get(row.avatar_r2_key);
+  if (!obj) {
+    return c.text(subsonicError(70, "Avatar not found"), 404, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+  const contentType =
+    obj.httpMetadata?.contentType
+    ?? (row.avatar_r2_key.endsWith(".png") ? "image/png" : "image/jpeg");
+  return new Response(obj.body, {
+    status: 200,
+    headers: { "Content-Type": contentType, "Cache-Control": "public, max-age=86400" },
+  });
+};
+
+adminRoutes.get("/rest/getAvatar", getAvatarHandler);
+adminRoutes.get("/rest/getAvatar.view", getAvatarHandler);
+
 adminRoutes.post("/rest/deleteUser", permissionMiddleware("manage_users"), async (c) => {
   const body = await c.req.json<{ username: string }>();
   if (!body.username) {
