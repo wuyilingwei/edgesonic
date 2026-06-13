@@ -102,6 +102,13 @@ const formats = [
       <span class="status-badge info">FFMPEG WASM</span>
     </div>
 
+    <!-- 079: lightweight intro so users land on this page knowing what it
+         does without having to scroll the source/output cards. -->
+    <div class="transcoder-intro">
+      <p>{{ t("transcoder.description") }}</p>
+      <p class="muted">{{ t("transcoder.hint") }}</p>
+    </div>
+
     <div class="grid grid-2">
       <div class="card">
         <div class="card-header"><span class="card-title">{{ t("transcoder.source") }}</span></div>
@@ -153,6 +160,29 @@ const formats = [
 
 <style scoped>
 .page { max-width: 1000px; }
+
+/* 079: intro card sits between page-header and the grid. Deliberately
+   lightweight — no corner glyphs, no shadow — so it doesn't compete with
+   the existing .card chrome below. */
+.transcoder-intro {
+  margin: 0 0 1.25rem;
+  padding: 0.85rem 1rem;
+  border-left: 2px solid var(--color-accent-primary);
+  background: var(--color-bg-secondary);
+}
+.transcoder-intro p {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.transcoder-intro p.muted {
+  margin-top: 0.35rem;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+
 .file-info {
   display: flex; gap: 0.8rem;
   padding: 0.5rem 0.7rem;

@@ -44,7 +44,9 @@ watch(() => route.path, () => { menuOpen.value = false; });
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 const levelLabel = computed(() => levelKeys[level.value] ? t(`app.levels.${levelKeys[level.value]}`) : String(level.value));
 
-interface NavItem { label: string; path: string; minLevel: number; }
+// 079: optional `icon` prefix per item — used today to make Transcoder
+// discoverable, but the slot is generic and downstream tasks can adopt it.
+interface NavItem { label: string; path: string; minLevel: number; icon?: string; }
 interface NavGroup { label: string; items: NavItem[]; }
 
 const groups = computed<NavGroup[]>(() => {
@@ -67,7 +69,7 @@ const groups = computed<NavGroup[]>(() => {
         { label: t("app.menu.sources"), path: "/sources", minLevel: 2 },
         { label: t("app.menu.users"), path: "/users", minLevel: 2 },
         { label: t("app.menu.settings"), path: "/settings", minLevel: 3 },
-        { label: t("app.menu.transcoder"), path: "/transcoder", minLevel: 2 },
+        { label: t("app.menu.transcoder"), path: "/transcoder", minLevel: 2, icon: "🎵" },
       ],
     },
   ];
@@ -127,7 +129,7 @@ function doLogout() {
           class="side-link"
           :class="{ active: item.path === '/' ? route.path === '/' : route.path.startsWith(item.path) }"
         >
-          {{ item.label }}
+          <span v-if="item.icon" class="side-emoji" aria-hidden="true">{{ item.icon }}</span>{{ item.label }}
         </router-link>
       </div>
     </aside>
@@ -245,6 +247,13 @@ function doLogout() {
   color: var(--color-accent-primary);
   background: var(--color-accent-dim);
   border-left-color: var(--color-accent-primary);
+}
+/* 079: optional emoji prefix inside .side-link (Transcoder uses 🎵). */
+.side-emoji {
+  display: inline-block;
+  margin-right: 0.45rem;
+  font-size: 0.95em;
+  vertical-align: -1px;
 }
 .sidebar-overlay {
   display: none;
