@@ -28,6 +28,8 @@ const routes = [
   { path: "/radio", component: () => import("./views/Radio.vue"), meta: { title: "Radio" } },
   // 063 — Podcast subscription management.
   { path: "/podcasts", component: () => import("./views/Podcasts.vue"), meta: { title: "Podcasts" } },
+  // 061 — Public Share creation & management.
+  { path: "/shares", component: () => import("./views/Shares.vue"), meta: { title: "Shares" } },
 ];
 
 const router = createRouter({ history: createWebHashHistory(), routes });

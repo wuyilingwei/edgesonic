@@ -27,7 +27,8 @@
       "settings": "设置",
       "transcoder": "转码器",
       "radio": "电台",
-      "podcasts": "播客"
+      "podcasts": "播客",
+      "shares": "分享"
     },
     "logout": "登出",
     "levels": {
@@ -98,7 +99,10 @@
     "selected": "已选 {n} 首",
     "clearSelection": "清除选择",
     "batchEdit": "批量编辑",
-    "batchTooMany": "批量编辑上限 50 首"
+    "batchTooMany": "批量编辑上限 50 首",
+    "share": "分享",
+    "shareCreated": "分享已创建",
+    "shareCreateFailed": "创建分享失败"
   },
   "tagEditor": {
     "singleTitle": "编辑歌曲信息",
@@ -621,5 +625,52 @@
       "completed": "已完成",
       "error": "出错"
     }
+  },
+  "shares": {
+    "label": "// 公开分享",
+    "title": "分享",
+    "loading": "加载中…",
+    "empty": "暂无分享 — 点击「新建分享」开始",
+    "create": "+ 新建分享",
+    "targetType": "目标类型",
+    "targetSong": "歌曲",
+    "targetAlbum": "专辑",
+    "targetSelect": "选择目标",
+    "targetSelectRequired": "请先选择一个分享目标",
+    "search": "搜索",
+    "searching": "搜索中…",
+    "searchSongHint": "输入歌曲名 / 歌手关键字…",
+    "searchAlbumHint": "输入专辑名 / 歌手关键字…",
+    "description": "描述",
+    "descriptionPlaceholder": "便于自己分辨此分享的备注",
+    "optional": "可选",
+    "expires": "过期时间",
+    "expiresNever": "永不过期",
+    "expiresIn": "N 天后",
+    "expiresAt": "指定时间",
+    "expiresLabel": "过期",
+    "neverExpires": "永不过期",
+    "days": "天",
+    "invalidExpires": "过期时间无效",
+    "publicUrl": "公开链接",
+    "copyUrl": "复制链接",
+    "copied": "链接已复制 ✓",
+    "copyFailed": "复制失败",
+    "viewCount": "访问次数",
+    "created": "创建时间",
+    "updateExpires": "修改过期",
+    "delete": "删除",
+    "confirmDelete": "删除此分享？公开链接将立即失效。",
+    "save": "保存",
+    "cancel": "取消",
+    "added": "分享已创建",
+    "addFailed": "创建分享失败",
+    "updated": "分享已更新",
+    "updateFailed": "更新失败",
+    "deleted": "分享已删除",
+    "deleteFailed": "删除失败",
+    "moreTracks": "首曲目",
+    "unknownArtist": "未知歌手",
+    "unknownAlbum": "未知专辑"
   }
 }
