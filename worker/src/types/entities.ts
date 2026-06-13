@@ -50,6 +50,9 @@ export interface SongMaster {
   genre: string | null;
   compilation: number;
   participants: string | null;
+  // 036 — full LRC / plain-text lyrics. Populated by writeTags or by an
+  // external fetch the first time /rest/getLyrics(BySongId) sees an empty row.
+  lyrics: string | null;
   created_at: number;
   updated_at: number;
 }

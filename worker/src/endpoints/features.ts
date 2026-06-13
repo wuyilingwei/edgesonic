@@ -93,6 +93,9 @@ const STRING_FEATURE_KEYS = new Set([
   "external_transcoder_url",
   // 040 — priority-ordered list of enabled metadata scrape sources.
   "scrape_enabled_sources",
+  // 043 — Last.fm public read API key (server-side). Empty disables the
+  // getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs proxies.
+  "lastfm_api_key",
 ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -123,6 +126,12 @@ function validateFeatureString(key: string, value: string): string | null {
     }
     case "external_transcoder_url":
       if (value && !/^https?:\/\//.test(value)) return "external_transcoder_url must start with http:// or https://";
+      return null;
+    case "lastfm_api_key":
+      // Empty string is explicitly allowed — that's how the admin turns the
+      // feature off. Anything else is accepted verbatim (last.fm keys are
+      // 32-char hex but we don't want to encode that format here).
+      if (value.length > 128) return "lastfm_api_key is too long";
       return null;
     case "scrape_enabled_sources": {
       // JSON array of strings, each one a known scrape source.

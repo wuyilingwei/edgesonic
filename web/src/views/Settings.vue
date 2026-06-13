@@ -107,6 +107,8 @@ async function loadFeatures() {
     } catch { externalKeySet.value = false; }
     // 040: hydrate the scrape source priority list from feature_strings.
     hydrateScrapeFromFeatures();
+    // 043: hydrate Last.fm key presence indicator.
+    hydrateLastfmFromFeatures();
   } catch (e: unknown) {
     // 后端契约可能尚未部署 —— 优雅降级显示错误（非 JSON 响应一律视为 API 不可用）
     error.value = e instanceof SyntaxError || !(e instanceof Error)
@@ -222,6 +224,57 @@ async function saveScrape() {
     showToast(`${t("settings.common.scrape.saveFailed")}: ${msg}`, "error");
   }
   scrapeBusy.value = false;
+}
+
+// === 043 — Last.fm API key ===
+// Stored in feature_strings.lastfm_api_key. Empty means the four getXxxInfo
+// proxies stay quiet (Subsonic error code 30 to clients).
+const lastfmKeyInput = ref("");
+const lastfmKeySet = ref(false);
+const lastfmBusy = ref(false);
+
+function hydrateLastfmFromFeatures() {
+  const stored = findFeatureString("lastfm_api_key", "");
+  lastfmKeySet.value = !!stored;
+  // We never put the actual key back in the input — keeps it from being
+  // accidentally re-saved or copied out of the DOM by a curious client.
+  lastfmKeyInput.value = "";
+}
+
+async function saveLastfm() {
+  lastfmBusy.value = true;
+  try {
+    const data = JSON.parse(await authPost("updateFeatureString", {
+      key: "lastfm_api_key",
+      value: lastfmKeyInput.value,
+    }));
+    if (!data.ok) throw new Error(data.error || "lastfm_api_key");
+    lastfmKeySet.value = !!lastfmKeyInput.value;
+    lastfmKeyInput.value = "";
+    showToast(t("settings.common.lastfm.saved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  lastfmBusy.value = false;
+}
+
+async function clearLastfm() {
+  lastfmBusy.value = true;
+  try {
+    const data = JSON.parse(await authPost("updateFeatureString", {
+      key: "lastfm_api_key",
+      value: "",
+    }));
+    if (!data.ok) throw new Error(data.error || "lastfm_api_key");
+    lastfmKeySet.value = false;
+    lastfmKeyInput.value = "";
+    showToast(t("settings.common.lastfm.cleared"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  lastfmBusy.value = false;
 }
 
 async function toggleFeature(f: Feature, checked: boolean) {
@@ -543,6 +596,48 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
               @click="saveScrape"
             >
               {{ t("settings.common.scrape.save") }}
+            </button>
+          </div>
+        </div>
+
+        <!-- 043 — Last.fm API key -->
+        <div class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.lastfm.title") }}</span>
+            <span class="status-badge" :class="lastfmKeySet ? 'success' : 'muted'">
+              {{ lastfmKeySet ? t("settings.common.lastfm.setStatus") : t("settings.common.lastfm.unsetStatus") }}
+            </span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.lastfm.desc") }}
+          </p>
+          <label class="tc-row">
+            <span class="tc-key">{{ t("settings.common.lastfm.label") }}</span>
+            <input
+              v-model="lastfmKeyInput"
+              type="password"
+              class="form-input"
+              :placeholder="t('settings.common.lastfm.placeholder')"
+              :disabled="!isSuperAdmin"
+              autocomplete="off"
+            />
+          </label>
+          <div class="tc-actions">
+            <button
+              v-if="lastfmKeySet"
+              class="btn-secondary"
+              :disabled="!isSuperAdmin || lastfmBusy"
+              @click="clearLastfm"
+              style="margin-right: 0.6rem"
+            >
+              {{ t("settings.common.lastfm.clear") }}
+            </button>
+            <button
+              class="btn-primary"
+              :disabled="!isSuperAdmin || lastfmBusy || !lastfmKeyInput"
+              @click="saveLastfm"
+            >
+              {{ t("settings.common.lastfm.save") }}
             </button>
           </div>
         </div>

@@ -31,6 +31,9 @@ import { annotationRoutes } from "./endpoints/annotation";
 import { transcodeRoutes } from "./endpoints/transcode";
 import { scrapeRoutes } from "./endpoints/scrape";
 import { metadataRoutes } from "./endpoints/metadata";
+import { openSubsonicRoutes } from "./endpoints/opensubsonic";
+import { infoRoutes } from "./endpoints/info";
+import { lyricsRoutes } from "./endpoints/lyrics";
 
 export function registerRoutes(app: Hono) {
   app.route("/", pingRoutes);
@@ -50,4 +53,7 @@ export function registerRoutes(app: Hono) {
   app.route("/", transcodeRoutes);
   app.route("/", scrapeRoutes);
   app.route("/", metadataRoutes);
+  app.route("/", openSubsonicRoutes);
+  app.route("/", infoRoutes);
+  app.route("/", lyricsRoutes);
 }

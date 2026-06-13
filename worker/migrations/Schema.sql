@@ -55,6 +55,7 @@ CREATE TABLE users (
   master_password TEXT NOT NULL,          -- SHA-256 hashed, for web login only
   level INTEGER DEFAULT 1 CHECK (level BETWEEN 0 AND 3),
   enabled INTEGER DEFAULT 1,
+  avatar_r2_key TEXT,                     -- 035: R2 key for getAvatar (NULL → no avatar)
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );
@@ -222,6 +223,7 @@ CREATE TABLE song_masters (
   genre TEXT,
   compilation INTEGER DEFAULT 0,
   participants TEXT,                      -- JSON: [{role:"composer",name:"..."}]
+  lyrics TEXT,                            -- 036: full LRC / plain text; getLyrics reads here first
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (album_id) REFERENCES albums(id),

@@ -25,6 +25,11 @@ export interface SongTags {
   genre?: string;
   track?: number;
   year?: number;
+  // 036 — full LRC / plain-text lyrics block. The scan-time parsers
+  // (parseID3v2 / parseFLAC / parseWAV) never set this — only the writeTags
+  // chain (tagedit.ts) consumes it as a request field and persists to
+  // song_masters.lyrics in D1.
+  lyrics?: string;
 }
 
 export function parseTags(head: Uint8Array, tail?: Uint8Array): SongTags | null {

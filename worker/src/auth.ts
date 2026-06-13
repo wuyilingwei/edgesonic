@@ -29,6 +29,7 @@ const NO_AUTH_PATHS = new Set([
   "/rest/ping",
   "/rest/getLicense",
   "/rest/getOpenSubsonicExtensions",
+  "/rest/getOpenSubsonicExtensions.view",
   "/rest/loginWeb",
 ]);
 
@@ -45,6 +46,10 @@ const GUEST_ALLOWED_PATHS = new Set([
   "/rest/getSongsByGenre",
   "/rest/getAlbumList2",
   "/rest/search3",
+  // 036 — lyric endpoints are read-only metadata; safe for guests / cred-only
+  // clients to call. External fetch fallback only writes to D1, never to files.
+  "/rest/getLyrics",
+  "/rest/getLyricsBySongId",
 ]);
 
 // Endpoints reserved for web-session credentials (authMethod === "session").
@@ -94,6 +99,10 @@ const SESSION_ONLY_PATHS = new Set([
   "/rest/findInstanceByUri",
   // 042 — template-driven folder tidy (R2/WebDAV move). manage_files perm.
   "/rest/tidyFolder",
+  // 035 — changePassword: master password rotation must use a web session
+  // credential. Leaked subsonic_credentials / apiKey cannot escalate.
+  "/rest/changePassword",
+  "/rest/changePassword.view",
 ]);
 
 // ============================================================================

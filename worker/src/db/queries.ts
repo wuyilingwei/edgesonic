@@ -291,6 +291,28 @@ export function createQueries(db: D1Database) {
       ).bind(userId, itemId, itemType).first<Annotation>();
     },
 
+    // 035 — Batch lookup for browsing field back-fill.
+    // Returns Map keyed by `${itemType}:${itemId}` → annotation row.
+    // Empty `ids` short-circuits to avoid an empty IN(...) query.
+    async getAnnotationsMap(
+      userId: string,
+      itemType: "song" | "album" | "artist",
+      ids: string[],
+    ): Promise<Map<string, Annotation>> {
+      const map = new Map<string, Annotation>();
+      if (ids.length === 0) return map;
+      const uniq = Array.from(new Set(ids));
+      const placeholders = uniq.map(() => "?").join(",");
+      const result = await db.prepare(
+        `SELECT * FROM annotations
+         WHERE user_id = ? AND item_type = ? AND item_id IN (${placeholders})`
+      ).bind(userId, itemType, ...uniq).all<Annotation>();
+      for (const row of result.results) {
+        map.set(`${row.item_type}:${row.item_id}`, row);
+      }
+      return map;
+    },
+
     async upsertAnnotation(ann: Annotation): Promise<void> {
       await db.prepare(
         `INSERT INTO annotations (user_id, item_id, item_type, play_count, play_date, rating, starred, starred_at)

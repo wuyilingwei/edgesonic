@@ -16,9 +16,27 @@
 import { Hono } from "hono";
 import { createQueries } from "../db/queries";
 import { subsonicOK } from "../utils/xml";
-import { mapArtist, mapAlbum, mapSong } from "../types/subsonic";
+import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../types/subsonic";
+import type { User, Annotation } from "../types/entities";
 
-export const searchRoutes = new Hono();
+export const searchRoutes = new Hono<{
+  Bindings: Env;
+  Variables: { user: User };
+}>();
+
+// 035 — same helpers as browsing.ts. Inlined to avoid cross-file churn.
+function currentUserId(c: import("hono").Context): string {
+  return (c.get("user") as User | undefined)?.username ?? "";
+}
+function liteOf(row: Annotation | undefined): AnnotationLite | undefined {
+  if (!row) return undefined;
+  return {
+    starred: row.starred,
+    starred_at: row.starred_at,
+    rating: row.rating,
+    play_count: row.play_count,
+  };
+}
 
 searchRoutes.get("/rest/search3", async (c) => {
   // Empty query = full listing (Navidrome-compatible) — the web Songs view relies on it
@@ -36,14 +54,26 @@ searchRoutes.get("/rest/search3", async (c) => {
     artistCount, artistOffset, albumCount, albumOffset, songCount, songOffset,
   });
 
+  // 035 — batch lookup annotations for each result group in a single roundtrip.
+  const userId = currentUserId(c);
+  const [artistAnn, albumAnn, songAnn] = await Promise.all([
+    queries.getAnnotationsMap(userId, "artist", result.artists.map((a) => a.id)),
+    queries.getAnnotationsMap(userId, "album", result.albums.map((a) => a.id)),
+    queries.getAnnotationsMap(userId, "song", result.songs.map((s) => s.id)),
+  ]);
+
   return c.text(
     subsonicOK({
       searchResult3: {
-        artist: result.artists.map((a) => ({ _attributes: mapArtist(a) as unknown as Record<string, string> })),
-        album: result.albums.map((a) => ({ _attributes: mapAlbum(a) as unknown as Record<string, string> })),
+        artist: result.artists.map((a) => ({
+          _attributes: mapArtist(a, liteOf(artistAnn.get(`artist:${a.id}`))) as unknown as Record<string, string>,
+        })),
+        album: result.albums.map((a) => ({
+          _attributes: mapAlbum(a, undefined, liteOf(albumAnn.get(`album:${a.id}`))) as unknown as Record<string, string>,
+        })),
         song: result.songs.map((s) => ({
           _attributes: {
-            ...(mapSong(s, s.album_id) as unknown as Record<string, string>),
+            ...(mapSong(s, s.album_id, liteOf(songAnn.get(`song:${s.id}`))) as unknown as Record<string, string>),
             artist: s.artist_name ?? undefined,
             album: s.album_name ?? undefined,
           },
