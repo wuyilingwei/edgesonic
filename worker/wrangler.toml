@@ -36,3 +36,29 @@ bucket_name = "edgesonic-music"
 
 [observability]
 enabled = true
+
+# ---------------------------------------------------------------------------
+# 049 — Transcode engine (Sandbox SDK container)
+# ---------------------------------------------------------------------------
+# Sandbox SDK requires three bindings working together:
+#   1. [[containers]]   — the Docker image and instance shape
+#   2. [[durable_objects]] — the Sandbox DO class proxies requests into containers
+#   3. [[migrations]]   — needed because Sandbox uses SQLite-backed DO state
+#
+# Default engine is `disabled` (features.transcode_engine), so this container
+# never starts in production until Rosmontis flips the Settings switch.
+# TODO Rosmontis 校核：max_instances / instance_type 按实际并发预算调整。
+
+[[containers]]
+class_name = "Sandbox"
+image = "./transcoder-image/Dockerfile"
+instance_type = "lite"          # 0.5 vCPU / 512 MB — covers 128k mp3 in real-time
+max_instances = 3               # bound concurrency to control cost
+
+[[durable_objects.bindings]]
+class_name = "Sandbox"
+name = "Sandbox"
+
+[[migrations]]
+tag = "v1-sandbox"
+new_sqlite_classes = ["Sandbox"]

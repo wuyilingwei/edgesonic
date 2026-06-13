@@ -200,7 +200,31 @@
       "apiUnavailable": "功能 API 不可用 — 后端可能尚未部署 (getFeatures)",
       "updateFailed": "更新 {key} 失败",
       "copyFailed": "复制失败",
-      "levelRequired": "需要等级 3"
+      "levelRequired": "需要等级 3",
+      "transcode": {
+        "title": "转码",
+        "engine": "转码引擎",
+        "engineDesc": "选择实际跑 ffmpeg 的后端；切到 disabled 可彻底关闭转码。",
+        "engineDisabled": "禁用",
+        "engineSandbox": "Sandbox (Cloudflare 容器)",
+        "engineExternal": "外部容器",
+        "mode": "转码模式",
+        "modeDesc": "on_demand 按需触发；pre_bake 上传时预生成；both 二者结合。",
+        "modeOnDemand": "按需",
+        "modePreBake": "预生成",
+        "modeBoth": "二者",
+        "profiles": "默认档位",
+        "profilesDesc": "用于预生成（pre_bake / both 模式）的目标格式。",
+        "externalUrl": "外部容器 URL",
+        "externalUrlPlaceholder": "https://transcoder.example.com",
+        "externalKey": "外部容器密钥",
+        "externalKeySet": "已设置",
+        "externalKeyUnset": "未设置",
+        "externalKeyPlaceholder": "粘贴 openssl rand -hex 32 生成的密钥",
+        "save": "保存",
+        "saved": "已保存",
+        "saveFailed": "保存失败"
+      }
     },
     "sessions": {
       "title": "会话",

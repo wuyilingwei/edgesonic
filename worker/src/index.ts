@@ -2,6 +2,11 @@ import { Hono } from "hono";
 import { authMiddleware, webLoginRoutes } from "./auth";
 import { registerRoutes } from "./router";
 
+// 049 — Re-export Sandbox class so the Cloudflare runtime can instantiate the
+// Durable Object backing SandboxTranscodeEngine. This export must exist even
+// when the engine is not in use (containers binding is declared in wrangler.toml).
+export { Sandbox } from "@cloudflare/sandbox";
+
 const app = new Hono();
 
 // Web login routes (no Subsonic auth required)

@@ -1,4 +1,4 @@
-import type { Artist, Album, SongMaster, SongInstance, Annotation, User, Playlist, Bookmark, PlayQueue } from "../types/entities";
+import type { Artist, Album, SongMaster, SongInstance, Annotation, User, Playlist, Bookmark, PlayQueue, TranscodeJob } from "../types/entities";
 
 export function createQueries(db: D1Database) {
   return {
@@ -669,6 +669,53 @@ export function createQueries(db: D1Database) {
       if (sets.length === 0) return;
       binds.push(id);
       await db.prepare(`UPDATE scan_jobs SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+    },
+
+    // ========================================================================
+    // 049 — Transcode Jobs
+    // ========================================================================
+    // The dispatcher (endpoints/transcode.ts) owns the row lifecycle:
+    //   insertTranscodeJob → row in 'pending' / 'processing'
+    //   updateTranscodeJob → status / output / error after engine returns
+    // Engines themselves never touch D1; this keeps the abstraction simple.
+
+    async insertTranscodeJob(opts: {
+      id: string;
+      instanceId: string;
+      profile: string;            // legacy column — same value as profileId
+      profileId: string;
+      engine: string;
+      status?: "pending" | "processing";
+    }): Promise<void> {
+      const status = opts.status ?? "pending";
+      const now = Math.floor(Date.now() / 1000);
+      await db.prepare(
+        `INSERT INTO transcode_jobs (id, instance_id, profile, profile_id, engine, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(opts.id, opts.instanceId, opts.profile, opts.profileId, opts.engine, status, now).run();
+    },
+
+    async updateTranscodeJob(id: string, patch: {
+      status?: "pending" | "processing" | "completed" | "failed";
+      outputInstanceId?: string | null;
+      errorMessage?: string | null;
+      completedAt?: number | null;
+    }): Promise<void> {
+      const sets: string[] = [];
+      const binds: unknown[] = [];
+      if (patch.status !== undefined) { sets.push("status = ?"); binds.push(patch.status); }
+      if (patch.outputInstanceId !== undefined) { sets.push("output_instance_id = ?"); binds.push(patch.outputInstanceId); }
+      if (patch.errorMessage !== undefined) { sets.push("error_message = ?"); binds.push(patch.errorMessage); }
+      if (patch.completedAt !== undefined) { sets.push("completed_at = ?"); binds.push(patch.completedAt); }
+      if (sets.length === 0) return;
+      binds.push(id);
+      await db.prepare(`UPDATE transcode_jobs SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+    },
+
+    async getTranscodeJob(id: string): Promise<TranscodeJob | null> {
+      return db.prepare(
+        "SELECT * FROM transcode_jobs WHERE id = ?"
+      ).bind(id).first<TranscodeJob>();
     },
 
     // Latest scan_job per source (one row each, newest first by source).

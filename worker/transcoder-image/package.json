@@ -1,0 +1,14 @@
+{
+  "name": "edgesonic-transcoder-image",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ffmpeg HTTP entrypoint baked into the Sandbox SDK container for EdgeSonic 049.",
+  "type": "module",
+  "main": "app.js",
+  "scripts": {
+    "start": "node app.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
