@@ -19,9 +19,20 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 
 const { t } = useI18n();
-const { isLoggedIn, username, isAdmin, level, authFetch, storageFetch, edgesonicFetch } = useAuth();
+const { isLoggedIn, username, isAdmin, isSuperAdmin, level, authFetch, storageFetch, edgesonicFetch } = useAuth();
 const stats = ref({ artists: 0, albums: 0, songs: 0, sources: 0, users: 0 });
 const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year: string }>>([]);
+
+// 080 — Cron warning state. Three modes:
+//   "ok"            — schedules present (no banner)
+//   "empty"         — CF responded ok with schedules=[] (the bug we warn about)
+//   "unconfigured"  — CF_API_TOKEN/CF_ACCOUNT_ID missing (info, not error)
+//   "error"         — getCron returned an unexpected failure; we stay quiet
+//                     here because the Dashboard isn't the place to surface
+//                     CF upstream errors (Settings does that).
+//   "checking"      — initial state before the request resolves
+type CronStatus = "checking" | "ok" | "empty" | "unconfigured" | "error";
+const cronStatus = ref<CronStatus>("checking");
 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 
@@ -64,6 +75,31 @@ onMounted(async () => {
     }
     stats.value.songs = songCount;
   } catch {}
+
+  // 080 — super-admin only: read CF schedules and decide whether to show the
+  // "cron missing" banner. We do this AFTER the main stats so the banner
+  // can't block the dashboard if CF API is slow. Errors are swallowed (the
+  // banner just doesn't appear) because Settings → CF is the canonical place
+  // to debug CF API issues.
+  if (isSuperAdmin.value) {
+    try {
+      const text = await edgesonicFetch("cf/getCron");
+      const parsed = JSON.parse(text) as { ok?: boolean; schedules?: Array<{ cron: string }>; error?: string };
+      if (parsed.ok === true) {
+        const schedules = Array.isArray(parsed.schedules) ? parsed.schedules : [];
+        cronStatus.value = schedules.length === 0 ? "empty" : "ok";
+      } else if (typeof parsed.error === "string" && /CF_API_TOKEN|CF_ACCOUNT_ID|not configured/i.test(parsed.error)) {
+        // 054 returns 400 with this wording when env secrets are missing.
+        cronStatus.value = "unconfigured";
+      } else {
+        cronStatus.value = "error";
+      }
+    } catch {
+      cronStatus.value = "error";
+    }
+  } else {
+    cronStatus.value = "ok";
+  }
 });
 </script>
 
@@ -78,6 +114,44 @@ onMounted(async () => {
       <span class="status-badge" :class="level >= 3 ? 'warning' : level >= 2 ? 'info' : 'success'">
         {{ levelKeys[level] ? t(`users.levels.${levelKeys[level]}`) : t("dashboard.unknown") }}
       </span>
+    </div>
+
+    <!-- 080 — Cron missing warning. Only super-admins see this; for everyone
+         else cronStatus.value stays "ok" or never resolves and the banner
+         never renders. Two render modes (empty / unconfigured) share the
+         same card chrome so the layout stays consistent. -->
+    <div
+      v-if="cronStatus === 'empty'"
+      class="cron-warning-card"
+    >
+      <div class="cron-warning-icon">⚠</div>
+      <div class="cron-warning-body">
+        <div class="cron-warning-title">{{ t("dashboard.cronWarning.title") }}</div>
+        <p class="cron-warning-message">{{ t("dashboard.cronWarning.message") }}</p>
+        <div class="cron-warning-actions">
+          <router-link to="/settings" class="btn-secondary">
+            {{ t("dashboard.cronWarning.actionEnsure") }}
+          </router-link>
+          <router-link to="/settings" class="btn-secondary">
+            {{ t("dashboard.cronWarning.actionReclaim") }}
+          </router-link>
+        </div>
+      </div>
+    </div>
+    <div
+      v-else-if="cronStatus === 'unconfigured'"
+      class="cron-warning-card cron-warning-info"
+    >
+      <div class="cron-warning-icon">ⓘ</div>
+      <div class="cron-warning-body">
+        <div class="cron-warning-title">{{ t("dashboard.cronWarning.unconfiguredTitle") }}</div>
+        <p class="cron-warning-message">{{ t("dashboard.cronWarning.unconfiguredMessage") }}</p>
+        <div class="cron-warning-actions">
+          <router-link to="/settings" class="btn-secondary">
+            {{ t("dashboard.cronWarning.actionEnsure") }}
+          </router-link>
+        </div>
+      </div>
     </div>
 
     <!-- Stats -->
@@ -170,4 +244,50 @@ onMounted(async () => {
 .info-row:last-child { border-bottom: none; }
 .info-key { font-family: var(--font-mono); font-size: var(--fs-sm); letter-spacing: 0.1em; color: var(--color-text-muted); }
 .info-val { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-primary); }
+
+/* 080 — Cron warning banner. Orange/amber accent for the "empty schedules"
+   case (an actionable problem), muted/info accent for the "CF unconfigured"
+   case (informational, not blocking). */
+.cron-warning-card {
+  display: flex;
+  gap: 1rem;
+  align-items: flex-start;
+  padding: 1rem 1.2rem;
+  margin-bottom: 1rem;
+  border: 1px solid #d97706;          /* amber-600 */
+  border-left-width: 3px;
+  background: rgba(217, 119, 6, 0.06);
+  border-radius: 0;
+}
+.cron-warning-card.cron-warning-info {
+  border-color: var(--color-border-subtle);
+  border-left-color: var(--color-text-muted);
+  background: var(--color-surface-subtle, rgba(255,255,255,0.02));
+}
+.cron-warning-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+  color: #d97706;
+  flex-shrink: 0;
+  padding-top: 0.1rem;
+}
+.cron-warning-info .cron-warning-icon { color: var(--color-text-muted); }
+.cron-warning-body { flex: 1; min-width: 0; }
+.cron-warning-title {
+  font-family: var(--font-display, inherit);
+  font-size: var(--fs-md);
+  color: var(--color-text-primary);
+  margin-bottom: 0.3rem;
+}
+.cron-warning-message {
+  margin: 0 0 0.7rem 0;
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.cron-warning-actions {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
 </style>

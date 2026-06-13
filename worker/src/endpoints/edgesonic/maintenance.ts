@@ -36,6 +36,7 @@
 
 import { Hono } from "hono";
 import type { User } from "../../types/entities";
+import { getFeatureString } from "../../utils/features";
 
 export const maintenanceRoutes = new Hono<{
   Bindings: Env;
@@ -117,4 +118,80 @@ maintenanceRoutes.post("/maintenance/cleanupDuplicateCovers", async (c) => {
   }
 
   return c.json({ ok: true, groups: dupes.length, cleared });
+});
+
+// ---------------------------------------------------------------------------
+// POST /edgesonic/maintenance/reclaimStaleWork
+// ---------------------------------------------------------------------------
+// 080 — Manual trigger of the same logic 052a's workReclaim runs from the
+// scheduled handler. Useful when the CF Worker has no cron schedules (the
+// 067 dynamic-cron path was never run with ensureDefaultCron after a deploy)
+// and browser workers have left rows stuck in 'claimed' with stale heartbeats.
+//
+// Response: { ok, reclaimed, requeued, failed, items: [{ id, status, attempts }] }
+//   - reclaimed: total rows mutated (requeued + failed)
+//   - requeued:  rows whose attempts<max_attempts → status='queued'
+//   - failed:    rows whose attempts>=max_attempts → status='failed' terminal
+//   - items:     the per-row breakdown (capped naturally by the stale set)
+//
+// We use a single UPDATE … RETURNING so the read and the write happen against
+// a consistent snapshot — without RETURNING we'd risk reclaiming rows that
+// changed status between the SELECT and the UPDATE.
+maintenanceRoutes.post("/maintenance/reclaimStaleWork", async (c) => {
+  const env = c.env as Env;
+  const user = c.get("user");
+  if (user.level < 3) {
+    return c.json({ ok: false, error: "Admin level required" }, 403);
+  }
+
+  // Feature key was registered in 052a (default 60s) — the same one workReclaim
+  // reads, so the manual button reuses the operator's tuning.
+  const raw = await getFeatureString(env, "worker_claim_ttl_seconds", "60");
+  const parsed = parseInt(raw, 10);
+  const ttl = Number.isFinite(parsed) && parsed > 0 ? parsed : 60;
+
+  // Mirror workReclaim's branching: bucket by attempts vs max_attempts. The
+  // CASE expressions on status and error_message make the two paths atomic in
+  // one statement, and RETURNING surfaces the post-update row so the response
+  // can show the operator exactly what happened.
+  //
+  // We keep the error_message wording aligned with workReclaim.ts so the
+  // /work/status feed reads identically for cron-driven and manually-driven
+  // reclaims (an operator inspecting failed rows shouldn't have to guess
+  // whether the sweep was automatic).
+  const result = await env.DB.prepare(
+    `UPDATE work_queue
+     SET status = CASE
+                    WHEN attempts >= max_attempts THEN 'failed'
+                    ELSE 'queued'
+                  END,
+         claimed_by = NULL,
+         claimed_at = NULL,
+         heartbeat_at = NULL,
+         error_message = CASE
+                           WHEN attempts >= max_attempts
+                             THEN COALESCE(error_message, 'stale claim: max attempts exceeded')
+                           ELSE COALESCE(error_message, 'stale claim re-queued')
+                         END
+     WHERE status = 'claimed'
+       AND heartbeat_at IS NOT NULL
+       AND heartbeat_at < unixepoch() - ?
+     RETURNING id, status, attempts`,
+  ).bind(ttl).all<{ id: string; status: string; attempts: number }>();
+
+  const items = result.results || [];
+  let requeued = 0;
+  let failed = 0;
+  for (const row of items) {
+    if (row.status === "queued") requeued++;
+    else if (row.status === "failed") failed++;
+  }
+  return c.json({
+    ok: true,
+    reclaimed: items.length,
+    requeued,
+    failed,
+    ttlSeconds: ttl,
+    items,
+  });
 });

@@ -612,6 +612,34 @@ async function onCleanupDuplicateCovers() {
   cleanupCoversBusy.value = false;
 }
 
+// 080 — manually trigger the same logic 052a's workReclaim runs on cron.
+// Useful when CF schedules are empty (post-deploy, before ensureDefaultCron)
+// and a browser worker has left rows stuck in status='claimed'. The endpoint
+// returns the breakdown (reclaimed/requeued/failed) and we surface it in a
+// toast so the operator can see what changed at a glance.
+const reclaimBusy = ref(false);
+const reclaimToast = ref("");
+async function onReclaimStaleWork() {
+  if (!isSuperAdmin.value || reclaimBusy.value) return;
+  reclaimBusy.value = true;
+  reclaimToast.value = "";
+  try {
+    const text = await edgesonicPost("maintenance/reclaimStaleWork", {});
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "rejected");
+    reclaimToast.value = t("settings.common.maintenance.reclaimDoneToast", {
+      reclaimed: data.reclaimed || 0,
+      requeued: data.requeued || 0,
+      failed: data.failed || 0,
+    });
+  } catch (e: unknown) {
+    reclaimToast.value = t("settings.common.maintenance.reclaimFailed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  reclaimBusy.value = false;
+}
+
 async function clearLastfm() {
   lastfmBusy.value = true;
   try {
@@ -1415,6 +1443,29 @@ onMounted(() => {
             </button>
             <span v-if="cleanupCoversToast" class="feature-desc" style="margin-left: 0.6rem">{{ cleanupCoversToast }}</span>
           </div>
+
+          <!-- 080 — manual reclaim of stale work_queue claims. Mirrors the
+               052a scheduled sweep so the operator has a "kick" button while
+               CF cron schedules are empty (post-deploy / before ensureDefaultCron). -->
+          <div class="tc-row">
+            <span class="tc-key">{{ t("settings.common.maintenance.reclaimTitle") }}</span>
+            <span class="feature-desc">{{ t("settings.common.maintenance.reclaimDesc") }}</span>
+          </div>
+          <div class="tc-actions">
+            <button
+              class="btn-secondary"
+              :disabled="reclaimBusy"
+              @click="onReclaimStaleWork"
+            >
+              {{ reclaimBusy
+                ? t("settings.common.maintenance.reclaimRunning")
+                : t("settings.common.maintenance.reclaimButton") }}
+            </button>
+            <span v-if="reclaimToast" class="feature-desc" style="margin-left: 0.6rem">{{ reclaimToast }}</span>
+          </div>
+          <p class="feature-desc" style="margin: 0.4rem 0 0 0">
+            {{ t("settings.common.maintenance.reclaimHint") }}
+          </p>
         </div>
 
         <!-- Feature flags -->
