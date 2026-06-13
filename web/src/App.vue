@@ -19,6 +19,7 @@ import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "./api";
 import PlayerBar from "./components/PlayerBar.vue";
+import UpdateBanner from "./components/UpdateBanner.vue";
 import { usePlayerStore } from "./stores/player";
 import { useWorkerPool } from "./stores/workerPool";
 
@@ -87,6 +88,9 @@ function doLogout() {
 </script>
 
 <template>
+  <!-- 081 — Update banner sits above every other surface (including Login). -->
+  <UpdateBanner />
+
   <!-- 未登录：全屏渲染（Login） -->
   <router-view v-if="!isLoggedIn" />
 

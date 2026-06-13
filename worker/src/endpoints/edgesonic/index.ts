@@ -29,6 +29,7 @@ import { workRoutes } from "./work";
 import { workUploadRoutes } from "./work_upload";
 import { cfRoutes } from "./cf";
 import { maintenanceRoutes } from "./maintenance";
+import { versionRoutes } from "./version";
 
 export const edgesonicRoutes = new Hono();
 
@@ -45,3 +46,5 @@ edgesonicRoutes.route("/", workUploadRoutes);
 edgesonicRoutes.route("/", cfRoutes);
 // 078 — operational maintenance tools (cleanup-duplicate-covers, ...)
 edgesonicRoutes.route("/", maintenanceRoutes);
+// 081 — public version endpoint (no auth, SPA freshness detection)
+edgesonicRoutes.route("/", versionRoutes);

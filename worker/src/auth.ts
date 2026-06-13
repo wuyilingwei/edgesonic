@@ -42,6 +42,11 @@ const NO_AUTH_PATHS = new Set([
   // for every other request, so it has to live outside the auth filter.
   "/edgesonic/auth/login",
   "/edgesonic/auth/logout",
+  // 081 — public version probe for SPA freshness detection. Returns only the
+  // build version and isolate start time (non-sensitive); the SPA polls it
+  // every 5 minutes including AFTER the session has expired so the "refresh
+  // me" banner still appears on stale tabs.
+  "/edgesonic/version",
 ]);
 
 const GUEST_ALLOWED_PATHS = new Set([

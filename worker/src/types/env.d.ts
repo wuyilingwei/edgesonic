@@ -36,4 +36,10 @@ interface Env {
   // Unset → storage_sources passwords stay in the legacy plaintext column,
   // and /storage/sources/migratePasswords refuses to run. See worker/SECRETS.md.
   STORAGE_KEY?: string;
+  // 081 — Worker bundle version, surfaced by GET /edgesonic/version so the SPA
+  // can detect a deploy without a hard refresh. Bump per deploy via either:
+  //   - wrangler.toml [vars] WORKER_VERSION = "<n>"  (default; bump before deploy)
+  //   - `wrangler deploy --var WORKER_VERSION:$(date +%s)`  (one-shot override)
+  // Unset → endpoint returns "0".
+  WORKER_VERSION?: string;
 }

@@ -62,6 +62,40 @@ router.beforeEach((to) => {
 
 const app = createApp(App);
 app.use(router);
-app.use(createPinia());
+const pinia = createPinia();
+app.use(pinia);
 app.use(i18n);
 app.mount("#app");
+
+// 081 — Long-lived SPA tabs can sit on a stale bundle for hours after a worker
+// deploy. We poll a tiny public endpoint and feed the result into the update
+// banner store; the banner only renders once the version or isolate start time
+// differs from the first sample we recorded.
+//
+// Initial probe runs 5s after mount (give the auth bootstrap room to breathe),
+// then every 5 minutes thereafter. Errors are deliberately swallowed — a
+// transient blip must NOT trigger a banner.
+import { useUpdateBanner } from "./stores/updateBanner";
+
+const VERSION_POLL_INTERVAL_MS = 5 * 60 * 1000;
+const VERSION_FIRST_PROBE_DELAY_MS = 5_000;
+
+async function checkVersion() {
+  try {
+    const banner = useUpdateBanner(pinia);
+    const r = await fetch("/edgesonic/version", { cache: "no-store" });
+    if (!r.ok) return;
+    const j = (await r.json()) as { ok?: boolean; version?: string; startedAt?: string };
+    if (!j.ok || typeof j.version !== "string" || typeof j.startedAt !== "string") return;
+    banner.notify({ version: j.version, startedAt: j.startedAt });
+  } catch {
+    // Network blip / offline tab: ignore. We'll retry next interval.
+  }
+}
+
+setTimeout(() => {
+  void checkVersion();
+  setInterval(() => {
+    void checkVersion();
+  }, VERSION_POLL_INTERVAL_MS);
+}, VERSION_FIRST_PROBE_DELAY_MS);
