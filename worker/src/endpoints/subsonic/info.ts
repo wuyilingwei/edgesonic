@@ -33,10 +33,10 @@
 
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { createQueries } from "../db/queries";
-import { subsonicOK } from "../utils/xml";
-import { subsonicError } from "../auth";
-import { mapSong } from "../types/subsonic";
+import { createQueries } from "../../db/queries";
+import { subsonicOK } from "../../utils/xml";
+import { subsonicError } from "../../auth";
+import { mapSong } from "../../types/subsonic";
 import {
   LastfmUnconfigured,
   LastfmFetchError,
@@ -45,8 +45,8 @@ import {
   getSimilarArtists as lastfmGetSimilarArtists,
   getSimilarTracks as lastfmGetSimilarTracks,
   getTopTracks as lastfmGetTopTracks,
-} from "../lib/lastfm";
-import type { Artist, SongMaster } from "../types/entities";
+} from "../../lib/lastfm";
+import type { Artist, SongMaster } from "../../types/entities";
 
 export const infoRoutes = new Hono<{ Bindings: Env }>();
 
@@ -176,8 +176,8 @@ async function artistInfoHandler(
   });
 }
 
-infoRoutes.get("/rest/getArtistInfo", (c) => artistInfoHandler(c, "artistInfo"));
-infoRoutes.get("/rest/getArtistInfo2", (c) => artistInfoHandler(c, "artistInfo2"));
+infoRoutes.get("/getArtistInfo", (c) => artistInfoHandler(c, "artistInfo"));
+infoRoutes.get("/getArtistInfo2", (c) => artistInfoHandler(c, "artistInfo2"));
 
 // ---------------------------------------------------------------------------
 // getAlbumInfo / getAlbumInfo2
@@ -222,8 +222,8 @@ async function albumInfoHandler(
   });
 }
 
-infoRoutes.get("/rest/getAlbumInfo", albumInfoHandler);
-infoRoutes.get("/rest/getAlbumInfo2", albumInfoHandler);
+infoRoutes.get("/getAlbumInfo", albumInfoHandler);
+infoRoutes.get("/getAlbumInfo2", albumInfoHandler);
 
 // ---------------------------------------------------------------------------
 // getSimilarSongs / getSimilarSongs2
@@ -274,8 +274,8 @@ async function similarSongsHandler(
   });
 }
 
-infoRoutes.get("/rest/getSimilarSongs", (c) => similarSongsHandler(c, "similarSongs"));
-infoRoutes.get("/rest/getSimilarSongs2", (c) => similarSongsHandler(c, "similarSongs2"));
+infoRoutes.get("/getSimilarSongs", (c) => similarSongsHandler(c, "similarSongs"));
+infoRoutes.get("/getSimilarSongs2", (c) => similarSongsHandler(c, "similarSongs2"));
 
 // ---------------------------------------------------------------------------
 // getTopSongs (047 — local-first, last.fm fallback)
@@ -291,7 +291,7 @@ infoRoutes.get("/rest/getSimilarSongs2", (c) => similarSongsHandler(c, "similarS
 //      whatever the D1 step produced. Other last.fm fetch failures degrade
 //      the same way — partial result over no result.
 // ---------------------------------------------------------------------------
-infoRoutes.get("/rest/getTopSongs", async (c) => {
+infoRoutes.get("/getTopSongs", async (c) => {
   const artist = c.req.query("artist");
   if (!artist) return c.text(subsonicError(10, "Required artist parameter is missing"), 200, XML);
 

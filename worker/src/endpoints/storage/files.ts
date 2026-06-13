@@ -14,16 +14,14 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { Hono } from "hono";
-import { permissionMiddleware, subsonicError } from "../auth";
-import { subsonicOK } from "../utils/xml";
-import { createQueries } from "../db/queries";
-import { parseStorageUri, getSourceCredentials } from "../adapters/index";
+import { permissionMiddleware } from "../../auth";
+import { getSourceCredentials } from "../../adapters/index";
 
 export const filesRoutes = new Hono();
 
 // ── Upload (raw body stream — studio-style) ──────────────────────────────
 // POST /rest/files/upload?name=file.mp3&source=r2|webdav&path=music
-filesRoutes.post("/rest/files/upload", permissionMiddleware("upload"), async (c) => {
+filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
   const name = c.req.query("name");
   const source = c.req.query("source") || "r2";
@@ -86,7 +84,7 @@ filesRoutes.post("/rest/files/upload", permissionMiddleware("upload"), async (c)
 // ── File operations (studio-style structured REST, no notes/color-labels) ──
 
 // POST /rest/files/delete  body: { key: "music/file.mp3" }
-filesRoutes.post("/rest/files/delete", permissionMiddleware("upload"), async (c) => {
+filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
   const body = await c.req.json<{ key: string }>();
   const { key } = body;
@@ -118,7 +116,7 @@ filesRoutes.post("/rest/files/delete", permissionMiddleware("upload"), async (c)
 });
 
 // POST /rest/files/move  body: { key, dest }
-filesRoutes.post("/rest/files/move", permissionMiddleware("upload"), async (c) => {
+filesRoutes.post("/files/move", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
   const body = await c.req.json<{ key: string; dest: string }>();
   const { key, dest } = body;
@@ -137,7 +135,7 @@ filesRoutes.post("/rest/files/move", permissionMiddleware("upload"), async (c) =
 });
 
 // POST /rest/files/copy  body: { key, dest }
-filesRoutes.post("/rest/files/copy", permissionMiddleware("upload"), async (c) => {
+filesRoutes.post("/files/copy", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
   const body = await c.req.json<{ key: string; dest: string }>();
   const { key, dest } = body;
@@ -150,122 +148,6 @@ filesRoutes.post("/rest/files/copy", permissionMiddleware("upload"), async (c) =
   return c.json({ ok: true });
 });
 
-// ── Download (unchanged) ─────────────────────────────────────────────────
-
-filesRoutes.get("/rest/download", permissionMiddleware("download"), async (c) => {
-  const id = c.req.query("id");
-  if (!id) {
-    return c.text(subsonicError(0, "Missing id parameter"), 400, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
-  }
-
-  const env = c.env as Env;
-  const queries = createQueries(env.DB);
-  const instance = await queries.getSongInstance(id);
-
-  if (!instance) {
-    return c.text(subsonicError(70, "File not found"), 404, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
-  }
-
-  const parsed = parseStorageUri(instance.storage_uri);
-
-  let body: ReadableStream<Uint8Array> | null = null;
-  let contentType = instance.content_type || "application/octet-stream";
-  let fileName = `${id}.${instance.suffix}`;
-
-  try {
-    const master = await queries.getSongMaster(instance.master_id);
-    if (master) fileName = `${master.title}.${instance.suffix}`;
-  } catch {}
-
-  switch (parsed.scheme) {
-    case "r2": {
-      const object = await env.MUSIC_BUCKET.get(instance.storage_uri.substring("r2://".length));
-      if (object) { body = object.body; contentType = object.httpMetadata?.contentType || contentType; }
-      break;
-    }
-    case "url": {
-      const resp = await fetch(instance.storage_uri.substring("url://".length));
-      if (resp.ok) body = resp.body!;
-      break;
-    }
-    case "webdav": {
-      const creds = await getSourceCredentials(env.DB, "webdav");
-      if (creds) {
-        const fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${parsed.path.split("/").map(encodeURIComponent).join("/")}`;
-        const resp = await fetch(fullUrl, {
-          headers: { Authorization: `Basic ${btoa(`${creds.username}:${creds.password}`)}` },
-        });
-        if (resp.ok) body = resp.body!;
-      }
-      break;
-    }
-    case "subsonic": {
-      const { createSubsonicAdapter } = await import("../adapters/subsonic");
-      const result = await createSubsonicAdapter(env.DB).stream(instance.storage_uri);
-      body = result.body;
-      break;
-    }
-  }
-
-  if (!body) {
-    return c.text(subsonicError(70, "File data not available"), 404, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
-  }
-
-  const encodedFileName = encodeURIComponent(fileName);
-  return new Response(body, {
-    headers: {
-      "Content-Type": contentType,
-      "Content-Disposition": `attachment; filename*=UTF-8''${encodedFileName}`,
-      "Content-Length": String(instance.size || 0),
-    },
-  });
-});
-
-filesRoutes.get("/rest/downloadMultiple", permissionMiddleware("download"), async (c) => {
-  const ids = c.req.query("ids");
-  if (!ids) {
-    return c.text(subsonicError(0, "Missing ids parameter"), 400, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
-  }
-  const idList = ids.split(",");
-  const env = c.env as Env;
-  const queries = createQueries(env.DB);
-
-  const items: Array<{ id: string; name: string; suffix: string; size: number }> = [];
-  for (const id of idList) {
-    const instance = await queries.getSongInstance(id.trim());
-    if (instance) {
-      const master = await queries.getSongMaster(instance.master_id);
-      items.push({
-        id: instance.id,
-        name: master?.title || instance.id,
-        suffix: instance.suffix,
-        size: instance.size || 0,
-      });
-    }
-  }
-
-  return c.text(
-    subsonicOK({
-      downloadList: {
-        item: items.map((it) => ({
-          _attributes: {
-            id: it.id,
-            name: it.name,
-            suffix: it.suffix,
-            size: String(it.size),
-          },
-        })),
-      },
-    }),
-    200,
-    { "Content-Type": "application/xml; charset=UTF-8" }
-  );
-});
+// 055 — download / downloadMultiple moved to subsonic/download.ts (they remain
+// part of the Subsonic protocol surface at /rest/*; storage/files.ts owns the
+// non-Subsonic R2 / WebDAV management endpoints only).

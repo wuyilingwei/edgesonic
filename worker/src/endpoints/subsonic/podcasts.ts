@@ -31,22 +31,22 @@
 
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { createQueries } from "../db/queries";
-import { subsonicOK } from "../utils/xml";
+import { createQueries } from "../../db/queries";
+import { subsonicOK } from "../../utils/xml";
 import {
   mapPodcastChannel,
   mapPodcastEpisode,
   type SubsonicPodcastChannel,
   type SubsonicPodcastEpisode,
-} from "../types/subsonic";
-import { subsonicError, permissionMiddleware } from "../auth";
+} from "../../types/subsonic";
+import { subsonicError, permissionMiddleware } from "../../auth";
 import {
   podcastChannelId,
   refreshChannel,
   refreshAllChannels,
   downloadEpisodeToR2,
-} from "../utils/podcastSync";
-import type { User, PodcastChannel, PodcastEpisode } from "../types/entities";
+} from "../../utils/podcastSync";
+import type { User, PodcastChannel, PodcastEpisode } from "../../types/entities";
 
 export const podcastsRoutes = new Hono<{
   Bindings: Env;
@@ -378,7 +378,7 @@ function register(
   middleware: ReturnType<typeof permissionMiddleware> | null,
   handler: Handler,
 ) {
-  for (const p of [`/rest/${path}`, `/rest/${path}.view`]) {
+  for (const p of [`/${path}`, `/${path}.view`]) {
     if (middleware) {
       podcastsRoutes.get(p, middleware, handler);
       podcastsRoutes.post(p, middleware, handler);

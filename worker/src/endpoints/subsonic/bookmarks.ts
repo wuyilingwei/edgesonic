@@ -26,15 +26,15 @@
 
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { createQueries } from "../db/queries";
-import { subsonicOK } from "../utils/xml";
+import { createQueries } from "../../db/queries";
+import { subsonicOK } from "../../utils/xml";
 import {
   mapBookmark,
   mapSong,
   mapPlayQueue,
-} from "../types/subsonic";
-import { subsonicError } from "../auth";
-import type { User, SongMaster } from "../types/entities";
+} from "../../types/subsonic";
+import { subsonicError } from "../../auth";
+import type { User, SongMaster } from "../../types/entities";
 
 export const bookmarksRoutes = new Hono<{
   Bindings: Env;
@@ -262,7 +262,7 @@ function register(
   path: string,
   handler: (c: Context<{ Bindings: Env; Variables: { user: User } }>) => Promise<Response>,
 ) {
-  for (const p of [`/rest/${path}`, `/rest/${path}.view`]) {
+  for (const p of [`/${path}`, `/${path}.view`]) {
     bookmarksRoutes.get(p, handler);
     bookmarksRoutes.post(p, handler);
   }

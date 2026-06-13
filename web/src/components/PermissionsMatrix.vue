@@ -19,7 +19,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
 
 const { t } = useI18n();
-const { isSuperAdmin, authFetch, authPost } = useAuth();
+const { isSuperAdmin, edgesonicFetch, edgesonicPost } = useAuth();
 const permissions = ref<Array<{ level: number; name: string; enabled: boolean; maxRph: number }>>([]);
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
@@ -29,7 +29,7 @@ const permKeys = ["stream", "download", "upload", "edit_tags", "manage_sources",
 
 async function load() {
   try {
-    const xml = await authFetch("getPermissions");
+    const xml = await edgesonicFetch("permissions/list");
     const items: typeof permissions.value = [];
     const re = /<permission\s+([^>]+)\/>/g;
     let m;
@@ -47,7 +47,7 @@ async function load() {
 
 async function toggle(level: number, name: string, enabled: boolean) {
   try {
-    await authPost("updatePermission", { level, permission: name, enabled: enabled ? 1 : 0 });
+    await edgesonicPost("permissions/update", { level, permission: name, enabled: enabled ? 1 : 0 });
     load();
     showToast(t("settings.permissions.updated", { name: t(`settings.permissions.perms.${name}`), state: enabled ? t("common.on") : t("common.off") }));
   } catch { showToast(t("settings.permissions.updateFailed"), "error"); }
@@ -55,7 +55,7 @@ async function toggle(level: number, name: string, enabled: boolean) {
 
 async function setRph(level: number, name: string, rph: number) {
   try {
-    await authPost("updatePermission", { level, permission: name, max_rph: rph });
+    await edgesonicPost("permissions/update", { level, permission: name, max_rph: rph });
     load(); showToast(t("settings.permissions.rateUpdated"));
   } catch { showToast(t("settings.permissions.rateFailed"), "error"); }
 }

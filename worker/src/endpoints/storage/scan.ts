@@ -14,10 +14,10 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { Hono } from "hono";
-import { permissionMiddleware, subsonicError } from "../auth";
-import { subsonicOK } from "../utils/xml";
-import { md5 } from "../utils/md5";
-import { createQueries } from "../db/queries";
+import { permissionMiddleware, subsonicError } from "../../auth";
+import { subsonicOK } from "../../utils/xml";
+import { md5 } from "../../utils/md5";
+import { createQueries } from "../../db/queries";
 
 export const scanRoutes = new Hono();
 
@@ -46,7 +46,7 @@ interface SourceRow {
 // HTTP response returns immediately; clients poll /rest/getScanStatus for
 // progress / completion. Each invocation creates one scan_jobs row per source.
 // GET /rest/startScan[?id=<sourceId>]
-scanRoutes.get("/rest/startScan", permissionMiddleware("manage_sources"), async (c) => {
+scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) => {
   const env = c.env as Env;
   const db = env.DB;
   const onlyId = c.req.query("id");
@@ -98,7 +98,7 @@ scanRoutes.get("/rest/startScan", permissionMiddleware("manage_sources"), async 
 
 // Report aggregate scan status across the most recent job per source.
 // GET /rest/getScanStatus -> <scanStatus scanning="true|false" count="N"/>
-scanRoutes.get("/rest/getScanStatus", async (c) => {
+scanRoutes.get("/scan/status", async (c) => {
   const env = c.env as Env;
   const queries = createQueries(env.DB);
   const latest = await queries.getLatestScanJobs();

@@ -14,11 +14,11 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { subsonicOK } from "../utils/xml";
-import { mapPlaylist, mapPlaylistDetail } from "../types/subsonic";
-import { permissionMiddleware, subsonicError } from "../auth";
-import type { User } from "../types/entities";
+import { createQueries } from "../../db/queries";
+import { subsonicOK } from "../../utils/xml";
+import { mapPlaylist, mapPlaylistDetail } from "../../types/subsonic";
+import { permissionMiddleware, subsonicError } from "../../auth";
+import type { User } from "../../types/entities";
 
 export const playlistsRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
@@ -249,7 +249,7 @@ function register(
   middleware: ReturnType<typeof permissionMiddleware> | null,
   handler: (c: import("hono").Context<{ Bindings: Env; Variables: { user: User } }>) => Promise<Response>,
 ) {
-  const paths = [`/rest/${path}`, `/rest/${path}.view`];
+  const paths = [`/${path}`, `/${path}.view`];
   for (const p of paths) {
     if (middleware) {
       playlistsRoutes.get(p, middleware, handler);

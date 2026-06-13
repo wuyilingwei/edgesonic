@@ -14,8 +14,8 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { Hono } from "hono";
-import { invalidateFeature, invalidateFeatureString } from "../utils/features";
-import type { User } from "../types/entities";
+import { invalidateFeature, invalidateFeatureString } from "../../utils/features";
+import type { User } from "../../types/entities";
 
 // Feature flag management (DESIGN.md §3.3).
 // Both endpoints are in SESSION_ONLY_PATHS — authMiddleware already guarantees
@@ -25,7 +25,7 @@ export const featuresRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-featuresRoutes.get("/rest/getFeatures", async (c) => {
+featuresRoutes.get("/features/list", async (c) => {
   const user = c.get("user");
   if (user.level < 2) {
     return c.json({ ok: false, error: "Admin level required" }, 403);
@@ -49,7 +49,7 @@ featuresRoutes.get("/rest/getFeatures", async (c) => {
   });
 });
 
-featuresRoutes.post("/rest/updateFeature", async (c) => {
+featuresRoutes.post("/features/update", async (c) => {
   const user = c.get("user");
   const perm = await c.env.DB.prepare(
     "SELECT enabled FROM user_permissions WHERE level = ? AND permission = 'manage_permissions'"
@@ -154,7 +154,7 @@ function validateFeatureString(key: string, value: string): string | null {
   }
 }
 
-featuresRoutes.post("/rest/updateFeatureString", async (c) => {
+featuresRoutes.post("/features/updateString", async (c) => {
   const user = c.get("user");
   const perm = await c.env.DB.prepare(
     "SELECT enabled FROM user_permissions WHERE level = ? AND permission = 'manage_permissions'"
@@ -195,7 +195,7 @@ featuresRoutes.post("/rest/updateFeatureString", async (c) => {
 // because exposing it would let anyone POST raw audio to the container.
 // GET returns only a "set/unset" boolean — the actual value never leaves
 // the Worker except when the engine itself uses it for outbound requests.
-featuresRoutes.get("/rest/getExternalSecret", async (c) => {
+featuresRoutes.get("/features/secrets/get", async (c) => {
   const user = c.get("user");
   const perm = await c.env.DB.prepare(
     "SELECT enabled FROM user_permissions WHERE level = ? AND permission = 'manage_permissions'"
@@ -215,7 +215,7 @@ featuresRoutes.get("/rest/getExternalSecret", async (c) => {
   });
 });
 
-featuresRoutes.post("/rest/setExternalSecret", async (c) => {
+featuresRoutes.post("/features/secrets/set", async (c) => {
   const user = c.get("user");
   const perm = await c.env.DB.prepare(
     "SELECT enabled FROM user_permissions WHERE level = ? AND permission = 'manage_permissions'"

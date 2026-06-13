@@ -19,7 +19,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 
 const { t } = useI18n();
-const { isLoggedIn, username, isAdmin, level, authFetch } = useAuth();
+const { isLoggedIn, username, isAdmin, level, authFetch, storageFetch, edgesonicFetch } = useAuth();
 const stats = ref({ artists: 0, albums: 0, songs: 0, sources: 0, users: 0 });
 const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year: string }>>([]);
 
@@ -31,8 +31,8 @@ onMounted(async () => {
     const [artistXml, albumListXml, sourceXml, userXml] = await Promise.all([
       authFetch("getArtists"),
       authFetch("getAlbumList2", { type: "newest", size: "6" }),
-      isAdmin.value ? authFetch("getStorageSources") : Promise.resolve(""),
-      isAdmin.value ? authFetch("getUsers") : Promise.resolve(""),
+      isAdmin.value ? storageFetch("sources/list") : Promise.resolve(""),
+      isAdmin.value ? edgesonicFetch("users/list") : Promise.resolve(""),
     ]);
 
     stats.value.artists = artistXml.match(/<artist\s/g)?.length || 0;

@@ -114,7 +114,7 @@ export async function submitResult(
   opts: SubmitOpts,
   authPost: (path: string, body: unknown) => Promise<string>,
 ): Promise<{ ok: boolean; id?: string; error?: string }> {
-  return JSON.parse(await authPost("submitScrapeResult", {
+  return JSON.parse(await authPost("submitScrape", {
     songMasterId: opts.songMasterId,
     source: opts.source,
     songId: opts.songId,
@@ -132,7 +132,7 @@ export async function getHistory(
   if (params.limit != null) q.limit = String(params.limit);
   if (params.offset != null) q.offset = String(params.offset);
   if (params.songMasterId) q.songMasterId = params.songMasterId;
-  return JSON.parse(await authFetch("getScrapeHistory", q));
+  return JSON.parse(await authFetch("scrapeHistory", q));
 }
 
 /**
@@ -142,5 +142,5 @@ export async function getHistory(
 export function makeProxyFetch(
   authPost: (path: string, body: unknown) => Promise<string>,
 ): ProxyFn {
-  return async (req) => JSON.parse(await authPost("scrapeMetadata", req));
+  return async (req) => JSON.parse(await authPost("scrape", req));
 }

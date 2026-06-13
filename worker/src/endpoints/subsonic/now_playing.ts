@@ -32,11 +32,11 @@
 // ============================================================================
 
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { permissionMiddleware } from "../auth";
-import { subsonicOK } from "../utils/xml";
-import { mapSong } from "../types/subsonic";
-import type { User, SongMaster } from "../types/entities";
+import { createQueries } from "../../db/queries";
+import { permissionMiddleware } from "../../auth";
+import { subsonicOK } from "../../utils/xml";
+import { mapSong } from "../../types/subsonic";
+import type { User, SongMaster } from "../../types/entities";
 
 export const nowPlayingRoutes = new Hono<{
   Bindings: Env;
@@ -154,11 +154,11 @@ const getNowPlayingHandler = async (c: import("hono").Context<{
   );
 };
 
-nowPlayingRoutes.get("/rest/getNowPlaying",
+nowPlayingRoutes.get("/getNowPlaying",
   permissionMiddleware("browse"), getNowPlayingHandler);
-nowPlayingRoutes.get("/rest/getNowPlaying.view",
+nowPlayingRoutes.get("/getNowPlaying.view",
   permissionMiddleware("browse"), getNowPlayingHandler);
-nowPlayingRoutes.post("/rest/getNowPlaying",
+nowPlayingRoutes.post("/getNowPlaying",
   permissionMiddleware("browse"), getNowPlayingHandler);
-nowPlayingRoutes.post("/rest/getNowPlaying.view",
+nowPlayingRoutes.post("/getNowPlaying.view",
   permissionMiddleware("browse"), getNowPlayingHandler);

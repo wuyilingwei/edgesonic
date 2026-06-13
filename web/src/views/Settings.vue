@@ -23,7 +23,7 @@ import PermissionsMatrix from "../components/PermissionsMatrix.vue";
 
 const router = useRouter();
 const { t, locale } = useI18n();
-const { isSuperAdmin, authFetch, authPost, logout, username } = useAuth();
+const { isSuperAdmin, edgesonicFetch, edgesonicPost, logout, username } = useAuth();
 
 // === Accordion ===
 type SectionKey = "common" | "sessions" | "clients" | "permissions";
@@ -82,7 +82,7 @@ async function loadFeatures() {
   loading.value = true;
   error.value = "";
   try {
-    const text = await authFetch("getFeatures");
+    const text = await edgesonicFetch("features/list");
     const data = JSON.parse(text);
     if (!data.ok) throw new Error(data.error || "Request rejected");
     instanceId.value = data.instanceId || "";
@@ -102,7 +102,7 @@ async function loadFeatures() {
     externalUrl.value = findFeatureString("external_transcoder_url", "");
     // Probe the secret presence (the value itself never crosses the wire).
     try {
-      const probe = JSON.parse(await authFetch("getExternalSecret"));
+      const probe = JSON.parse(await edgesonicFetch("features/secrets/get"));
       externalKeySet.value = !!probe?.set;
     } catch { externalKeySet.value = false; }
     // 040: hydrate the scrape source priority list from feature_strings.
@@ -137,12 +137,12 @@ async function saveTranscode() {
       { key: "external_transcoder_url", value: externalUrl.value },
     ];
     for (const w of writes) {
-      const data = JSON.parse(await authPost("updateFeatureString", w));
+      const data = JSON.parse(await edgesonicPost("features/updateString", w));
       if (!data.ok) throw new Error(data.error || w.key);
     }
     // External key is opaque — only POST when the input is non-empty.
     if (externalKeyInput.value) {
-      const data = JSON.parse(await authPost("setExternalSecret", { value: externalKeyInput.value }));
+      const data = JSON.parse(await edgesonicPost("features/secrets/set", { value: externalKeyInput.value }));
       if (!data.ok) throw new Error(data.error || "external_key");
       externalKeySet.value = true;
       externalKeyInput.value = "";
@@ -213,7 +213,7 @@ async function saveScrape() {
   try {
     // Persist only the enabled subset in the user-chosen priority order.
     const enabledInOrder = scrapeOrder.value.filter((id) => scrapeEnabledSet.value.has(id));
-    const data = JSON.parse(await authPost("updateFeatureString", {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
       key: "scrape_enabled_sources",
       value: JSON.stringify(enabledInOrder),
     }));
@@ -244,7 +244,7 @@ function hydrateLastfmFromFeatures() {
 async function saveLastfm() {
   lastfmBusy.value = true;
   try {
-    const data = JSON.parse(await authPost("updateFeatureString", {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
       key: "lastfm_api_key",
       value: lastfmKeyInput.value,
     }));
@@ -262,7 +262,7 @@ async function saveLastfm() {
 async function clearLastfm() {
   lastfmBusy.value = true;
   try {
-    const data = JSON.parse(await authPost("updateFeatureString", {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
       key: "lastfm_api_key",
       value: "",
     }));
@@ -282,7 +282,7 @@ async function toggleFeature(f: Feature, checked: boolean) {
   const oldValue = f.value;
   f.value = newValue; // optimistic
   try {
-    const text = await authPost("updateFeature", { key: f.key, value: newValue });
+    const text = await edgesonicPost("features/update", { key: f.key, value: newValue });
     const data = JSON.parse(text);
     if (!data.ok) throw new Error(data.error || "Update rejected");
     showToast(`${f.key} → ${newValue ? t("common.on") : t("common.off")}`);
@@ -316,7 +316,7 @@ async function loadSessions(): Promise<boolean> {
   sessionsLoading.value = true;
   sessionsError.value = "";
   try {
-    const xml = await authFetch("getSessions");
+    const xml = await edgesonicFetch("auth/sessions/list");
     // 当前 session 被撤销后，签名校验失败 → status="failed" code="40"
     if (/status="failed"/.test(xml) && /code="40"/.test(xml)) {
       sessionsLoading.value = false;
@@ -339,7 +339,7 @@ async function loadSessions(): Promise<boolean> {
 async function revokeSession(id: string) {
   if (!confirm(t("settings.sessions.confirmRevoke"))) return;
   try {
-    const xml = await authPost("revokeSession", { id });
+    const xml = await edgesonicPost("auth/sessions/revoke", { id });
     if (/status="failed"/.test(xml)) throw new Error("revoke failed");
     showToast(t("settings.sessions.revoked"));
     // 若撤销的是当前 session，后续签名请求会 401 → 登出回 /login
@@ -365,7 +365,7 @@ async function loadCredentials() {
   credLoading.value = true;
   credError.value = "";
   try {
-    const xml = await authFetch("getCredentials");
+    const xml = await edgesonicFetch("auth/credentials/list");
     if (/status="failed"/.test(xml)) throw new Error("rejected");
     credentials.value = parseXmlAttrs(xml, "credential").map((r) => ({
       id: r.id || "",
@@ -393,7 +393,7 @@ async function createCredential() {
   const password = genPassword();
   const label = credLabel.value.trim();
   try {
-    const xml = await authPost("createCredential", { password, label });
+    const xml = await edgesonicPost("auth/credentials/create", { password, label });
     if (/status="failed"/.test(xml)) throw new Error("rejected");
     issued.value = { password, label };
     credLabel.value = "";
@@ -407,7 +407,7 @@ async function createCredential() {
 async function deleteCredential(id: string) {
   if (!confirm(t("settings.sessions.confirmRevoke"))) return;
   try {
-    const xml = await authPost("deleteCredential", { id });
+    const xml = await edgesonicPost("auth/credentials/delete", { id });
     if (/status="failed"/.test(xml)) throw new Error("rejected");
     if (issued.value) issued.value = null;
     await loadCredentials();

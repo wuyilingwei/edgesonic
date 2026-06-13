@@ -14,17 +14,17 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { Hono } from "hono";
-import { subsonicOK } from "../utils/xml";
+import { subsonicOK } from "../../utils/xml";
 
 export const pingRoutes = new Hono();
 
-pingRoutes.get("/rest/ping", (c) => {
+pingRoutes.get("/ping", (c) => {
   return c.text(subsonicOK({}), {
     headers: { "Content-Type": "application/xml; charset=UTF-8" },
   });
 });
 
-pingRoutes.get("/rest/getLicense", (c) => {
+pingRoutes.get("/getLicense", (c) => {
   return c.text(
     subsonicOK({
       license: {

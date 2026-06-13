@@ -23,7 +23,7 @@ import type { ScrapeResult } from "../lib/scrape";
 import { extractMetadata, isBrowserParse, suffixOf } from "../lib/metadata";
 
 const { t } = useI18n();
-const { authFetch, authPost, uploadFile, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
+const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
 interface DirEntry { name: string; }
@@ -98,7 +98,7 @@ function r2Key(f: FileEntry): string {
 
 async function loadSources() {
   try {
-    const xml = await authFetch("getStorageSources");
+    const xml = await storageFetch("sources/list");
     sources.value = parseXmlAttrs(xml, "source")
       .filter((s) => s.enabled === "true" || s.enabled === "1")
       .map((s) => ({ id: s.id || "", type: s.type || "", name: s.name || "", baseUrl: s.baseUrl || "" }));
@@ -109,7 +109,7 @@ async function loadDir() {
   loading.value = true;
   renamingFile.value = null;
   try {
-    const text = await authFetch("listFiles", { source: currentSource.value, path: path.value });
+    const text = await storageFetch("files/list", { source: currentSource.value, path: path.value });
     const data = JSON.parse(text);
     if (data.ok !== true) throw new Error(data.error || "list failed");
     dirs.value = (data.dirs || []).slice().sort((a: DirEntry, b: DirEntry) => a.name.localeCompare(b.name));
@@ -173,7 +173,7 @@ async function runTagScan() {
   let totalTagged = 0;
   try {
     for (;;) {
-      const text = await authFetch("scanTags", { batch: "4" });
+      const text = await tagFetch("read", { batch: "4" });
       const data = JSON.parse(text);
       if (data.ok !== true) { showToast(t("files.scanFailed"), "error"); return; }
       scanProcessed.value += data.processed || 0;
@@ -209,7 +209,7 @@ async function runBrowserRead() {
       browserScanProcessed.value++;
       try {
         // 1. uri → instance_id
-        const lookup = JSON.parse(await authFetch("findInstanceByUri", { uri: f.uri }));
+        const lookup = JSON.parse(await tagFetch("findInstanceByUri", { uri: f.uri }));
         if (!lookup?.ok || !lookup.instanceId || !lookup.masterId) continue;
         // 2. download via /rest/stream — gives us a proper authed audio blob
         const resp = await fetch(restUrl("stream", { id: lookup.masterId }));
@@ -249,7 +249,7 @@ async function confirmRename(f: FileEntry) {
   const toKey = dir + newName;
   opBusy.value = true;
   try {
-    const res = await authPost("files/move", { key: fromKey, dest: toKey });
+    const res = await storagePost("files/move", { key: fromKey, dest: toKey });
     if (!JSON.parse(res).ok) throw new Error();
     showToast(t("files.renamed"));
     loadDir();
@@ -273,7 +273,7 @@ async function confirmOp() {
   opBusy.value = true;
   try {
     const endpoint = mode === "move" ? "files/move" : "files/copy";
-    const res = await authPost(endpoint, { key: fromKey, dest: toKey });
+    const res = await storagePost(endpoint, { key: fromKey, dest: toKey });
     if (!JSON.parse(res).ok) throw new Error();
     showToast(mode === "move" ? t("files.moved") : t("files.copied"));
     closeOpModal();
@@ -287,7 +287,7 @@ async function deleteFile(f: FileEntry) {
   const key = r2Key(f);
   opBusy.value = true;
   try {
-    const res = await authPost("files/delete", { key });
+    const res = await storagePost("files/delete", { key });
     if (!JSON.parse(res).ok) throw new Error();
     showToast(t("files.deleted"));
     loadDir();

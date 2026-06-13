@@ -14,10 +14,10 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { subsonicOK } from "../utils/xml";
-import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../types/subsonic";
-import type { User, Annotation } from "../types/entities";
+import { createQueries } from "../../db/queries";
+import { subsonicOK } from "../../utils/xml";
+import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../../types/subsonic";
+import type { User, Annotation } from "../../types/entities";
 
 export const browsingRoutes = new Hono<{
   Bindings: Env;
@@ -50,7 +50,7 @@ const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 // parseXmlAttrs only reads attributes) — every mapped object must be wrapped.
 const attrs = (o: object) => ({ _attributes: o as Record<string, string | number | boolean | undefined> });
 
-browsingRoutes.get("/rest/getArtists", async (c) => {
+browsingRoutes.get("/getArtists", async (c) => {
   const queries = createQueries((c.env as Env).DB);
   const artists = await queries.getArtists();
   const ann = await queries.getAnnotationsMap(currentUserId(c), "artist", artists.map((a) => a.id));
@@ -67,7 +67,7 @@ browsingRoutes.get("/rest/getArtists", async (c) => {
   );
 });
 
-browsingRoutes.get("/rest/getArtist", async (c) => {
+browsingRoutes.get("/getArtist", async (c) => {
   const id = c.req.query("id");
   if (!id) return c.text(subsonicOK({}), 200, XML);
 
@@ -95,7 +95,7 @@ browsingRoutes.get("/rest/getArtist", async (c) => {
   );
 });
 
-browsingRoutes.get("/rest/getAlbum", async (c) => {
+browsingRoutes.get("/getAlbum", async (c) => {
   const id = c.req.query("id");
   if (!id) return c.text(subsonicOK({}), 200, XML);
 
@@ -120,7 +120,7 @@ browsingRoutes.get("/rest/getAlbum", async (c) => {
   );
 });
 
-browsingRoutes.get("/rest/getSong", async (c) => {
+browsingRoutes.get("/getSong", async (c) => {
   const id = c.req.query("id");
   if (!id) return c.text(subsonicOK({}), 200, XML);
 
@@ -135,7 +135,7 @@ browsingRoutes.get("/rest/getSong", async (c) => {
   );
 });
 
-browsingRoutes.get("/rest/getIndexes", async (c) => {
+browsingRoutes.get("/getIndexes", async (c) => {
   const queries = createQueries((c.env as Env).DB);
   // Optional musicFolderId filter (038): "default" / "0" / "" → aggregate view.
   const musicFolderId = c.req.query("musicFolderId") || undefined;
@@ -158,7 +158,7 @@ browsingRoutes.get("/rest/getIndexes", async (c) => {
   );
 });
 
-browsingRoutes.get("/rest/getMusicFolders", async (c) => {
+browsingRoutes.get("/getMusicFolders", async (c) => {
   const queries = createQueries((c.env as Env).DB);
   const sources = await queries.listEnabledSources();
 
@@ -211,10 +211,10 @@ const albumList2Handler = async (c: import("hono").Context, tag: "albumList" | "
   );
 };
 
-browsingRoutes.get("/rest/getAlbumList2", (c) => albumList2Handler(c, "albumList2"));
-browsingRoutes.get("/rest/getAlbumList", (c) => albumList2Handler(c, "albumList"));
+browsingRoutes.get("/getAlbumList2", (c) => albumList2Handler(c, "albumList2"));
+browsingRoutes.get("/getAlbumList", (c) => albumList2Handler(c, "albumList"));
 
-browsingRoutes.get("/rest/getGenres", async (c) => {
+browsingRoutes.get("/getGenres", async (c) => {
   const queries = createQueries((c.env as Env).DB);
   const genres = await queries.getGenres();
 
@@ -231,7 +231,7 @@ browsingRoutes.get("/rest/getGenres", async (c) => {
   );
 });
 
-browsingRoutes.get("/rest/getSongsByGenre", async (c) => {
+browsingRoutes.get("/getSongsByGenre", async (c) => {
   const genre = c.req.query("genre");
   if (!genre) return c.text(subsonicOK({ songsByGenre: {} }), 200, XML);
   const count = Math.min(parseInt(c.req.query("count") || "10", 10) || 10, 500);
@@ -253,7 +253,7 @@ browsingRoutes.get("/rest/getSongsByGenre", async (c) => {
   );
 });
 
-browsingRoutes.get("/rest/getMusicDirectory", async (c) => {
+browsingRoutes.get("/getMusicDirectory", async (c) => {
   const id = c.req.query("id");
   if (!id) return c.text(subsonicOK({}), 200, XML);
 

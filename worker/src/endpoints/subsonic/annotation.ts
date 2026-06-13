@@ -33,11 +33,11 @@
 // declaration + browsing field enrichment).
 
 import { Hono } from "hono";
-import { createQueries } from "../db/queries";
-import { permissionMiddleware, subsonicError } from "../auth";
-import { subsonicOK } from "../utils/xml";
-import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../types/subsonic";
-import type { User, Annotation } from "../types/entities";
+import { createQueries } from "../../db/queries";
+import { permissionMiddleware, subsonicError } from "../../auth";
+import { subsonicOK } from "../../utils/xml";
+import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../../types/subsonic";
+import type { User, Annotation } from "../../types/entities";
 
 // 035 — local helper (mirrors browsing.ts / searching.ts).
 function liteOf(row: Annotation | undefined): AnnotationLite | undefined {
@@ -110,22 +110,22 @@ const starHandler = (mode: "star" | "unstar") => async (c: import("hono").Contex
   return c.text(subsonicOK({}), 200, XML);
 };
 
-annotationRoutes.get("/rest/star",
+annotationRoutes.get("/star",
   permissionMiddleware("edit_annotations"), starHandler("star"));
-annotationRoutes.get("/rest/star.view",
+annotationRoutes.get("/star.view",
   permissionMiddleware("edit_annotations"), starHandler("star"));
-annotationRoutes.post("/rest/star",
+annotationRoutes.post("/star",
   permissionMiddleware("edit_annotations"), starHandler("star"));
-annotationRoutes.post("/rest/star.view",
+annotationRoutes.post("/star.view",
   permissionMiddleware("edit_annotations"), starHandler("star"));
 
-annotationRoutes.get("/rest/unstar",
+annotationRoutes.get("/unstar",
   permissionMiddleware("edit_annotations"), starHandler("unstar"));
-annotationRoutes.get("/rest/unstar.view",
+annotationRoutes.get("/unstar.view",
   permissionMiddleware("edit_annotations"), starHandler("unstar"));
-annotationRoutes.post("/rest/unstar",
+annotationRoutes.post("/unstar",
   permissionMiddleware("edit_annotations"), starHandler("unstar"));
-annotationRoutes.post("/rest/unstar.view",
+annotationRoutes.post("/unstar.view",
   permissionMiddleware("edit_annotations"), starHandler("unstar"));
 
 // =============================================================================
@@ -157,13 +157,13 @@ const setRatingHandler = async (c: import("hono").Context) => {
   return c.text(subsonicOK({}), 200, XML);
 };
 
-annotationRoutes.get("/rest/setRating",
+annotationRoutes.get("/setRating",
   permissionMiddleware("edit_annotations"), setRatingHandler);
-annotationRoutes.get("/rest/setRating.view",
+annotationRoutes.get("/setRating.view",
   permissionMiddleware("edit_annotations"), setRatingHandler);
-annotationRoutes.post("/rest/setRating",
+annotationRoutes.post("/setRating",
   permissionMiddleware("edit_annotations"), setRatingHandler);
-annotationRoutes.post("/rest/setRating.view",
+annotationRoutes.post("/setRating.view",
   permissionMiddleware("edit_annotations"), setRatingHandler);
 
 // =============================================================================
@@ -216,13 +216,13 @@ const scrobbleHandler = async (c: import("hono").Context) => {
   return c.text(subsonicOK({}), 200, XML);
 };
 
-annotationRoutes.get("/rest/scrobble",
+annotationRoutes.get("/scrobble",
   permissionMiddleware("edit_annotations"), scrobbleHandler);
-annotationRoutes.get("/rest/scrobble.view",
+annotationRoutes.get("/scrobble.view",
   permissionMiddleware("edit_annotations"), scrobbleHandler);
-annotationRoutes.post("/rest/scrobble",
+annotationRoutes.post("/scrobble",
   permissionMiddleware("edit_annotations"), scrobbleHandler);
-annotationRoutes.post("/rest/scrobble.view",
+annotationRoutes.post("/scrobble.view",
   permissionMiddleware("edit_annotations"), scrobbleHandler);
 
 // =============================================================================
@@ -272,13 +272,13 @@ const getStarredHandler = (tag: "starred" | "starred2") =>
     );
   };
 
-annotationRoutes.get("/rest/getStarred",
+annotationRoutes.get("/getStarred",
   permissionMiddleware("browse"), getStarredHandler("starred"));
-annotationRoutes.get("/rest/getStarred.view",
+annotationRoutes.get("/getStarred.view",
   permissionMiddleware("browse"), getStarredHandler("starred"));
-annotationRoutes.get("/rest/getStarred2",
+annotationRoutes.get("/getStarred2",
   permissionMiddleware("browse"), getStarredHandler("starred2"));
-annotationRoutes.get("/rest/getStarred2.view",
+annotationRoutes.get("/getStarred2.view",
   permissionMiddleware("browse"), getStarredHandler("starred2"));
 
 // =============================================================================
@@ -316,7 +316,7 @@ const getRandomSongsHandler = async (c: import("hono").Context) => {
   );
 };
 
-annotationRoutes.get("/rest/getRandomSongs",
+annotationRoutes.get("/getRandomSongs",
   permissionMiddleware("browse"), getRandomSongsHandler);
-annotationRoutes.get("/rest/getRandomSongs.view",
+annotationRoutes.get("/getRandomSongs.view",
   permissionMiddleware("browse"), getRandomSongsHandler);
