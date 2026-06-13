@@ -109,7 +109,9 @@
     "createNewPlaylist": "Create New Playlist…",
     "addToPlaylistFailed": "Failed to add to playlist",
     "selectPlaylist": "Pick a playlist",
-    "noPlaylists": "No playlists yet — create one first"
+    "noPlaylists": "No playlists yet — create one first",
+    "songsHint": "💡 Hover song row to edit (✎) · Multi-select for batch edit",
+    "batchHint": "Check rows to batch (edit tags / playlist / share)"
   },
   "tagEditor": {
     "singleTitle": "Edit Track Info",
@@ -289,7 +291,9 @@
     "selectFirst": "Select a file first",
     "loadingWasm": "Loading FFmpeg WASM…",
     "done": "Done! Download started.",
-    "failed": "Transcoding failed"
+    "failed": "Transcoding failed",
+    "description": "In-browser ffmpeg.wasm — files never leave your machine",
+    "hint": "Select file → Pick format → Download"
   },
   "player": {
     "noTrack": "NO TRACK LOADED",

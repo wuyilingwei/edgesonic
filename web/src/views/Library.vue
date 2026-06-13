@@ -301,10 +301,16 @@ function backToAlbums() {
   songs.value = [];
 }
 
+// === 079: songs-tab discoverability hint ===
+// The hint stays at full opacity for 5s after first mount, then fades to 0.5
+// so it doesn't keep stealing attention from the song list itself.
+const songsHintFaded = ref(false);
+
 onMounted(() => {
   if (tab.value === "artists") loadArtists();
   else if (tab.value === "albums") loadMoreAlbums();
   else loadMoreSongs();
+  setTimeout(() => { songsHintFaded.value = true; }, 5000);
 });
 
 // ============================================================================
@@ -617,6 +623,20 @@ async function submitCreateAndAdd() {
 
     <!-- Tab: all songs -->
     <div v-else-if="tab === 'songs'">
+      <!-- 079: discoverability hint — explains the per-row ✎ and the batch
+           workflow so admins don't have to hover-discover them. Fades to 50%
+           opacity after 5s (see songsHintFaded) but stays visible. -->
+      <div
+        v-if="isAdmin && allSongs.length > 0"
+        class="songs-hint"
+        :class="{ faded: songsHintFaded }"
+      >{{ t("library.songsHint") }}</div>
+      <!-- 079: batch-edit preview row. Shown only when nothing is selected;
+           swaps out for the active batch-toolbar below as soon as the user
+           ticks a row. -->
+      <div v-if="isAdmin && !selectedIds.length" class="batch-preview">
+        <span class="mono-label">{{ t("library.batchHint") }}</span>
+      </div>
       <!-- Batch selection toolbar (admin-only) -->
       <div v-if="isAdmin && selectedIds.length" class="batch-toolbar">
         <span class="mono-label">{{ t("library.selected", { n: selectedIds.length }) }}</span>
@@ -862,15 +882,43 @@ async function submitCreateAndAdd() {
 .song-artist { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); }
 .song-time { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); }
 
-/* tag editor */
+/* tag editor — 079: keep ✎ permanently visible at 0.5 opacity so admins
+   discover the entry point without having to hover the row. Hover / focus
+   still snap to full opacity for the active row. */
 .edit-btn {
   background: none; border: none; cursor: pointer;
   color: var(--color-text-muted); font-size: var(--fs-sm);
-  padding: 0 0.25rem; opacity: 0;
+  padding: 0 0.25rem; opacity: 0.5;
   transition: opacity 0.15s, color 0.15s;
 }
 .song-row:hover .edit-btn { opacity: 1; }
+.song-row .edit-btn:focus-visible { opacity: 1; outline: 1px solid var(--color-accent-primary); }
 .edit-btn:hover { color: var(--color-accent-primary); }
+
+/* 079: songs-tab discoverability hint. Sits above the song table on admins
+   only; auto-fades to 50% opacity after 5s (see songsHintFaded). */
+.songs-hint {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  padding: 0.5rem 1rem;
+  margin-bottom: 0.5rem;
+  border-left: 2px solid var(--color-accent-dim);
+  background: var(--color-bg-tertiary);
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+.songs-hint.faded { opacity: 0.5; }
+
+/* 079: batch-edit preview row. Displaces itself in favour of batch-toolbar
+   the moment a row is ticked, so the two never stack. */
+.batch-preview {
+  display: flex; align-items: center;
+  padding: 0.45rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px dashed var(--color-border-subtle);
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+}
 
 /* batch selection (songs tab) */
 .batch-toolbar {
