@@ -27,6 +27,7 @@ import { featuresRoutes } from "./features";
 import { transcodeRoutes } from "./transcode";
 import { workRoutes } from "./work";
 import { workUploadRoutes } from "./work_upload";
+import { cfRoutes } from "./cf";
 
 export const edgesonicRoutes = new Hono();
 
@@ -39,3 +40,5 @@ edgesonicRoutes.route("/", transcodeRoutes);
 edgesonicRoutes.route("/", workRoutes);
 // 053 — browser-pool transcode upload (binary body, HMAC-signed token)
 edgesonicRoutes.route("/", workUploadRoutes);
+// 054 — Cloudflare API integration (token / cron / analytics)
+edgesonicRoutes.route("/", cfRoutes);
