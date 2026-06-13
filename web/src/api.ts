@@ -149,13 +149,52 @@ export function useAuth() {
   }
 
   interface WriteTagsResult { ok: boolean; error?: string; files?: Array<{ instanceId: string; uri: string; written: boolean; reason?: string }>; masterId?: string; }
-  async function writeTags(id: string, tags: Record<string, string | number>): Promise<WriteTagsResult> {
-    return JSON.parse(await authPost("writeTags", { id, tags }));
+  // `cover.data` is the raw base64 string (no data: prefix); the worker accepts
+  // either form. 042 ships ≤500KB JPEG/PNG produced by the canvas compressor
+  // in TagEditor.vue.
+  async function writeTags(
+    id: string,
+    tags: Record<string, string | number>,
+    cover?: { data: string; mime: string },
+  ): Promise<WriteTagsResult> {
+    const body: Record<string, unknown> = { id, tags };
+    if (cover) { body.coverData = cover.data; body.coverMime = cover.mime; }
+    return JSON.parse(await authPost("writeTags", body));
   }
 
   interface BatchWriteResult { ok: boolean; error?: string; succeeded?: number; failed?: number; results?: Array<{ id: string; ok: boolean; error?: string; masterId?: string }>; }
-  async function batchWriteTags(ids: string[], patch: Record<string, string | number>): Promise<BatchWriteResult> {
-    return JSON.parse(await authPost("batchWriteTags", { ids, patch }));
+  async function batchWriteTags(
+    ids: string[],
+    patch: Record<string, string | number>,
+    cover?: { data: string; mime: string },
+  ): Promise<BatchWriteResult> {
+    const body: Record<string, unknown> = { ids, patch };
+    if (cover) { body.coverData = cover.data; body.coverMime = cover.mime; }
+    return JSON.parse(await authPost("batchWriteTags", body));
+  }
+
+  // 042 — tidy folder via template; dryRun:true returns plan only.
+  interface TidyFolderResult {
+    ok: boolean;
+    error?: string;
+    planned?: Array<{ id: string; instanceId: string; from: string; to: string; skipped?: string }>;
+    applied?: Array<{ id: string; instanceId: string; ok: boolean; error?: string }>;
+    failed?: number;
+    dryRun?: boolean;
+  }
+  async function tidyFolder(
+    ids: string[],
+    template: string,
+    opts?: { dryRun?: boolean; source?: "r2" | "webdav" },
+  ): Promise<TidyFolderResult> {
+    return JSON.parse(await authPost("tidyFolder", { ids, template, dryRun: !!opts?.dryRun, source: opts?.source }));
+  }
+
+  // 041 — submit browser-parsed metadata for an instance (OGG/Opus/M4A/...).
+  // `tags` is an ExtractedMetadata shape from web/src/lib/metadata.ts.
+  interface SubmitMetadataResult { ok: boolean; error?: string; masterId?: string; albumId?: string; artistId?: string; }
+  async function submitMetadata(instanceId: string, tags: Record<string, string | number>): Promise<SubmitMetadataResult> {
+    return JSON.parse(await authPost("submitMetadata", { instanceId, tags }));
   }
 
   async function uploadFile(file: File, target: string, path?: string, masterId?: string): Promise<string> {
@@ -175,7 +214,7 @@ export function useAuth() {
 
   return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
     login, logout, authFetch, authPost, uploadFile, makeSalt, md5,
-    readTags, writeTags, batchWriteTags,
+    readTags, writeTags, batchWriteTags, submitMetadata, tidyFolder,
     signedParams, restUrl, streamUrl, coverArtUrl };
 }
 

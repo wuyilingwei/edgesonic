@@ -70,7 +70,9 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  (e: "submit", patch: Record<string, string | number>): void;
+  // 042 — `cover` is the optional new front-cover, base64-encoded JPEG/PNG ≤500KB.
+  // Callers that don't care about cover writeback can ignore the second arg.
+  (e: "submit", patch: Record<string, string | number>, cover?: { data: string; mime: string }): void;
   (e: "close"): void;
 }>();
 
@@ -89,6 +91,20 @@ const apply = reactive({
   comment: false, lyrics: false,
 });
 
+// === 042 cover state =========================================================
+// Picked image → canvas-compressed JPEG ≤500KB → base64 string for upload.
+// `coverPreviewUrl` is a smaller (≤200px) blob URL for the thumbnail.
+const COVER_MAX_BYTES = 500 * 1024;
+const COVER_MAX_DIM = 1500;            // pre-scale longest side before quality iteration
+const COVER_PREVIEW_DIM = 200;
+const coverData = ref<string>("");      // base64 (no data URL prefix)
+const coverMime = ref<"image/jpeg" | "image/png">("image/jpeg");
+const coverPreviewUrl = ref<string>("");
+const coverInfo = ref<string>("");
+const coverError = ref<string>("");
+const coverBusy = ref(false);
+const coverInputEl = ref<HTMLInputElement | null>(null);
+
 function resetFromProps() {
   const i = props.initialTags || {};
   form.title = String(i.title ?? "");
@@ -104,6 +120,12 @@ function resetFromProps() {
   // batch mode starts with nothing applied; single mode every present field
   // is "applied" implicitly (we don't show the checkboxes).
   for (const k of Object.keys(apply) as Array<keyof typeof apply>) apply[k] = false;
+  // Drop any previously-picked cover when the modal re-opens.
+  if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value);
+  coverData.value = "";
+  coverPreviewUrl.value = "";
+  coverInfo.value = "";
+  coverError.value = "";
 }
 
 watch(() => props.open, (v) => { if (v) resetFromProps(); }, { immediate: true });
@@ -142,15 +164,136 @@ function buildPatch(): Record<string, string | number> {
 }
 
 const patchPreview = computed(() => Object.keys(buildPatch()));
+const hasCover = computed(() => coverData.value.length > 0);
 
 function onSubmit() {
   const patch = buildPatch();
-  if (Object.keys(patch).length === 0) return;
-  emit("submit", patch);
+  // 042 — cover-only submissions are valid (the worker accepts an empty patch
+  // when a cover is supplied). Block the click only when nothing is pending.
+  if (Object.keys(patch).length === 0 && !hasCover.value) return;
+  const cover = hasCover.value ? { data: coverData.value, mime: coverMime.value } : undefined;
+  emit("submit", patch, cover);
 }
 
 function onClose() {
   emit("close");
+}
+
+// === 042 cover picker ========================================================
+
+function onCoverDrop(e: DragEvent) {
+  const file = e.dataTransfer?.files?.[0];
+  if (file) handleCoverFile(file);
+}
+function onCoverPick(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) handleCoverFile(file);
+}
+function triggerCoverPick() {
+  coverInputEl.value?.click();
+}
+function clearCover() {
+  if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value);
+  coverData.value = "";
+  coverPreviewUrl.value = "";
+  coverInfo.value = "";
+  coverError.value = "";
+  if (coverInputEl.value) coverInputEl.value.value = "";
+}
+
+async function handleCoverFile(file: File) {
+  coverError.value = "";
+  if (!/^image\//i.test(file.type)) {
+    coverError.value = t("tagEditor.cover.errInvalidType");
+    return;
+  }
+  coverBusy.value = true;
+  try {
+    const img = await loadImage(file);
+    // Pre-scale so we are never compressing a 6000x6000 source.
+    const { width, height } = fitInto(img.width, img.height, COVER_MAX_DIM);
+    const canvas = document.createElement("canvas");
+    canvas.width = width; canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("no 2d context");
+    ctx.drawImage(img, 0, 0, width, height);
+
+    // Iterate JPEG quality until the encoded blob fits the 500KB ceiling. We
+    // start high so good source photos retain quality, then back off step by
+    // step. Floor at 0.4 — below that the artefacts make the photo unusable.
+    const qualities = [0.85, 0.7, 0.55, 0.4];
+    let blob: Blob | null = null;
+    for (const q of qualities) {
+      blob = await canvasToBlob(canvas, "image/jpeg", q);
+      if (blob && blob.size <= COVER_MAX_BYTES) break;
+    }
+    if (!blob) throw new Error("encode failed");
+    if (blob.size > COVER_MAX_BYTES) {
+      coverError.value = t("tagEditor.cover.errTooLarge", { kb: Math.round(blob.size / 1024) });
+      coverBusy.value = false;
+      return;
+    }
+    coverData.value = await blobToBase64(blob);
+    coverMime.value = "image/jpeg";
+
+    // Generate a small thumbnail for the in-modal preview (separate canvas →
+    // a separate blob URL so re-encoding the main blob doesn't blur it).
+    const thumb = document.createElement("canvas");
+    const t2 = fitInto(width, height, COVER_PREVIEW_DIM);
+    thumb.width = t2.width; thumb.height = t2.height;
+    const tctx = thumb.getContext("2d");
+    if (tctx) {
+      tctx.drawImage(img, 0, 0, t2.width, t2.height);
+      const thumbBlob = await canvasToBlob(thumb, "image/jpeg", 0.85);
+      if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value);
+      coverPreviewUrl.value = thumbBlob ? URL.createObjectURL(thumbBlob) : "";
+    }
+
+    coverInfo.value = t("tagEditor.cover.info", {
+      kb: Math.round(blob.size / 1024),
+      w: width,
+      h: height,
+    });
+  } catch (e) {
+    coverError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    coverBusy.value = false;
+  }
+}
+
+function loadImage(file: File): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("image decode failed")); };
+    img.src = url;
+  });
+}
+
+function fitInto(w: number, h: number, max: number): { width: number; height: number } {
+  if (w <= max && h <= max) return { width: w, height: h };
+  const ratio = Math.min(max / w, max / h);
+  return { width: Math.round(w * ratio), height: Math.round(h * ratio) };
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, mime: string, quality: number): Promise<Blob | null> {
+  return new Promise((resolve) => canvas.toBlob(resolve, mime, quality));
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // Strip the `data:image/jpeg;base64,` prefix — the worker accepts either
+      // form but we keep the wire small.
+      const result = String(reader.result);
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.substring(comma + 1) : result);
+    };
+    reader.onerror = () => reject(new Error("base64 encode failed"));
+    reader.readAsDataURL(blob);
+  });
 }
 </script>
 
@@ -161,9 +304,38 @@ function onClose() {
         {{ props.title || (isBatch ? t("tagEditor.batchTitle", { n: songIds.length }) : t("tagEditor.singleTitle")) }}
       </div>
 
-      <!-- cover slot — 042 will inject a drag-drop zone here -->
+      <!-- cover slot — 042: drag/drop or click to pick. Canvas-compressed to
+           ≤500KB JPEG client-side, base64 attached to the submit payload. -->
       <slot name="cover">
-        <div class="cover-slot-placeholder mono-label">{{ t("tagEditor.coverPlaceholder") }}</div>
+        <div
+          class="cover-drop"
+          :class="{ 'cover-drop-has': hasCover, 'cover-drop-busy': coverBusy }"
+          @dragover.prevent
+          @drop.prevent="onCoverDrop"
+          @click="triggerCoverPick"
+        >
+          <input
+            ref="coverInputEl"
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            class="cover-file-hidden"
+            @change="onCoverPick"
+          />
+          <img v-if="coverPreviewUrl" :src="coverPreviewUrl" class="cover-thumb" alt="cover preview" />
+          <div v-if="!hasCover && !coverBusy" class="cover-drop-hint mono-label">
+            {{ t("tagEditor.cover.dropHint") }}
+          </div>
+          <div v-else-if="coverBusy" class="cover-drop-hint mono-label">{{ t("tagEditor.cover.compressing") }}</div>
+          <div v-else class="cover-info-row">
+            <span class="cover-info mono-label">{{ coverInfo }}</span>
+            <button
+              type="button"
+              class="btn-secondary cover-clear"
+              @click.stop="clearCover"
+            >{{ t("tagEditor.cover.clear") }}</button>
+          </div>
+        </div>
+        <p v-if="coverError" class="cover-error mono-label">{{ coverError }}</p>
       </slot>
 
       <div v-if="isBatch" class="batch-hint mono-label">{{ t("tagEditor.batchHint") }}</div>
@@ -253,8 +425,8 @@ function onClose() {
 
       <div class="modal-actions">
         <button class="btn-secondary" @click="onClose">{{ t("common.cancel") }}</button>
-        <button class="btn-primary" :disabled="busy || patchPreview.length === 0" @click="onSubmit">
-          {{ busy ? t("common.loading") : (isBatch ? t("tagEditor.applyBatch", { n: patchPreview.length }) : t("common.save")) }}
+        <button class="btn-primary" :disabled="busy || (patchPreview.length === 0 && !hasCover)" @click="onSubmit">
+          {{ busy ? t("common.loading") : (isBatch ? t("tagEditor.applyBatch", { n: patchPreview.length + (hasCover ? 1 : 0) }) : t("common.save")) }}
         </button>
       </div>
 
@@ -273,6 +445,43 @@ function onClose() {
   text-align: center;
   color: var(--color-text-muted);
   border-radius: 2px;
+}
+.cover-drop {
+  margin-bottom: 0.85rem;
+  padding: 0.75rem;
+  border: 1px dashed var(--color-border-subtle);
+  border-radius: 2px;
+  text-align: center;
+  cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
+  transition: border-color 0.1s, background 0.1s;
+}
+.cover-drop:hover { border-color: var(--color-accent-primary); background: var(--color-bg-tertiary); }
+.cover-drop-has { border-style: solid; border-color: var(--color-border-default); }
+.cover-drop-busy { opacity: 0.7; cursor: progress; }
+.cover-file-hidden { display: none; }
+.cover-drop-hint {
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.05em;
+}
+.cover-thumb {
+  max-width: 200px;
+  max-height: 200px;
+  object-fit: contain;
+  border: 1px solid var(--color-border-subtle);
+}
+.cover-info-row {
+  display: flex; align-items: center; gap: 0.75rem;
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--color-text-secondary);
+}
+.cover-info { color: var(--color-accent-primary); }
+.cover-clear { font-size: var(--fs-xs); padding: 0.15rem 0.5rem; }
+.cover-error {
+  margin: 0 0 0.6rem;
+  color: var(--color-status-error);
+  font-size: var(--fs-xs);
 }
 .batch-hint {
   margin-bottom: 0.75rem;

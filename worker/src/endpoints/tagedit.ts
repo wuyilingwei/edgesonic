@@ -20,6 +20,7 @@ import { createQueries } from "../db/queries";
 
 type Queries = ReturnType<typeof createQueries>;
 import { requiredPrefixLen, rebuildTagPrefix } from "../utils/tagwrite";
+import type { TagWriteCover } from "../utils/tagwrite";
 import { encodePath } from "./scan";
 import type { SongTags } from "../utils/tags";
 
@@ -27,6 +28,7 @@ export const tagEditRoutes = new Hono();
 
 const HEAD_FETCH = 512 * 1024;
 const MAX_REWRITE_BYTES = 80 * 1024 * 1024; // whole file is buffered for the rewrite
+const MAX_COVER_BYTES = 500 * 1024;          // 042 — front cover ceiling; the web canvas compressor honours this
 const BATCH_MAX = 50; // Workers single-request CPU budget bounds batch fan-out (see findings.md)
 
 interface SourceRow {
@@ -62,14 +64,18 @@ tagEditRoutes.post("/rest/writeTags", permissionMiddleware("edit_tags"), async (
   const db = env.DB;
   const queries = createQueries(db);
 
-  const body = await c.req.json<{ id?: string; tags?: SongTags }>().catch(() => null);
+  const body = await c.req.json<{ id?: string; tags?: SongTags; coverData?: string; coverMime?: string }>().catch(() => null);
   if (!body?.id || !body.tags) return c.json({ ok: false, error: "Missing id or tags" }, 400);
 
   const tags = cleanInput(body.tags);
-  if (!Object.keys(tags).length) return c.json({ ok: false, error: "No tag fields provided" }, 400);
+  const parsed = parseCover(body.coverData, body.coverMime);
+  if (parsed && "error" in parsed) return c.json({ ok: false, error: parsed.error }, 400);
+  const cover = parsed ?? undefined;
+  // tag fields are optional when a cover is provided — cover-only edits still legitimately update the file
+  if (!Object.keys(tags).length && !cover) return c.json({ ok: false, error: "No tag fields provided" }, 400);
 
   const sources = await loadSources(db);
-  const res = await applyTagsToSong(env, db, queries, sources, body.id, tags);
+  const res = await applyTagsToSong(env, db, queries, sources, body.id, tags, cover);
   if (!res.ok) {
     const status = res.error === "Song not found" ? 404 : 500;
     return c.json({ ok: false, error: res.error || "Write failed" }, status);
@@ -92,7 +98,7 @@ tagEditRoutes.post("/rest/batchWriteTags", permissionMiddleware("edit_tags"), as
   const db = env.DB;
   const queries = createQueries(db);
 
-  const body = await c.req.json<{ ids?: string[]; patch?: SongTags }>().catch(() => null);
+  const body = await c.req.json<{ ids?: string[]; patch?: SongTags; coverData?: string; coverMime?: string }>().catch(() => null);
   if (!body || !Array.isArray(body.ids) || !body.patch) {
     return c.json({ ok: false, error: "Missing ids or patch" }, 400);
   }
@@ -102,7 +108,10 @@ tagEditRoutes.post("/rest/batchWriteTags", permissionMiddleware("edit_tags"), as
   }
 
   const patch = cleanInput(body.patch);
-  if (!Object.keys(patch).length) {
+  const parsed = parseCover(body.coverData, body.coverMime);
+  if (parsed && "error" in parsed) return c.json({ ok: false, error: parsed.error }, 400);
+  const cover = parsed ?? undefined;
+  if (!Object.keys(patch).length && !cover) {
     return c.json({ ok: false, error: "Patch contains no recognised fields" }, 400);
   }
 
@@ -122,7 +131,7 @@ tagEditRoutes.post("/rest/batchWriteTags", permissionMiddleware("edit_tags"), as
   // the others; per-row error string lands on the failed result.
   for (const id of body.ids) {
     try {
-      const res = await applyTagsToSong(env, db, queries, sources, id, patch);
+      const res = await applyTagsToSong(env, db, queries, sources, id, patch, cover);
       if (res.ok) {
         succeeded++;
         results.push({ id, ok: true, masterId: res.masterId, files: res.files });
@@ -150,6 +159,7 @@ async function applyTagsToSong(
   sources: Map<string, SourceRow>,
   idOrInstanceId: string,
   tags: SongTags,
+  cover?: TagWriteCover,
 ): Promise<ApplyResult> {
   let master = await queries.getSongMaster(idOrInstanceId);
   if (!master) {
@@ -159,6 +169,23 @@ async function applyTagsToSong(
   if (!master) return { ok: false, error: "Song not found" };
 
   // --- D1 relink (same id derivation as scanTags so edits and scans converge) ---
+  // Cover-only edits skip D1 mutation entirely — there is no field to relink.
+  if (!Object.keys(tags).length && cover) {
+    const instances = await queries.getSongInstances(master.id);
+    const files: FileResult[] = [];
+    for (const inst of instances) {
+      const res = await rewriteInstance(env, sources, inst.storage_uri, (inst.suffix || "").toLowerCase(), inst.content_type, tags, cover)
+        .catch((e): { written: boolean; reason?: string; newSize?: number } =>
+          ({ written: false, reason: e instanceof Error ? e.message : String(e) }));
+      if (res.written && typeof res.newSize === "number") {
+        await db.prepare("UPDATE song_instances SET size = ?, updated_at = ? WHERE id = ?")
+          .bind(res.newSize, Math.floor(Date.now() / 1000), inst.id).run();
+      }
+      files.push({ instanceId: inst.id, uri: inst.storage_uri, written: res.written, reason: res.reason });
+    }
+    return { ok: true, masterId: master.id, albumId: master.album_id, artistId: master.artist_id, files };
+  }
+
   const curArtist = await db.prepare("SELECT name FROM artists WHERE id = ?")
     .bind(master.artist_id).first<{ name: string }>();
   const curAlbum = await db.prepare("SELECT name FROM albums WHERE id = ?")
@@ -212,7 +239,7 @@ async function applyTagsToSong(
   const instances = await queries.getSongInstances(master.id);
   const files: FileResult[] = [];
   for (const inst of instances) {
-    const res = await rewriteInstance(env, sources, inst.storage_uri, (inst.suffix || "").toLowerCase(), inst.content_type, tags)
+    const res = await rewriteInstance(env, sources, inst.storage_uri, (inst.suffix || "").toLowerCase(), inst.content_type, tags, cover)
       .catch((e): { written: boolean; reason?: string; newSize?: number } =>
         ({ written: false, reason: e instanceof Error ? e.message : String(e) }));
     if (res.written && typeof res.newSize === "number") {
@@ -232,6 +259,37 @@ async function loadSources(db: D1Database): Promise<Map<string, SourceRow>> {
   ).all<SourceRow>();
   for (const s of rows.results) sources.set(s.id, s);
   return sources;
+}
+
+// Validate + decode `coverData` (base64) and `coverMime` from the request body.
+// Returns null when no cover was supplied, a TagWriteCover on success, or an
+// { error } envelope so the caller can pass it through to a 400 response.
+function parseCover(coverData?: string, coverMime?: string): TagWriteCover | { error: string } | null {
+  if (!coverData) return null;
+  const mime = (coverMime || "image/jpeg").toLowerCase();
+  if (mime !== "image/jpeg" && mime !== "image/png") {
+    return { error: `Unsupported cover mime: ${mime}` };
+  }
+  const data = decodeBase64(coverData);
+  if (!data) return { error: "Invalid base64 coverData" };
+  if (data.length > MAX_COVER_BYTES) {
+    return { error: `Cover exceeds ${MAX_COVER_BYTES} bytes (${data.length})` };
+  }
+  if (data.length === 0) return { error: "Empty cover data" };
+  return { mime, data };
+}
+
+function decodeBase64(s: string): Uint8Array | null {
+  try {
+    // strip whitespace + optional data URL prefix the UI may forward
+    const clean = s.replace(/^data:[^;]+;base64,/, "").replace(/\s+/g, "");
+    const bin = atob(clean);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 function cleanInput(t: SongTags): SongTags {
@@ -254,6 +312,7 @@ async function rewriteInstance(
   suffix: string,
   contentType: string | null,
   tags: SongTags,
+  cover?: TagWriteCover,
 ): Promise<{ written: boolean; reason?: string; newSize?: number }> {
   if (suffix !== "mp3" && suffix !== "flac") return { written: false, reason: `format .${suffix} not rewritable` };
 
@@ -273,7 +332,7 @@ async function rewriteInstance(
       if (!bigger) return { written: false, reason: "object not found" };
       head = new Uint8Array(await bigger.arrayBuffer());
     }
-    const rw = rebuildTagPrefix(head, suffix, tags);
+    const rw = rebuildTagPrefix(head, suffix, tags, cover);
     if (!rw) return { written: false, reason: "unsupported tag layout" };
 
     const restLen = totalSize - rw.oldPrefixLen;

@@ -105,6 +105,8 @@ async function loadFeatures() {
       const probe = JSON.parse(await authFetch("getExternalSecret"));
       externalKeySet.value = !!probe?.set;
     } catch { externalKeySet.value = false; }
+    // 040: hydrate the scrape source priority list from feature_strings.
+    hydrateScrapeFromFeatures();
   } catch (e: unknown) {
     // 后端契约可能尚未部署 —— 优雅降级显示错误（非 JSON 响应一律视为 API 不可用）
     error.value = e instanceof SyntaxError || !(e instanceof Error)
@@ -149,6 +151,77 @@ async function saveTranscode() {
     showToast(`${t("settings.common.transcode.saveFailed")}: ${msg}`, "error");
   }
   transcodeBusy.value = false;
+}
+
+// === 040 — Metadata scrape sources ===
+// scrape_enabled lives in the boolean `features` table; the priority list is
+// in feature_strings.scrape_enabled_sources. Save batches both like transcode.
+type ScrapeSourceKey = "netease" | "qmusic" | "kugou" | "kuwo" | "migu";
+const SCRAPE_ALL_SOURCES: { id: ScrapeSourceKey; label: string }[] = [
+  { id: "netease", label: "NetEase" },
+  { id: "qmusic", label: "QQ Music" },
+  { id: "kugou", label: "Kugou" },
+  { id: "kuwo", label: "Kuwo (preview)" },
+  { id: "migu", label: "Migu (preview)" },
+];
+const scrapeOrder = ref<ScrapeSourceKey[]>([]);
+const scrapeEnabledSet = ref<Set<ScrapeSourceKey>>(new Set());
+const scrapeBusy = ref(false);
+
+function hydrateScrapeFromFeatures() {
+  // Order = whatever the JSON array stored; we render it in that order and
+  // any source NOT in the array gets appended (disabled) so the UI shows all.
+  try {
+    const raw = findFeatureString("scrape_enabled_sources", '["netease","qmusic","kugou"]');
+    const parsed = JSON.parse(raw) as string[];
+    const validEnabled: ScrapeSourceKey[] = [];
+    const knownIds = new Set(SCRAPE_ALL_SOURCES.map((s) => s.id));
+    for (const s of parsed) {
+      if (knownIds.has(s as ScrapeSourceKey)) validEnabled.push(s as ScrapeSourceKey);
+    }
+    scrapeEnabledSet.value = new Set(validEnabled);
+    const orderTail = SCRAPE_ALL_SOURCES
+      .map((s) => s.id)
+      .filter((id) => !validEnabled.includes(id));
+    scrapeOrder.value = [...validEnabled, ...orderTail];
+  } catch {
+    scrapeOrder.value = SCRAPE_ALL_SOURCES.map((s) => s.id);
+    scrapeEnabledSet.value = new Set(["netease", "qmusic", "kugou"]);
+  }
+}
+
+function toggleScrapeSource(id: ScrapeSourceKey, checked: boolean) {
+  const next = new Set(scrapeEnabledSet.value);
+  if (checked) next.add(id); else next.delete(id);
+  scrapeEnabledSet.value = next;
+}
+
+function moveScrapeSource(id: ScrapeSourceKey, delta: -1 | 1) {
+  const arr = [...scrapeOrder.value];
+  const i = arr.indexOf(id);
+  if (i < 0) return;
+  const j = i + delta;
+  if (j < 0 || j >= arr.length) return;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  scrapeOrder.value = arr;
+}
+
+async function saveScrape() {
+  scrapeBusy.value = true;
+  try {
+    // Persist only the enabled subset in the user-chosen priority order.
+    const enabledInOrder = scrapeOrder.value.filter((id) => scrapeEnabledSet.value.has(id));
+    const data = JSON.parse(await authPost("updateFeatureString", {
+      key: "scrape_enabled_sources",
+      value: JSON.stringify(enabledInOrder),
+    }));
+    if (!data.ok) throw new Error(data.error || "scrape_enabled_sources");
+    showToast(t("settings.common.scrape.saved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.scrape.saveFailed")}: ${msg}`, "error");
+  }
+  scrapeBusy.value = false;
 }
 
 async function toggleFeature(f: Feature, checked: boolean) {
@@ -422,6 +495,55 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
                 {{ t("settings.common.transcode.save") }}
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- 040 — Metadata scrape sources -->
+        <div class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.scrape.title") }}</span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.scrape.desc") }}
+          </p>
+          <div class="scrape-source-list">
+            <div v-for="(id, idx) in scrapeOrder" :key="id" class="scrape-source-row">
+              <label class="scrape-source-toggle">
+                <input
+                  type="checkbox"
+                  :checked="scrapeEnabledSet.has(id)"
+                  :disabled="!isSuperAdmin"
+                  @change="toggleScrapeSource(id, ($event.target as HTMLInputElement).checked)"
+                />
+                <span class="scrape-source-label">
+                  {{ SCRAPE_ALL_SOURCES.find((s) => s.id === id)?.label || id }}
+                </span>
+              </label>
+              <div class="scrape-source-rank">
+                <span class="rank-num">{{ idx + 1 }}</span>
+                <button
+                  class="rank-btn"
+                  :disabled="!isSuperAdmin || idx === 0"
+                  :title="t('settings.common.scrape.moveUp')"
+                  @click="moveScrapeSource(id, -1)"
+                >▲</button>
+                <button
+                  class="rank-btn"
+                  :disabled="!isSuperAdmin || idx === scrapeOrder.length - 1"
+                  :title="t('settings.common.scrape.moveDown')"
+                  @click="moveScrapeSource(id, 1)"
+                >▼</button>
+              </div>
+            </div>
+          </div>
+          <div class="tc-actions">
+            <button
+              class="btn-primary"
+              :disabled="!isSuperAdmin || scrapeBusy"
+              @click="saveScrape"
+            >
+              {{ t("settings.common.scrape.save") }}
+            </button>
           </div>
         </div>
 
@@ -757,4 +879,43 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
 }
 .tc-profile-pill input { margin: 0; }
 .tc-actions { margin-top: 0.4rem; display: flex; justify-content: flex-end; }
+
+/* --- 040 Scrape source list --- */
+.scrape-source-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.6rem; }
+.scrape-source-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+}
+.scrape-source-toggle { display: inline-flex; align-items: center; gap: 0.55rem; cursor: pointer; }
+.scrape-source-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+}
+.scrape-source-rank { display: inline-flex; align-items: center; gap: 0.4rem; }
+.rank-num {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  min-width: 1.5rem;
+  text-align: right;
+}
+.rank-btn {
+  width: 24px; height: 24px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+.rank-btn:hover:not(:disabled) { color: var(--color-accent-primary); background: var(--color-bg-primary); }
+.rank-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 </style>

@@ -91,6 +91,8 @@ const STRING_FEATURE_KEYS = new Set([
   "transcode_mode",
   "default_transcode_profiles",
   "external_transcoder_url",
+  // 040 — priority-ordered list of enabled metadata scrape sources.
+  "scrape_enabled_sources",
 ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -122,6 +124,22 @@ function validateFeatureString(key: string, value: string): string | null {
     case "external_transcoder_url":
       if (value && !/^https?:\/\//.test(value)) return "external_transcoder_url must start with http:// or https://";
       return null;
+    case "scrape_enabled_sources": {
+      // JSON array of strings, each one a known scrape source.
+      const allowed = new Set(["netease", "qmusic", "kugou", "kuwo", "migu"]);
+      try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === "string")) {
+          return "scrape_enabled_sources must be a JSON array of strings";
+        }
+        for (const v of parsed) {
+          if (!allowed.has(v)) return `Unknown scrape source: ${v}`;
+        }
+      } catch {
+        return "scrape_enabled_sources must be valid JSON";
+      }
+      return null;
+    }
     default:
       return `Unknown string feature: ${key}`;
   }

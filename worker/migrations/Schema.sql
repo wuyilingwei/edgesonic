@@ -116,6 +116,7 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
   (3, 'manage_users',        1, 0),
   (3, 'manage_permissions',  1, 0),
   (3, 'manage_credentials',  1, 0),
+  (3, 'manage_files',        1, 0),
   (3, 'browse',              1, 0),
   (3, 'search',              1, 0);
 
@@ -129,6 +130,7 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
   (2, 'manage_users',        1, 0),
   (2, 'manage_permissions',  0, 0),
   (2, 'manage_credentials',  1, 0),
+  (2, 'manage_files',        1, 0),
   (2, 'browse',              1, 0),
   (2, 'search',              1, 0);
 
@@ -142,6 +144,7 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
   (1, 'manage_users',        0, 0),
   (1, 'manage_permissions',  0, 0),
   (1, 'manage_credentials',  1, 0),
+  (1, 'manage_files',        0, 0),
   (1, 'browse',              1, 0),
   (1, 'search',              1, 0);
 
@@ -155,6 +158,7 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
   (0, 'manage_users',        0, 0),
   (0, 'manage_permissions',  0, 0),
   (0, 'manage_credentials',  0, 0),
+  (0, 'manage_files',        0, 0),
   (0, 'browse',              0, 0),
   (0, 'search',              0, 0);
 

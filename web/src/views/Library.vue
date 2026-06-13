@@ -19,6 +19,8 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatDuration } from "../api";
 import { usePlayerStore, type Track } from "../stores/player";
 import TagEditor from "../components/TagEditor.vue";
+import ScrapeButton from "../components/ScrapeButton.vue";
+import type { ScrapeResult } from "../lib/scrape";
 
 const { t } = useI18n();
 
@@ -213,14 +215,44 @@ function closeEditor() {
   // keep targets briefly so the modal slide-out reads consistent state; reset on next open.
 }
 
-async function onEditorSubmit(patch: Record<string, string | number>) {
-  if (!editTargets.value.length || !Object.keys(patch).length) return;
+// === 040 scrape-button helpers ===
+// Build a "title artist" query from the live TagEditor form; falls back to the
+// initial track data when the user hasn't typed anything yet.
+function scrapeQueryFromForm(form: Record<string, string>): string {
+  const t1 = (form.title || "").trim();
+  const a1 = (form.artist || "").trim();
+  if (t1 || a1) return [t1, a1].filter(Boolean).join(" ");
+  const init = editInitial.value;
+  return [init.title, init.artist].filter(Boolean).join(" ");
+}
+
+// Merge a ScrapeResult into TagEditor's reactive form + apply flags. Only
+// fields the result actually carries get touched; unchecked-apply boxes (batch
+// mode) are NOT auto-flipped — single mode infers "changed" from initialTags.
+function applyScrapeResult(
+  form: Record<string, string>,
+  applyFlags: Record<string, boolean>,
+  r: ScrapeResult,
+) {
+  if (r.title) form.title = r.title;
+  if (r.artist) form.artist = r.artist;
+  if (r.album) form.album = r.album;
+  if (r.year) form.year = String(r.year);
+  // Touch the apply flags for batch mode UX parity (no-op in single mode).
+  if (r.title) applyFlags.title = true;
+  if (r.artist) applyFlags.artist = true;
+  if (r.album) applyFlags.album = true;
+  if (r.year) applyFlags.year = true;
+}
+
+async function onEditorSubmit(patch: Record<string, string | number>, cover?: { data: string; mime: string }) {
+  if (!editTargets.value.length || (!Object.keys(patch).length && !cover)) return;
   editBusy.value = true; editMsg.value = ""; editErr.value = false;
 
   try {
     if (editorMode.value === "single") {
       const target = editTargets.value[0];
-      const res = await writeTags(target.id, patch);
+      const res = await writeTags(target.id, patch, cover);
       if (!res.ok) {
         editErr.value = true;
         editMsg.value = res.error || t("library.editFailed");
@@ -237,7 +269,7 @@ async function onEditorSubmit(patch: Record<string, string | number>) {
       }
     } else {
       const ids = editTargets.value.map((t) => t.id);
-      const res = await batchWriteTags(ids, patch);
+      const res = await batchWriteTags(ids, patch, cover);
       if (!res.ok) {
         editErr.value = true;
         editMsg.value = res.error || t("tagEditor.batchFailed");
@@ -455,7 +487,17 @@ onMounted(() => {
       :error="editErr"
       @submit="onEditorSubmit"
       @close="closeEditor"
-    />
+    >
+      <!-- 040: scrape button in extras slot. Single-mode only; batch UX has no
+           obvious "one master query" so we hide the button there. -->
+      <template v-if="editorMode === 'single'" #extras="{ form, apply }">
+        <ScrapeButton
+          :initial-query="scrapeQueryFromForm(form)"
+          :song-master-id="editTargets[0]?.id || ''"
+          @apply="(r: ScrapeResult) => applyScrapeResult(form, apply, r)"
+        />
+      </template>
+    </TagEditor>
   </div>
 </template>
 

@@ -24,10 +24,13 @@ import { featuresRoutes } from "./endpoints/features";
 import { scanRoutes } from "./endpoints/scan";
 import { fileBrowseRoutes } from "./endpoints/filebrowse";
 import { tagEditRoutes } from "./endpoints/tagedit";
+import { tidyFolderRoutes } from "./endpoints/tidyfolder";
 import { playlistsRoutes } from "./endpoints/playlists";
 import { bookmarksRoutes } from "./endpoints/bookmarks";
 import { annotationRoutes } from "./endpoints/annotation";
 import { transcodeRoutes } from "./endpoints/transcode";
+import { scrapeRoutes } from "./endpoints/scrape";
+import { metadataRoutes } from "./endpoints/metadata";
 
 export function registerRoutes(app: Hono) {
   app.route("/", pingRoutes);
@@ -40,8 +43,11 @@ export function registerRoutes(app: Hono) {
   app.route("/", scanRoutes);
   app.route("/", fileBrowseRoutes);
   app.route("/", tagEditRoutes);
+  app.route("/", tidyFolderRoutes);
   app.route("/", playlistsRoutes);
   app.route("/", bookmarksRoutes);
   app.route("/", annotationRoutes);
   app.route("/", transcodeRoutes);
+  app.route("/", scrapeRoutes);
+  app.route("/", metadataRoutes);
 }
