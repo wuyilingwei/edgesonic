@@ -19,6 +19,7 @@ import { subsonicOK } from "../../utils/xml";
 import { md5 } from "../../utils/md5";
 import { createQueries } from "../../db/queries";
 import { getFeatureString } from "../../utils/features";
+import { dispatchWorkBatch } from "../edgesonic/work";
 
 export const scanRoutes = new Hono();
 
@@ -91,6 +92,11 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
   // 051 — read scan_etag_check once so each background scan sees a coherent
   // snapshot; KV-fronted feature_strings makes this cheap.
   const etagCheck = (await getFeatureString(env, "scan_etag_check", "1")) !== "0";
+  // 052 — when the browser worker pool is enabled, every changed/new file
+  // gets a `metadata` task pushed into work_queue so opted-in browsers will
+  // parse the tags. The scan job itself is unchanged — the dispatch happens
+  // after asyncScanSource finishes flushing its INSERT/UPDATE batch.
+  const workerPoolEnabled = (await getFeatureString(env, "worker_pool_enabled", "1")) !== "0";
 
   // ctx.waitUntil keeps the Worker alive until the scan finishes (subject to
   // platform CPU/wall caps); the response below returns right away.
@@ -98,7 +104,7 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const src = sources[i];
-    exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck }));
+    exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled }));
   }
 
   return c.text(
@@ -214,11 +220,19 @@ export async function asyncScanSource(
   db: D1Database,
   src: SourceRow,
   jobId: string,
-  opts: { etagCheck?: boolean } = {},
+  opts: { etagCheck?: boolean; dispatchToWorkerPool?: boolean } = {},
 ): Promise<void> {
   const queries = createQueries(db);
   const now = Math.floor(Date.now() / 1000);
   const etagCheck = opts.etagCheck !== false;            // default true
+  // 052 — opt-in: when true and the row has tag_scanned=0 after the scan,
+  // enqueue a `metadata` task. Off by default so existing callers
+  // (scheduledScan etc) don't accidentally double-dispatch.
+  const dispatchToWorkerPool = opts.dispatchToWorkerPool === true;
+  // Collect instance ids that need a metadata parse (new INSERTs + changed
+  // UPDATEs). We dispatch in one batch after the scan loop so the work_queue
+  // INSERTs don't compete with the scan's UPDATE/INSERT batches.
+  const dispatchTargets: Array<{ instanceId: string; uri: string; suffix: string; size: number }> = [];
   try {
     const { entries, complete } = await listWebdav(src);
     const audio = entries.filter((e) => !e.isDir && AUDIO_EXT.has(extOf(e.path)));
@@ -310,6 +324,9 @@ export async function asyncScanSource(
           ),
         );
         updated++;
+        if (dispatchToWorkerPool) {
+          dispatchTargets.push({ instanceId: prior.id, uri, suffix: extOf(file.path), size: file.size });
+        }
         if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
         continue;
       }
@@ -351,6 +368,9 @@ export async function asyncScanSource(
         ),
       );
       added++;
+      if (dispatchToWorkerPool) {
+        dispatchTargets.push({ instanceId, uri, suffix: extOf(file.path), size: file.size });
+      }
 
       if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
     }
@@ -374,6 +394,28 @@ export async function asyncScanSource(
 
     await db.prepare("UPDATE storage_sources SET last_sync = ? WHERE id = ?")
       .bind(now, src.id).run();
+
+    // 052 — fan out metadata work to the browser worker pool. We do this
+    // after the scan finishes writing rows so the work_queue inserts don't
+    // contend with the source-of-truth UPSERTs. Failure is logged but does
+    // not flip the scan_job to 'failed' — the queue is best-effort.
+    if (dispatchToWorkerPool && dispatchTargets.length > 0) {
+      try {
+        await dispatchWorkBatch(db, dispatchTargets.map((t) => ({
+          taskType: "metadata",
+          payload: {
+            instanceId: t.instanceId,
+            sourceUri: t.uri,
+            suffix: t.suffix,
+            size: t.size,
+          },
+          requiredCaps: ["music-metadata"],
+          priority: 5,
+        })));
+      } catch (e) {
+        console.error(`[scan ${jobId}] dispatchWorkBatch failed:`, e);
+      }
+    }
 
     await queries.updateScanJob(jobId, {
       status: complete ? "completed" : "failed",

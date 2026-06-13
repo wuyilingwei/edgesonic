@@ -25,6 +25,7 @@ import { usersRoutes } from "./users";
 import { permissionsRoutes } from "./permissions";
 import { featuresRoutes } from "./features";
 import { transcodeRoutes } from "./transcode";
+import { workRoutes } from "./work";
 
 export const edgesonicRoutes = new Hono();
 
@@ -33,3 +34,5 @@ edgesonicRoutes.route("/", usersRoutes);
 edgesonicRoutes.route("/", permissionsRoutes);
 edgesonicRoutes.route("/", featuresRoutes);
 edgesonicRoutes.route("/", transcodeRoutes);
+// 052 — browser worker pool (poll / submit / heartbeat / dispatch / status / cancel)
+edgesonicRoutes.route("/", workRoutes);

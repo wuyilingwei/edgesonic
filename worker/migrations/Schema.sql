@@ -483,3 +483,31 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
 --   scan_browser_auto      — '0'|'1' decides Files.vue auto-drain behaviour
 -- ============================================================================
 
+-- ============================================================================
+-- 052: Browser worker pool (migration 0021)
+-- ============================================================================
+-- Logged-in users (level ≥ 2) can opt in to becoming a worker node: their
+-- browser polls /edgesonic/work/poll every ~5 minutes and runs queued tasks
+-- (metadata parse, transcode, third-party scrape) inside a Web Worker, then
+-- POSTs the result back via /edgesonic/work/submit. The Worker only schedules
+-- non-realtime jobs here (user-facing /stream still runs inline).
+--
+-- CREATE TABLE work_queue (
+--   id, task_type, payload, required_caps, priority, status,
+--   claimed_by, claimed_at, heartbeat_at, result_json, error_message,
+--   attempts, max_attempts, created_at, expires_at
+-- );
+-- CREATE INDEX idx_work_pickup  ON work_queue (priority, created_at) WHERE status='queued';
+-- CREATE INDEX idx_work_claimed ON work_queue (claimed_by, heartbeat_at) WHERE status='claimed';
+--
+-- Feature flags (feature_strings):
+--   worker_pool_enabled          — '0'|'1' kill-switch for the whole pool
+--   worker_poll_interval_seconds — client poll interval (default 300)
+--   worker_batch_size            — max tasks returned per /work/poll
+--   worker_claim_ttl_seconds     — heartbeat timeout before re-queue (default 60)
+--
+-- Permissions:
+--   participate_work — opt-in to BE a worker node (default L3+L2)
+--   dispatch_work    — POST /work/dispatch (default super-admin only)
+-- ============================================================================
+

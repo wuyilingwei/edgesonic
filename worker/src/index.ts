@@ -19,6 +19,7 @@ import { registerRoutes } from "./router";
 import { formPostMiddleware } from "./middleware/form_post";
 import { refreshAllChannels } from "./utils/podcastSync";
 import { maybeRunScheduledScan } from "./utils/scheduledScan";
+import { reclaimStaleWork } from "./utils/workReclaim";
 import { webLoginRoutes } from "./endpoints/edgesonic/auth";
 import { sharePublicRoutes } from "./endpoints/share_public";
 
@@ -94,6 +95,13 @@ export default {
     ctx.waitUntil(
       maybeRunScheduledScan(env, ctx).catch((e) => {
         console.error("scheduled maybeRunScheduledScan failed:", e);
+      }),
+    );
+    // 052 — sweep stale browser worker claims back into the queue so a tab
+    // that went offline mid-task doesn't lock the row forever.
+    ctx.waitUntil(
+      reclaimStaleWork(env).catch((e) => {
+        console.error("scheduled reclaimStaleWork failed:", e);
       }),
     );
   },
