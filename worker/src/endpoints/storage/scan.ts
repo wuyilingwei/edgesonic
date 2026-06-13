@@ -297,6 +297,13 @@ export async function asyncScanSource(
         const sizeSame = prior.size === file.size;
         if (etagSame && lmSame && sizeSame) {
           skipped++;
+          // 052 fix: file unchanged but if tag_scanned=0 (never read or 0021
+          // backfilled before 052a) still enqueue metadata work so browsers
+          // can drain the backlog. Without this, "orphan" rows that pre-date
+          // the worker_queue would never be picked up by any scan iteration.
+          if (dispatchToWorkerPool && prior.tagScanned === 0) {
+            dispatchTargets.push({ instanceId: prior.id, uri, suffix: extOf(file.path), size: file.size });
+          }
           if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
           continue;
         }
