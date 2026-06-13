@@ -16,6 +16,8 @@
 import { Hono } from "hono";
 import { authMiddleware, webLoginRoutes } from "./auth";
 import { registerRoutes } from "./router";
+import { formPostMiddleware } from "./middleware/form_post";
+import { refreshAllChannels } from "./utils/podcastSync";
 
 // 049 — Re-export Sandbox class so the Cloudflare runtime can instantiate the
 // Durable Object backing SandboxTranscodeEngine. This export must exist even
@@ -26,6 +28,12 @@ const app = new Hono();
 
 // Web login routes (no Subsonic auth required)
 app.route("/", webLoginRoutes);
+
+// 047 — formPost: Subsonic clients may send parameters as either query string
+// OR application/x-www-form-urlencoded body. Merge any form body fields into
+// the URL query BEFORE auth & route handlers run, so all existing
+// `c.req.query()` / `c.req.queries()` call sites pick them up transparently.
+app.use("/rest/*", formPostMiddleware);
 
 // Subsonic API routes (authenticated)
 app.use("/rest/*", authMiddleware);
@@ -47,4 +55,18 @@ app.onError((err, c) => {
   return c.json({ ok: false, error: err.message }, 500);
 });
 
-export default app;
+// 046 — Cron Trigger: refresh every podcast RSS feed hourly. The cron
+// expression lives in wrangler.toml; this handler is what the Cloudflare
+// runtime invokes for each tick. We use ctx.waitUntil so any failures inside
+// refreshAllChannels (network blips, parse errors) don't crash the worker —
+// per-channel errors are recorded into the channel row instead.
+export default {
+  fetch: app.fetch.bind(app),
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(
+      refreshAllChannels(env.DB).catch((e) => {
+        console.error("scheduled refreshAllChannels failed:", e);
+      }),
+    );
+  },
+};

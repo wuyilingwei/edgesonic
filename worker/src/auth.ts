@@ -103,6 +103,38 @@ const SESSION_ONLY_PATHS = new Set([
   // credential. Leaked subsonic_credentials / apiKey cannot escalate.
   "/rest/changePassword",
   "/rest/changePassword.view",
+  // 045 — Internet Radio CUD. Read endpoint stays open to native Subsonic
+  // clients (subsonic_credentials / apiKey) so they can list stations; only
+  // mutation is pinned to web-session credentials.
+  "/rest/createInternetRadioStation",
+  "/rest/createInternetRadioStation.view",
+  "/rest/updateInternetRadioStation",
+  "/rest/updateInternetRadioStation.view",
+  "/rest/deleteInternetRadioStation",
+  "/rest/deleteInternetRadioStation.view",
+  // 046 — Podcast admin endpoints. Read (getPodcasts / getNewestPodcasts /
+  // getPodcastEpisode) stays open to all auth methods; only mutation +
+  // refresh + R2 download require a web-session credential.
+  "/rest/createPodcastChannel",
+  "/rest/createPodcastChannel.view",
+  "/rest/deletePodcastChannel",
+  "/rest/deletePodcastChannel.view",
+  "/rest/deletePodcastEpisode",
+  "/rest/deletePodcastEpisode.view",
+  "/rest/refreshPodcasts",
+  "/rest/refreshPodcasts.view",
+  "/rest/downloadPodcastEpisode",
+  "/rest/downloadPodcastEpisode.view",
+  // 044 — Sharing CUD. getShares stays open to any authenticated user (it
+  // self-scopes to the caller's own shares); only createShare / updateShare
+  // / deleteShare require a web-session credential so leaked
+  // subsonic_credentials / apiKey can't mint share links on behalf of a user.
+  "/rest/createShare",
+  "/rest/createShare.view",
+  "/rest/updateShare",
+  "/rest/updateShare.view",
+  "/rest/deleteShare",
+  "/rest/deleteShare.view",
 ]);
 
 // ============================================================================

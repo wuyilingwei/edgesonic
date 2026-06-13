@@ -336,6 +336,110 @@ CREATE TABLE transcode_jobs (
 CREATE INDEX idx_transcode_jobs_status ON transcode_jobs(status);
 
 -- ============================================================================
+-- 14. Internet Radio Stations (045)
+-- ============================================================================
+-- Subsonic standard station directory; clients connect to stream_url directly
+-- (no proxy on EdgeSonic). CUD is admin-gated via the `manage_radio` permission
+-- declared in user_permissions seeds further down (migration 0018).
+CREATE TABLE internet_radio_stations (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  stream_url TEXT NOT NULL,
+  homepage_url TEXT,
+  created_by TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL
+);
+
+-- manage_radio permission seeds (mirrors 0018).
+INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (0, 'manage_radio', 0, 0),
+  (1, 'manage_radio', 0, 0),
+  (2, 'manage_radio', 1, 0),
+  (3, 'manage_radio', 1, 0);
+
+-- ============================================================================
+-- 15. Podcasts (046)
+-- ============================================================================
+-- Subsonic Podcast API + hourly Cron RSS refresh. Channels subscribe by URL;
+-- episodes come from RSS and only land in R2 when an admin opts an episode in
+-- via downloadPodcastEpisode (ctx.waitUntil keeps the Worker alive).
+CREATE TABLE IF NOT EXISTS podcast_channels (
+  id TEXT PRIMARY KEY,
+  url TEXT UNIQUE NOT NULL,
+  title TEXT,
+  description TEXT,
+  image_url TEXT,
+  language TEXT,
+  status TEXT NOT NULL DEFAULT 'new',       -- new / completed / error
+  error_message TEXT,
+  last_refreshed_at INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE TABLE IF NOT EXISTS podcast_episodes (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  guid TEXT NOT NULL,
+  title TEXT,
+  description TEXT,
+  audio_url TEXT,
+  published_at INTEGER,
+  duration INTEGER,
+  size INTEGER,
+  bit_rate INTEGER,
+  status TEXT NOT NULL DEFAULT 'new',       -- new / downloading / completed / error
+  downloaded_r2_key TEXT,
+  error_message TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  UNIQUE (channel_id, guid),
+  FOREIGN KEY (channel_id) REFERENCES podcast_channels(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_podcast_episodes_channel_pub
+  ON podcast_episodes (channel_id, published_at DESC);
+
+-- 046 manage_podcasts permission seeds (mirrors migration 0019).
+INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (0, 'manage_podcasts', 0, 0),
+  (1, 'manage_podcasts', 0, 0),
+  (2, 'manage_podcasts', 1, 0),
+  (3, 'manage_podcasts', 1, 0);
+
+-- ============================================================================
+-- Shares (044) — public share links targeting one or more song masters
+-- ============================================================================
+CREATE TABLE shares (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  description TEXT,
+  expires_at INTEGER,                          -- unix seconds; NULL = never expires
+  view_count INTEGER NOT NULL DEFAULT 0,
+  last_visited_at INTEGER,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (user_id) REFERENCES users(username) ON DELETE CASCADE
+);
+CREATE INDEX idx_shares_user ON shares(user_id);
+CREATE INDEX idx_shares_expires ON shares(expires_at);
+
+CREATE TABLE share_entries (
+  share_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  song_master_id TEXT NOT NULL,
+  PRIMARY KEY (share_id, position),
+  FOREIGN KEY (share_id) REFERENCES shares(id) ON DELETE CASCADE,
+  FOREIGN KEY (song_master_id) REFERENCES song_masters(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_share_entries_song ON share_entries(song_master_id);
+
+INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (0, 'share', 0, 0),
+  (1, 'share', 1, 0),
+  (2, 'share', 1, 0),
+  (3, 'share', 1, 0);
+
+-- ============================================================================
 -- Auth Flow Summary
 -- ============================================================================
 -- Web Login:
