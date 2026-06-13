@@ -155,6 +155,66 @@ export interface PlayQueue {
   updated_at: number;
 }
 
+// 044 — Sharing
+export interface Share {
+  id: string;
+  user_id: string;                  // owner (FK users.username)
+  description: string | null;
+  expires_at: number | null;        // unix seconds; null = never expires
+  view_count: number;
+  last_visited_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ShareEntry {
+  share_id: string;
+  position: number;
+  song_master_id: string;
+}
+
+// 046 — Podcasts (migration 0019)
+export interface PodcastChannel {
+  id: string;
+  url: string;
+  title: string | null;
+  description: string | null;
+  image_url: string | null;
+  language: string | null;
+  status: "new" | "completed" | "error";
+  error_message: string | null;
+  last_refreshed_at: number | null;
+  created_at: number;
+}
+
+export interface PodcastEpisode {
+  id: string;
+  channel_id: string;
+  guid: string;
+  title: string | null;
+  description: string | null;
+  audio_url: string | null;
+  published_at: number | null;
+  duration: number | null;          // seconds
+  size: number | null;              // bytes
+  bit_rate: number | null;          // kbps
+  status: "new" | "downloading" | "completed" | "error";
+  downloaded_r2_key: string | null;
+  error_message: string | null;
+  created_at: number;
+}
+
+// 045 — Internet Radio stations (migration 0018)
+export interface InternetRadioStation {
+  id: string;
+  name: string;
+  stream_url: string;
+  homepage_url: string | null;
+  created_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 // 049 — Transcode jobs (post-migration 0010: adds engine + profile_id columns)
 export interface TranscodeJob {
   id: string;

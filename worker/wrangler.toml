@@ -38,6 +38,16 @@ bucket_name = "edgesonic-music"
 enabled = true
 
 # ---------------------------------------------------------------------------
+# 046 — Podcast Cron Trigger
+# ---------------------------------------------------------------------------
+# Refresh every podcast_channels RSS feed once per hour. The scheduled handler
+# in src/index.ts wraps refreshAllChannels with ctx.waitUntil; per-channel
+# errors are persisted to podcast_channels.error_message rather than failing
+# the cron run.
+[triggers]
+crons = ["0 */1 * * *"]
+
+# ---------------------------------------------------------------------------
 # 049 — Transcode engine (Sandbox SDK container)
 # ---------------------------------------------------------------------------
 # Sandbox SDK requires three bindings working together:
