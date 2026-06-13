@@ -32,6 +32,13 @@ interface SourceRow {
 }
 
 /**
+ * @deprecated 076 — no longer invoked from getCoverArt. The fallback path
+ * incorrectly assigned shared parent-directory cover.jpg files to many
+ * distinct albums (NAS root art polluting every child album). Kept here
+ * pending a follow-up that scopes art lookup to the album's own directory
+ * (vs. the file's parent). Until that lands, callers MUST treat missing
+ * albums.cover_r2_key as "no cover available" — see media.ts:getCoverArt.
+ *
  * On-demand album cover resolution:
  *   1. an image file (cover/folder/front/albumart, else the largest) in the
  *      directory of one of the album's WebDAV files

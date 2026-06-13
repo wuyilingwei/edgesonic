@@ -32,8 +32,10 @@ interface Artist { id: string; name: string; albumCount: string; }
 interface Album { id: string; name: string; artist: string; year: string; coverArt: string; songCount: string; }
 
 type Tab = "artists" | "albums" | "songs";
-const savedTab = localStorage.getItem("edgesonic_library_tab") as Tab | null;
-const tab = ref<Tab>(savedTab === "artists" || savedTab === "albums" || savedTab === "songs" ? savedTab : "songs");
+// 076 — drop localStorage persistence: Library always defaults to "songs" so
+// users land on tracks (the most common entry point). Switching tabs is still
+// honored for the current session, but a re-mount resets to songs.
+const tab = ref<Tab>("songs");
 
 const artists = ref<Artist[]>([]);
 const albums = ref<Album[]>([]);
@@ -58,7 +60,7 @@ const songsDone = ref(false);
 
 function switchTab(next: Tab) {
   tab.value = next;
-  localStorage.setItem("edgesonic_library_tab", next);
+  // 076 — no longer persisted; see comment above the `tab` ref declaration.
   currentArtist.value = null;
   currentAlbum.value = null;
   albums.value = [];

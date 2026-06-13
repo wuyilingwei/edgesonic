@@ -403,18 +403,15 @@ mediaRoutes.get("/getCoverArt", async (c) => {
     if (!album) { albumId = id; album = await queries.getAlbum(albumId); }
     if (!album) return c.body(null, 404 as never);
     coverKey = album.cover_r2_key ?? null;
-    if (!coverKey) {
-      // On-demand: pull a directory image or embedded art from the source, cache in R2
-      const noCover = await env.KV.get(`nocover:${albumId}`);
-      if (noCover) return c.body(null, 404 as never);
-      const { resolveAlbumCover } = await import("../../utils/covers");
-      try {
-        coverKey = await resolveAlbumCover(env, albumId);
-      } catch { coverKey = null; }
-      if (!coverKey) {
-        await env.KV.put(`nocover:${albumId}`, "1", { expirationTtl: 86400 });
-      }
-    }
+    // 076 — DO NOT fall back to song-instance-directory cover.jpg here. The
+    // covers.resolveAlbumCover path used to look at the first song's parent
+    // directory and pick any cover.jpg / folder.jpg / front.jpg — which means
+    // every album sharing a parent dir (e.g. a NAS root with a generic
+    // cover.jpg) ended up writing distinct covers/al-X keys whose R2 bytes
+    // were the SAME image. The visible result: hundreds of albums showed the
+    // same anime-character cover. We now strictly require an admin-curated
+    // cover_r2_key; anything else returns 404 so the front-end placeholder
+    // (♪ glyph) renders, which is the honest UX.
   } else if (prefix === "ar-") {
     const artist = await queries.getArtist(entityId);
     coverKey = artist?.image_r2_key ?? null;
