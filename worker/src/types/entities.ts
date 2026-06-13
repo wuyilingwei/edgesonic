@@ -118,6 +118,36 @@ export interface Playlist {
   name: string;
   owner: string;
   public: number;
+  song_count: number;
+  duration: number;
+  cover_r2_key: string | null;
+  comment: string | null;
   created_at: number;
+  updated_at: number;
+}
+
+export interface PlaylistEntry {
+  playlist_id: string;
+  song_master_id: string;
+  position: number;
+  added_at: number;
+}
+
+// 037 — Bookmarks + PlayQueue
+export interface Bookmark {
+  user_id: string;
+  song_master_id: string;
+  position_ms: number;
+  comment: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface PlayQueue {
+  user_id: string;
+  song_ids: string;                 // JSON-encoded array of song_master_ids
+  current_id: string | null;
+  position_ms: number;
+  changed_by: string | null;
   updated_at: number;
 }

@@ -122,15 +122,15 @@ export function useAuth() {
 
   async function uploadFile(file: File, target: string, path?: string, masterId?: string): Promise<string> {
     const qs = signedParams();
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("target", target);
-    if (path) formData.append("path", path);
-    if (masterId) formData.append("master_id", masterId);
+    qs.set("name", file.name);
+    qs.set("source", target);
+    if (path) qs.set("path", path);
+    if (masterId) qs.set("master_id", masterId);
 
-    const resp = await fetch(`${API_BASE}/upload?${qs.toString()}`, {
+    const resp = await fetch(`${API_BASE}/files/upload?${qs.toString()}`, {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
     });
     return resp.text();
   }

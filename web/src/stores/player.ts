@@ -12,8 +12,11 @@ export interface Track {
 }
 
 /**
- * Player store — owns the <audio> element and the play queue.
- * Stream URLs are freshly signed per track (t = md5(sessionToken + salt)).
+ * Player store — owns two <audio> elements (double buffering) and the queue.
+ *
+ * Stream URLs are freshly signed per call (t = md5(sessionToken + salt)), so a
+ * preloaded track can NOT be replayed via browser HTTP cache — the inactive
+ * element preloads the next track and is swapped in on next()/ended.
  */
 export const usePlayerStore = defineStore("player", () => {
   const queue = ref<Track[]>([]);
@@ -26,37 +29,89 @@ export const usePlayerStore = defineStore("player", () => {
   const current = computed<Track | null>(() => queue.value[index.value] || null);
   const hasTrack = computed(() => index.value >= 0 && index.value < queue.value.length);
 
-  let audio: HTMLAudioElement | null = null;
+  let elA: HTMLAudioElement | null = null;
+  let elB: HTMLAudioElement | null = null;
+  let active: HTMLAudioElement | null = null;
+  let preloaded: { el: HTMLAudioElement; index: number } | null = null;
 
-  function ensureAudio(): HTMLAudioElement {
-    if (!audio) {
-      audio = new Audio();
-      audio.volume = volume.value;
-      audio.addEventListener("timeupdate", () => { currentTime.value = audio!.currentTime; });
-      audio.addEventListener("durationchange", () => {
-        if (isFinite(audio!.duration)) duration.value = audio!.duration;
-      });
-      audio.addEventListener("play", () => { playing.value = true; });
-      audio.addEventListener("pause", () => { playing.value = false; });
-      audio.addEventListener("ended", () => { next(); });
-      audio.addEventListener("error", () => { playing.value = false; });
+  function makeAudio(): HTMLAudioElement {
+    const el = new Audio();
+    el.preload = "auto";
+    el.volume = volume.value;
+    el.addEventListener("timeupdate", () => { if (el === active) currentTime.value = el.currentTime; });
+    el.addEventListener("durationchange", () => {
+      if (el === active && isFinite(el.duration)) duration.value = el.duration;
+    });
+    el.addEventListener("play", () => { if (el === active) playing.value = true; });
+    el.addEventListener("pause", () => { if (el === active) playing.value = false; });
+    el.addEventListener("ended", () => { if (el === active) next(); });
+    el.addEventListener("error", () => { if (el === active) playing.value = false; });
+    // Start prebuffering the next track only once the current one can play —
+    // a slow upstream shouldn't have to feed two streams during startup.
+    el.addEventListener("canplay", () => { if (el === active) preloadNext(); });
+    return el;
+  }
+
+  function ensureElements() {
+    if (!elA) elA = makeAudio();
+    if (!elB) elB = makeAudio();
+    if (!active) active = elA;
+  }
+
+  function inactiveEl(): HTMLAudioElement {
+    return active === elA ? elB! : elA!;
+  }
+
+  function invalidatePreload() {
+    if (preloaded) {
+      preloaded.el.removeAttribute("src");
+      preloaded.el.load();
+      preloaded = null;
     }
-    return audio;
+  }
+
+  /** Prebuffer the next queue entry into the inactive element. */
+  function preloadNext() {
+    ensureElements();
+    const ni = index.value + 1;
+    if (ni >= queue.value.length) { invalidatePreload(); return; }
+    if (preloaded?.index === ni) return;
+    invalidatePreload();
+    const { streamUrl } = useAuth();
+    const el = inactiveEl();
+    el.src = streamUrl(queue.value[ni].id);
+    el.load();
+    preloaded = { el, index: ni };
   }
 
   function loadCurrent(autoplay = true) {
     const track = current.value;
     if (!track) return;
-    const { streamUrl } = useAuth();
-    const el = ensureAudio();
+    ensureElements();
     currentTime.value = 0;
     duration.value = track.duration || 0;
-    el.src = streamUrl(track.id);
-    if (autoplay) void el.play().catch(() => { playing.value = false; });
+
+    if (preloaded && preloaded.index === index.value) {
+      // Swap in the prebuffered element — instant start
+      const next = preloaded.el;
+      preloaded = null;
+      active!.pause();
+      active!.removeAttribute("src");
+      active!.load();
+      active = next;
+    } else {
+      invalidatePreload();
+      const { streamUrl } = useAuth();
+      active!.pause();
+      active!.src = streamUrl(track.id);
+    }
+    active!.volume = volume.value;
+    if (autoplay) void active!.play().catch(() => { playing.value = false; });
   }
 
   /** Replace queue and start playing at startIndex. */
   function setQueue(tracks: Track[], startIndex = 0) {
+    invalidatePreload();
     queue.value = tracks;
     index.value = tracks.length ? Math.min(Math.max(startIndex, 0), tracks.length - 1) : -1;
     loadCurrent();
@@ -69,10 +124,9 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   function toggle() {
-    if (!hasTrack.value) return;
-    const el = ensureAudio();
-    if (el.paused) void el.play().catch(() => { playing.value = false; });
-    else el.pause();
+    if (!hasTrack.value || !active) return;
+    if (active.paused) void active.play().catch(() => { playing.value = false; });
+    else active.pause();
   }
 
   function next() {
@@ -81,29 +135,32 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   function prev() {
-    const el = ensureAudio();
+    if (!active) return;
     // Restart current track if more than 3s in, like most players.
-    if (el.currentTime > 3) { el.currentTime = 0; return; }
+    if (active.currentTime > 3) { active.currentTime = 0; return; }
     if (index.value > 0) playAt(index.value - 1);
-    else el.currentTime = 0;
+    else active.currentTime = 0;
   }
 
   function seek(seconds: number) {
-    if (!hasTrack.value) return;
-    const el = ensureAudio();
-    el.currentTime = Math.min(Math.max(seconds, 0), duration.value || 0);
-    currentTime.value = el.currentTime;
+    if (!hasTrack.value || !active) return;
+    active.currentTime = Math.min(Math.max(seconds, 0), duration.value || 0);
+    currentTime.value = active.currentTime;
   }
 
   function setVolume(v: number) {
     volume.value = Math.min(Math.max(v, 0), 1);
-    ensureAudio().volume = volume.value;
+    if (elA) elA.volume = volume.value;
+    if (elB) elB.volume = volume.value;
     localStorage.setItem("edgesonic_volume", String(volume.value));
   }
 
   /** Stop playback and clear queue (e.g. on logout). */
   function clear() {
-    if (audio) { audio.pause(); audio.removeAttribute("src"); audio.load(); }
+    invalidatePreload();
+    for (const el of [elA, elB]) {
+      if (el) { el.pause(); el.removeAttribute("src"); el.load(); }
+    }
     queue.value = [];
     index.value = -1;
     playing.value = false;
