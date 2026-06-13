@@ -28,7 +28,8 @@
       "transcoder": "转码器",
       "radio": "电台",
       "podcasts": "播客",
-      "shares": "分享"
+      "shares": "分享",
+      "playlists": "歌单"
     },
     "logout": "登出",
     "levels": {
@@ -102,7 +103,13 @@
     "batchTooMany": "批量编辑上限 50 首",
     "share": "分享",
     "shareCreated": "分享已创建",
-    "shareCreateFailed": "创建分享失败"
+    "shareCreateFailed": "创建分享失败",
+    "addToPlaylist": "加入歌单",
+    "addedToPlaylist": "已加入",
+    "createNewPlaylist": "新建歌单…",
+    "addToPlaylistFailed": "加入歌单失败",
+    "selectPlaylist": "选择一个歌单",
+    "noPlaylists": "暂无歌单 — 请先新建一个"
   },
   "tagEditor": {
     "singleTitle": "编辑歌曲信息",
@@ -672,5 +679,48 @@
     "moreTracks": "首曲目",
     "unknownArtist": "未知歌手",
     "unknownAlbum": "未知专辑"
+  },
+  "playlists": {
+    "label": "// 歌单",
+    "title": "歌单",
+    "empty": "暂无歌单 — 点击「新建歌单」开始",
+    "create": "+ 新建歌单",
+    "name": "歌单名",
+    "namePlaceholder": "例如：周末歌单",
+    "comment": "备注",
+    "optional": "可选",
+    "publicFlag": "公开（所有用户可见）",
+    "public": "公开",
+    "private": "私有",
+    "songCount": "{n} 首",
+    "duration": "时长",
+    "edit": "编辑",
+    "delete": "删除歌单",
+    "confirmDelete": "确认删除歌单「{name}」？此操作不可撤销。",
+    "addSong": "添加歌曲",
+    "searchSong": "搜索歌曲名 / 歌手…",
+    "searchBtn": "搜索",
+    "noSearchResults": "未找到歌曲",
+    "removeSong": "移除",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "songsTitle": "曲目",
+    "noSongs": "此歌单暂无曲目",
+    "save": "保存",
+    "cancel": "取消",
+    "back": "返回歌单列表",
+    "playAll": "▶ 播放全部",
+    "nameRequired": "请填写歌单名",
+    "created": "歌单已创建",
+    "createFailed": "创建失败",
+    "updated": "已保存",
+    "updateFailed": "更新失败",
+    "deleted": "歌单已删除",
+    "deleteFailed": "删除失败",
+    "songAdded": "歌曲已加入",
+    "songAddFailed": "添加歌曲失败",
+    "songRemoved": "已移除",
+    "songRemoveFailed": "移除失败",
+    "reorderFailed": "排序保存失败"
   }
 }
