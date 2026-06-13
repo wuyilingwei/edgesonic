@@ -30,6 +30,9 @@ const routes = [
   { path: "/podcasts", component: () => import("./views/Podcasts.vue"), meta: { title: "Podcasts" } },
   // 061 — Public Share creation & management.
   { path: "/shares", component: () => import("./views/Shares.vue"), meta: { title: "Shares" } },
+  // 069 — Playlist CRUD UI. Lazy loaded; no nested detail route — the view
+  // owns its detail state inline so back-nav doesn't re-pick a playlist.
+  { path: "/playlists", component: () => import("./views/Playlists.vue"), meta: { title: "Playlists" } },
 ];
 
 const router = createRouter({ history: createWebHashHistory(), routes });

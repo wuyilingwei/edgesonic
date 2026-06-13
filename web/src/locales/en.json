@@ -28,7 +28,8 @@
       "transcoder": "Transcoder",
       "radio": "Radio",
       "podcasts": "Podcasts",
-      "shares": "Shares"
+      "shares": "Shares",
+      "playlists": "Playlists"
     },
     "logout": "LOGOUT",
     "levels": {
@@ -102,7 +103,13 @@
     "batchTooMany": "Batch is capped at 50 tracks",
     "share": "Share",
     "shareCreated": "Share created",
-    "shareCreateFailed": "Share creation failed"
+    "shareCreateFailed": "Share creation failed",
+    "addToPlaylist": "Add to Playlist",
+    "addedToPlaylist": "Added",
+    "createNewPlaylist": "Create New Playlist…",
+    "addToPlaylistFailed": "Failed to add to playlist",
+    "selectPlaylist": "Pick a playlist",
+    "noPlaylists": "No playlists yet — create one first"
   },
   "tagEditor": {
     "singleTitle": "Edit Track Info",
@@ -672,5 +679,48 @@
     "moreTracks": "more tracks",
     "unknownArtist": "Unknown artist",
     "unknownAlbum": "Unknown album"
+  },
+  "playlists": {
+    "label": "// playlists",
+    "title": "Playlists",
+    "empty": "No playlists yet — click \"New playlist\" to create one",
+    "create": "+ New playlist",
+    "name": "Name",
+    "namePlaceholder": "e.g. Weekend mix",
+    "comment": "Comment",
+    "optional": "optional",
+    "publicFlag": "Public (visible to all users)",
+    "public": "Public",
+    "private": "Private",
+    "songCount": "{n} tracks",
+    "duration": "Duration",
+    "edit": "Edit",
+    "delete": "Delete playlist",
+    "confirmDelete": "Delete playlist \"{name}\"? This cannot be undone.",
+    "addSong": "Add song",
+    "searchSong": "Search by title or artist…",
+    "searchBtn": "Search",
+    "noSearchResults": "No songs found",
+    "removeSong": "Remove",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "songsTitle": "Tracks",
+    "noSongs": "This playlist has no tracks yet",
+    "save": "Save",
+    "cancel": "Cancel",
+    "back": "Back to playlists",
+    "playAll": "▶ Play all",
+    "nameRequired": "Name is required",
+    "created": "Playlist created",
+    "createFailed": "Create failed",
+    "updated": "Saved",
+    "updateFailed": "Update failed",
+    "deleted": "Playlist deleted",
+    "deleteFailed": "Delete failed",
+    "songAdded": "Song added",
+    "songAddFailed": "Failed to add song",
+    "songRemoved": "Removed",
+    "songRemoveFailed": "Remove failed",
+    "reorderFailed": "Reorder failed"
   }
 }
