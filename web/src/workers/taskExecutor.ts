@@ -40,6 +40,14 @@ interface Task {
   payload: Record<string, unknown>;
 }
 
+// 078 — keep worker error reporting short and informative. The main thread
+// truncates again to 500 in workerPool.ts → /work/submit truncates again to
+// 500 in work.ts. Doing it here too keeps each postMessage cheap.
+const ERR_LIMIT = 500;
+function clampMsg(s: string): string {
+  return s.length > ERR_LIMIT ? s.slice(0, ERR_LIMIT) : s;
+}
+
 self.addEventListener("message", async (e: MessageEvent<Task>) => {
   const task = e.data;
   try {
@@ -59,9 +67,32 @@ self.addEventListener("message", async (e: MessageEvent<Task>) => {
     }
     (self as unknown as Worker).postMessage({ ok: true, result });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    (self as unknown as Worker).postMessage({ ok: false, error: msg });
+    const raw = e instanceof Error
+      ? (e.message || e.toString())
+      : String(e);
+    (self as unknown as Worker).postMessage({ ok: false, error: clampMsg(raw) });
   }
+});
+
+// 078 — top-level safety nets. Before this, a syntax error in the dynamic
+// import (e.g. @ffmpeg/ffmpeg) or an unhandled rejection inside a then-chain
+// that escapes the handler above would only surface as an `ErrorEvent` on the
+// main thread — which Chromium often delivers with an empty `.message` for
+// cross-origin/module workers. The main thread would then fall back to the
+// hard-coded "worker errored" string. We catch both here and convert them to
+// the same {ok:false, error} wire shape the main thread already handles.
+self.addEventListener("error", (e: ErrorEvent) => {
+  const msg = e.message || (e.error instanceof Error ? e.error.message : "")
+    || "worker fired error event (no message)";
+  (self as unknown as Worker).postMessage({ ok: false, error: clampMsg(msg) });
+});
+
+self.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
+  const reason = e.reason;
+  const msg = reason instanceof Error
+    ? (reason.message || reason.toString())
+    : (typeof reason === "string" ? reason : `unhandled rejection: ${String(reason)}`);
+  (self as unknown as Worker).postMessage({ ok: false, error: clampMsg(msg) });
 });
 
 // ---------------------------------------------------------------------------

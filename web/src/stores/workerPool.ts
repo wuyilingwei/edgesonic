@@ -55,6 +55,43 @@ interface PolledTask {
 const STORAGE_KEY = "participate_work";
 const DEFAULT_POLL_MS = 5 * 60 * 1000;
 
+// 078 — error message ceiling matches the worker-side clamp in
+// taskExecutor.ts AND the server-side clamp in /work/submit. Three layers of
+// 500-byte truncation is intentional: each layer protects its own surface
+// from runaway error strings (memory churn on the worker, postMessage cost
+// on the main thread, D1 column blowup on the server).
+const ERR_LIMIT = 500;
+
+/**
+ * 078 — Build the error string we send to /work/submit when a worker fails.
+ *
+ * Prefix carries enough context to grep work_queue.error_message rows:
+ *   "[metadata:abcd1234] HTTP 503 from r2-stream"
+ *
+ * The raw arg is intentionally `unknown` so callers can pass either Error
+ * (from try/catch), ErrorEvent (from worker error listener), or a string
+ * fallback. Exported so the unit test can exercise the formatting without
+ * spinning up a Worker.
+ */
+export function formatTaskError(
+  task: { id: string; task_type: string },
+  raw: unknown,
+): string {
+  let body: string;
+  if (raw instanceof Error) {
+    body = raw.message || raw.toString();
+  } else if (typeof raw === "string") {
+    body = raw;
+  } else if (raw && typeof raw === "object" && "message" in raw && typeof (raw as { message: unknown }).message === "string") {
+    body = (raw as { message: string }).message;
+  } else {
+    body = String(raw);
+  }
+  if (!body) body = "worker reported empty error";
+  const prefixed = `[${task.task_type}:${task.id.slice(0, 8)}] ${body}`;
+  return prefixed.length > ERR_LIMIT ? prefixed.slice(0, ERR_LIMIT) : prefixed;
+}
+
 export const useWorkerPool = defineStore("workerPool", () => {
   const { level, edgesonicFetch, edgesonicPost, restUrl } = useAuth();
 
@@ -279,7 +316,15 @@ export const useWorkerPool = defineStore("workerPool", () => {
       });
       recordSample();
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      // 078 — wrap the raw error with task context so admins reading
+      // work_queue.error_message can spot which task failed without joining
+      // back through result_json. The 500-char ceiling is enforced inside
+      // formatTaskError; /work/submit also clamps server-side as belt-and-
+      // braces.
+      const msg = formatTaskError(
+        { id: task.id, task_type: task.taskType },
+        e,
+      );
       // submit error so the row goes back to queued (or to failed if exhausted).
       // We deliberately ignore the submit's own response — if the network is
       // also down we'll let the reclaim sweep catch the row.
@@ -315,7 +360,14 @@ export const useWorkerPool = defineStore("workerPool", () => {
         }
       };
       const onError = (e: ErrorEvent) => {
-        reject(new Error(e.message || "worker errored"));
+        // 078 — ErrorEvent.message is often empty in Chromium for module-type
+        // workers (cross-origin security policy redacts it). Fall back to the
+        // inner Error.message, then to the event type, then a hard-coded
+        // string so executeOne's downstream formatter never sees "".
+        const msg = e.message
+          || (e.error instanceof Error ? e.error.message : "")
+          || `worker fired ${e.type || "error"} event`;
+        reject(new Error(msg));
         cleanup();
       };
       function cleanup() {

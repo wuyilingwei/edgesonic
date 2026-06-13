@@ -463,6 +463,16 @@
         "backfillButton": "Backfill completed metadata tasks",
         "backfillRunning": "Running…",
         "backfillDoneToast": "Processed {processed}: applied {applied}, failed {failed}"
+      },
+      "maintenance": {
+        "title": "Maintenance tools",
+        "desc": "One-shot DB cleanup utilities, all idempotent and safe to re-run. Super-admin only.",
+        "cleanupCovers": "Clean up duplicate covers",
+        "cleanupCoversDesc": "For albums sharing the same cover_r2_key, keep the oldest id and clear the rest. R2 objects are NOT deleted; freed albums will re-resolve their own cover on next access (post-074 logic).",
+        "cleanupCoversButton": "Run cleanup",
+        "cleanupCoversRunning": "Cleaning…",
+        "cleanupCoversDoneToast": "Done: {groups} duplicate group(s), {cleared} album(s) freed",
+        "cleanupCoversFailed": "Failed: {error}"
       }
     },
     "sessions": {
