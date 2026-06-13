@@ -46,8 +46,14 @@ onMounted(async () => {
     if (sourceXml) {
       stats.value.sources = parseXmlAttrs(sourceXml, "source").length;
     }
+    // 072 — /edgesonic/users/list is now JSON; older XML path stayed only
+    // because Dashboard used parseXmlAttrs to count rows. JSON.parse-and-count
+    // here mirrors the new Users.vue load().
     if (userXml) {
-      stats.value.users = parseXmlAttrs(userXml, "user").length;
+      try {
+        const parsed = JSON.parse(userXml) as { ok?: boolean; users?: unknown[] };
+        if (parsed.ok && Array.isArray(parsed.users)) stats.value.users = parsed.users.length;
+      } catch { /* leave stats.users at 0 on parse failure */ }
     }
 
     // Count songs from album details
