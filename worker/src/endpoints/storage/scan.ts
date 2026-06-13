@@ -18,6 +18,7 @@ import { permissionMiddleware, subsonicError } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
 import { md5 } from "../../utils/md5";
 import { createQueries } from "../../db/queries";
+import { getFeatureString } from "../../utils/features";
 
 export const scanRoutes = new Hono();
 
@@ -32,6 +33,11 @@ export interface DavEntry {
   isDir: boolean;
   size: number;
   contentType: string | null;
+  // 051 — Incremental scan signals. Both come from PROPFIND, both are nullable
+  // because not every WebDAV server is honest about them (iCloud, Nextcloud,
+  // generic Apache mod_dav all behave differently).
+  etag: string | null;
+  lastModified: number | null;     // unix seconds
 }
 
 interface SourceRow {
@@ -40,6 +46,15 @@ interface SourceRow {
   username: string | null;
   password: string | null;
   root_path: string | null;
+}
+
+// 051 — Existing-instance snapshot used by asyncScanSource to decide skip/UPDATE/INSERT.
+interface ExistingRow {
+  id: string;
+  etag: string | null;
+  lastModified: number | null;
+  size: number | null;
+  tagScanned: number;
 }
 
 // Kick off a WebDAV scan. The actual work runs inside ctx.waitUntil so the
@@ -73,13 +88,17 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
     jobs.push({ id: jobId, source_id: src.id });
   }
 
+  // 051 — read scan_etag_check once so each background scan sees a coherent
+  // snapshot; KV-fronted feature_strings makes this cheap.
+  const etagCheck = (await getFeatureString(env, "scan_etag_check", "1")) !== "0";
+
   // ctx.waitUntil keeps the Worker alive until the scan finishes (subject to
   // platform CPU/wall caps); the response below returns right away.
   const exec = c.executionCtx;
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const src = sources[i];
-    exec.waitUntil(asyncScanSource(db, src, job.id));
+    exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck }));
   }
 
   return c.text(
@@ -128,26 +147,116 @@ scanRoutes.get("/scan/status", async (c) => {
   );
 });
 
+// 051 — pending list for the BROWSER READ queue. Files.vue polls this so it
+// knows how many tag re-reads remain after an incremental scan flips
+// tag_scanned back to 0. JSON response (the whole /storage/* bucket is JSON-
+// shaped, unlike /rest/* which is XML).
+// GET /storage/scan/pending?source=<id>&limit=50
+scanRoutes.get("/scan/pending", permissionMiddleware("edit_tags"), async (c) => {
+  const env = c.env as Env;
+  const db = env.DB;
+  const source = c.req.query("source") || "";
+  if (!source) {
+    return c.json({ ok: false, error: "Missing source parameter" }, 400);
+  }
+  // Cap at 500 so a malicious client can't tank D1; default 50 matches the
+  // BROWSER READ batch size that runBrowserRead drives in Files.vue.
+  const rawLimit = parseInt(c.req.query("limit") || "50", 10);
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 50;
+
+  // Items not yet tag-scanned for this source. The partial index
+  // idx_si_pending_scan keeps this O(matches).
+  const rows = (await db.prepare(
+    `SELECT id, master_id, source_id, storage_uri, suffix, size
+     FROM song_instances
+     WHERE source_id = ? AND tag_scanned = 0
+     ORDER BY updated_at DESC
+     LIMIT ?`,
+  ).bind(source, limit).all<{
+    id: string;
+    master_id: string;
+    source_id: string;
+    storage_uri: string;
+    suffix: string | null;
+    size: number | null;
+  }>()).results;
+
+  // Also surface the total so Files.vue can render a real badge ("42 pending")
+  // without having to fetch the full list when the user only wants the count.
+  const totalRow = await db.prepare(
+    "SELECT COUNT(*) AS n FROM song_instances WHERE source_id = ? AND tag_scanned = 0",
+  ).bind(source).first<{ n: number }>();
+
+  return c.json({
+    ok: true,
+    total: totalRow?.n ?? 0,
+    items: rows.map((r) => ({
+      instanceId: r.id,
+      masterId: r.master_id,
+      sourceId: r.source_id,
+      storageUri: r.storage_uri,
+      suffix: r.suffix || "",
+      size: r.size ?? 0,
+    })),
+  });
+});
+
 // Run the actual WebDAV scan for a single source. Updates scan_jobs progress
 // every SCAN_PROGRESS_CHUNK files; sets status=completed | failed on exit.
-async function asyncScanSource(db: D1Database, src: SourceRow, jobId: string): Promise<void> {
+//
+// 051 — Incremental: each remote file is matched against its previous
+// (source_etag, source_last_modified, size). When all three agree we skip the
+// row entirely; when any differ we UPDATE the meta + reset tag_scanned=0 so
+// the BROWSER READ queue (or Worker tag parser) re-reads the new bytes.
+// When `etagCheck` is false (feature_strings.scan_etag_check='0') the skip
+// path is disabled — every existing file gets the UPDATE + tag_scanned reset.
+export async function asyncScanSource(
+  db: D1Database,
+  src: SourceRow,
+  jobId: string,
+  opts: { etagCheck?: boolean } = {},
+): Promise<void> {
   const queries = createQueries(db);
   const now = Math.floor(Date.now() / 1000);
+  const etagCheck = opts.etagCheck !== false;            // default true
   try {
     const { entries, complete } = await listWebdav(src);
     const audio = entries.filter((e) => !e.isDir && AUDIO_EXT.has(extOf(e.path)));
 
-    // Skip files already registered for this source
-    const existing = new Set(
-      (await db.prepare("SELECT storage_uri FROM song_instances WHERE source_id = ?")
-        .bind(src.id).all<{ storage_uri: string }>()).results.map((r) => r.storage_uri)
-    );
+    // 051 — pull the prior snapshot (etag/lm/size/tag_scanned) for each
+    // existing instance keyed by storage_uri. One query instead of N per-file
+    // lookups so D1 reads stay bounded by the source's row count.
+    const existingMap = new Map<string, ExistingRow>();
+    {
+      const rows = (await db.prepare(
+        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned
+         FROM song_instances WHERE source_id = ?`,
+      ).bind(src.id).all<{
+        id: string;
+        storage_uri: string;
+        source_etag: string | null;
+        source_last_modified: number | null;
+        size: number | null;
+        tag_scanned: number | null;
+      }>()).results;
+      for (const r of rows) {
+        existingMap.set(r.storage_uri, {
+          id: r.id,
+          etag: r.source_etag,
+          lastModified: r.source_last_modified,
+          size: r.size,
+          tagScanned: r.tag_scanned ?? 0,
+        });
+      }
+    }
 
     await queries.updateScanJob(jobId, { totalItems: audio.length });
 
     const stmts: D1PreparedStatement[] = [];
     const touchedAlbums = new Set<string>();
     let added = 0;
+    let updated = 0;
+    let skipped = 0;
     let scanned = 0;
 
     const flush = async () => {
@@ -162,11 +271,50 @@ async function asyncScanSource(db: D1Database, src: SourceRow, jobId: string): P
     for (const file of audio) {
       scanned++;
       const uri = `webdav://${src.id}/${file.path}`;
-      if (existing.has(uri)) {
+      const prior = existingMap.get(uri);
+
+      // -------- Path 1: unchanged file → skip entirely --------
+      // Triple-equal etag + lastModified + size. nulls are treated as
+      // "unknown" — if the server stopped emitting an attribute the row
+      // shouldn't be skipped (we'd lose the chance to recover meta).
+      if (prior && etagCheck) {
+        const etagSame = file.etag !== null && prior.etag !== null && file.etag === prior.etag;
+        const lmSame = file.lastModified !== null && prior.lastModified !== null && file.lastModified === prior.lastModified;
+        const sizeSame = prior.size === file.size;
+        if (etagSame && lmSame && sizeSame) {
+          skipped++;
+          if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+          continue;
+        }
+      }
+
+      // -------- Path 2: file changed → UPDATE existing row --------
+      // Reset tag_scanned=0 so BROWSER READ / Worker tag parser re-reads it.
+      // We deliberately don't touch master_id / song_masters; the tag rewrite
+      // pass will move the master link if title/artist changed.
+      if (prior) {
+        stmts.push(
+          db.prepare(
+            `UPDATE song_instances
+             SET source_etag = ?, source_last_modified = ?, size = ?,
+                 content_type = ?, suffix = ?, tag_scanned = 0, updated_at = ?
+             WHERE id = ?`,
+          ).bind(
+            file.etag,
+            file.lastModified,
+            file.size,
+            file.contentType,
+            extOf(file.path),
+            now,
+            prior.id,
+          ),
+        );
+        updated++;
         if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
         continue;
       }
 
+      // -------- Path 3: brand new file → INSERT --------
       const meta = guessFromPath(file.path);
       const artistId = "ar-" + md5(meta.artist).substring(0, 10);
       const albumId = "al-" + md5(meta.artist + " " + meta.album).substring(0, 10);
@@ -184,14 +332,31 @@ async function asyncScanSource(db: D1Database, src: SourceRow, jobId: string): P
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
         ).bind(masterId, albumId, artistId, meta.title, meta.title.toLowerCase(), meta.track, now, now),
         db.prepare(
-          `INSERT OR IGNORE INTO song_instances (id, master_id, source_id, storage_uri, suffix, content_type, size, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).bind(instanceId, masterId, src.id, uri, extOf(file.path), file.contentType, file.size, now, now),
+          `INSERT OR IGNORE INTO song_instances
+             (id, master_id, source_id, storage_uri, suffix, content_type, size,
+              source_etag, source_last_modified, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          instanceId,
+          masterId,
+          src.id,
+          uri,
+          extOf(file.path),
+          file.contentType,
+          file.size,
+          file.etag,
+          file.lastModified,
+          now,
+          now,
+        ),
       );
       added++;
 
       if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
     }
+    // Mark these so eslint/tsc don't complain about unused locals — they're
+    // surfaced via the scan_jobs error_message in the (rare) failure path.
+    void updated; void skipped;
 
     // Final flush + recompute album song_count/size.
     await flush();
@@ -256,7 +421,11 @@ async function listWebdav(src: SourceRow): Promise<{ entries: DavEntry[]; comple
     return fetch(url, {
       method: "PROPFIND",
       headers: { Authorization: auth, Depth: depth, "Content-Type": "application/xml" },
-      body: `<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getcontenttype/></d:prop></d:propfind>`,
+      // 051 — request getetag + getlastmodified so the incremental scanner can
+      // decide whether to skip the row. Servers that don't support these props
+      // still return the rest in the multistatus; parseMultistatus tolerates
+      // missing tags by emitting null.
+      body: `<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getcontenttype/><d:getetag/><d:getlastmodified/></d:prop></d:propfind>`,
     });
   };
 
@@ -309,12 +478,31 @@ export function parseMultistatus(xml: string, basePath: string): DavEntry[] {
     const isDir = /<(?:[A-Za-z][\w-]*:)?collection\b/.test(block);
     const sizeM = /<(?:[A-Za-z][\w-]*:)?getcontentlength[^>]*>(\d+)</.exec(block);
     const typeM = /<(?:[A-Za-z][\w-]*:)?getcontenttype[^>]*>([^<]+)</.exec(block);
+    // 051 — getetag is usually quoted (`"abc-123"`). Strip the wrapping quotes
+    // so equality compares the raw tag instead of `"x"` vs `x`.
+    const etagM = /<(?:[A-Za-z][\w-]*:)?getetag[^>]*>([^<]+)</.exec(block);
+    const lmM = /<(?:[A-Za-z][\w-]*:)?getlastmodified[^>]*>([^<]+)</.exec(block);
+    let etag: string | null = null;
+    if (etagM) {
+      etag = etagM[1].trim().replace(/^W\//i, "").replace(/^"|"$/g, "");
+      if (!etag) etag = null;
+    }
+    // getlastmodified is RFC 1123/822 in practice; Date.parse handles both that
+    // and ISO 8601. Anything unparseable becomes null (we'd rather skip the
+    // signal than store a NaN/0).
+    let lastModified: number | null = null;
+    if (lmM) {
+      const t = Date.parse(lmM[1].trim());
+      if (Number.isFinite(t)) lastModified = Math.floor(t / 1000);
+    }
 
     entries.push({
       path: rel,
       isDir,
       size: sizeM ? parseInt(sizeM[1], 10) : 0,
       contentType: typeM ? typeM[1].trim() : null,
+      etag,
+      lastModified,
     });
   }
   return entries;

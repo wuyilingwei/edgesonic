@@ -463,3 +463,23 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
 --   → Server finds session by token → verifies → streams audio in browser
 -- ============================================================================
 
+-- ============================================================================
+-- 051: Incremental scan (migration 0020)
+-- ============================================================================
+-- Two columns + an index on song_instances let the WebDAV scanner skip files
+-- whose (etag, last_modified, size) triple is unchanged. When any of the three
+-- differs the row is UPDATEd and `tag_scanned` reset to 0 so the BROWSER READ
+-- queue (or Worker tag parser) re-reads the metadata.
+--
+-- ALTER TABLE song_instances ADD COLUMN source_etag TEXT;
+-- ALTER TABLE song_instances ADD COLUMN source_last_modified INTEGER;
+-- CREATE INDEX IF NOT EXISTS idx_si_pending_scan
+--   ON song_instances (source_id, tag_scanned) WHERE tag_scanned = 0;
+--
+-- Feature flags (seeded by INSERT OR IGNORE so re-running the migration is safe):
+--   scan_interval_hours    — WebDAV auto-scan interval in hours; 0 = disabled
+--   scan_etag_check        — '0'|'1' for the ETag/lastModified/size skip
+--   scan_rescan_strategy   — 'auto' | 'worker' | 'browser'
+--   scan_browser_auto      — '0'|'1' decides Files.vue auto-drain behaviour
+-- ============================================================================
+

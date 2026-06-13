@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatSize } from "../api";
 import TagEditor from "../components/TagEditor.vue";
@@ -23,7 +23,7 @@ import type { ScrapeResult } from "../lib/scrape";
 import { extractMetadata, isBrowserParse, suffixOf } from "../lib/metadata";
 
 const { t } = useI18n();
-const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
+const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, uploadFile, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
 interface DirEntry { name: string; }
@@ -59,6 +59,24 @@ const browserScanning = ref(false);
 const browserScanProcessed = ref(0);
 const browserScanTagged = ref(0);
 const browserScanTotal = ref(0);
+
+// 051 — pending-instance queue surfaced by /storage/scan/pending. The badge in
+// the page header shows the current backlog; the auto-drain loop pulls one
+// batch at a time. The browser-auto behaviour is gated by the
+// scan_browser_auto feature flag (read once at load).
+interface PendingItem {
+  instanceId: string;
+  masterId: string;
+  sourceId: string;
+  storageUri: string;
+  suffix: string;
+  size: number;
+}
+const pendingCount = ref(0);
+const pendingItems = ref<PendingItem[]>([]);
+const scanBrowserAutoEnabled = ref(false);
+const PENDING_BATCH = 50;
+let autoTriggerHandle: number | null = null;
 
 // R2 file operations state
 const renamingFile = ref<string | null>(null); // file name currently being renamed
@@ -127,6 +145,57 @@ function selectSource(id: string) {
   currentSource.value = id;
   path.value = id === "r2" ? "music" : "";
   loadDir();
+  // 051 — refresh the pending badge whenever the storage source flips, so
+  // the count tracks the active source.
+  loadPending();
+}
+
+// 051 — pending list for the active source. Empty source ("r2" included) just
+// resets the badge — only WebDAV sources can have incremental scans populate
+// the queue. The endpoint validates the source server-side.
+async function loadPending() {
+  if (!currentSource.value || currentSource.value === "r2") {
+    pendingCount.value = 0;
+    pendingItems.value = [];
+    return;
+  }
+  try {
+    const text = await storageFetch("scan/pending", {
+      source: currentSource.value,
+      limit: String(PENDING_BATCH),
+    });
+    const data = JSON.parse(text);
+    if (data?.ok) {
+      pendingCount.value = data.total ?? 0;
+      pendingItems.value = (data.items || []) as PendingItem[];
+    } else {
+      pendingCount.value = 0;
+      pendingItems.value = [];
+    }
+  } catch {
+    pendingCount.value = 0;
+    pendingItems.value = [];
+  }
+}
+
+// 051 — read scan_browser_auto from feature flags so the page knows whether to
+// auto-drain. We deliberately don't gate by isSuperAdmin here; the user-level
+// switch is the feature flag itself (admin-only writeable, but everyone
+// honours the result).
+async function loadScanFeatureFlags() {
+  try {
+    const text = await edgesonicFetch("features/list");
+    const data = JSON.parse(text);
+    if (data?.ok) {
+      const strs = (data.featureStrings || []) as Array<{ key: string; value: string }>;
+      const v = strs.find((s) => s.key === "scan_browser_auto")?.value;
+      scanBrowserAutoEnabled.value = v !== "0";
+    }
+  } catch {
+    // Non-admin users hit 403 on features/list; treat as auto-disabled which
+    // mirrors the safer default for unsupervised cellular browsers.
+    scanBrowserAutoEnabled.value = false;
+  }
 }
 
 function enterDir(name: string) {
@@ -190,11 +259,26 @@ async function runTagScan() {
   }
 }
 
-// 041: walk the visible directory and process every browser-parseable file.
-// Each file: resolve instance_id by storage_uri → fetch via /rest/stream
-// (auth-signed) → music-metadata parse → POST /rest/submitMetadata.
+// 041 + 051 — browser-side metadata parse pump.
+//
+// Two modes:
+//   • pending-list mode (preferred, /storage/scan/pending) — drives the
+//     incremental scanner backlog: instances whose tag_scanned=0 (either
+//     because the WebDAV scanner just imported them or because their ETag /
+//     lastModified / size changed). Iterates batches of PENDING_BATCH until
+//     the queue empties or the user navigates away.
+//   • directory fallback — when the active source has no pending items
+//     (or we're on R2), parse every browser-parseable file in the current
+//     directory listing. Original 041 behaviour, preserved so a fresh
+//     upload still gets tags before the next scan tick.
 async function runBrowserRead() {
   if (browserScanning.value) return;
+  // Prefer the pending list if it exists for the current source.
+  if (pendingItems.value.length > 0) {
+    await drainPendingQueue();
+    return;
+  }
+  // Fallback: scan the directory listing.
   const targets = files.value.filter((f) => isBrowserParse(suffixOf(f.name)));
   if (!targets.length) {
     showToast(t("files.browserReadNothing"), "success");
@@ -208,17 +292,13 @@ async function runBrowserRead() {
     for (const f of targets) {
       browserScanProcessed.value++;
       try {
-        // 1. uri → instance_id
         const lookup = JSON.parse(await tagFetch("findInstanceByUri", { uri: f.uri }));
         if (!lookup?.ok || !lookup.instanceId || !lookup.masterId) continue;
-        // 2. download via /rest/stream — gives us a proper authed audio blob
         const resp = await fetch(restUrl("stream", { id: lookup.masterId }));
         if (!resp.ok) continue;
         const blob = await resp.blob();
         const file = new File([blob], f.name, { type: f.contentType || blob.type });
-        // 3. parse
         const meta = await extractMetadata(file);
-        // 4. submit
         const submit = await submitMetadata(lookup.instanceId, meta as Record<string, string | number>);
         if (submit.ok) browserScanTagged.value++;
       } catch { /* per-file failures don't poison the batch */ }
@@ -226,6 +306,86 @@ async function runBrowserRead() {
     showToast(t("files.browserReadDone", { tagged: browserScanTagged.value, total: targets.length }));
   } finally {
     browserScanning.value = false;
+  }
+}
+
+// 051 — Pull pending batches in a loop until the backlog is empty or every
+// item in the batch failed (defensive: avoids an infinite spin on bad data).
+async function drainPendingQueue() {
+  browserScanning.value = true;
+  browserScanProcessed.value = 0;
+  browserScanTagged.value = 0;
+  browserScanTotal.value = pendingCount.value;
+  try {
+    let safetyBudget = 20;                               // ≤ 20 × 50 = 1000 items per click
+    while (pendingItems.value.length > 0 && safetyBudget > 0) {
+      safetyBudget--;
+      const batch = pendingItems.value.slice();
+      let batchTagged = 0;
+      for (const item of batch) {
+        // suffix gate so we don't waste a /rest/stream call on the formats
+        // the Worker tag parser already handles.
+        if (!isBrowserParse(item.suffix)) {
+          browserScanProcessed.value++;
+          continue;
+        }
+        browserScanProcessed.value++;
+        try {
+          const resp = await fetch(restUrl("stream", { id: item.masterId }));
+          if (!resp.ok) continue;
+          const blob = await resp.blob();
+          const file = new File([blob], item.storageUri, { type: blob.type });
+          const meta = await extractMetadata(file);
+          const submit = await submitMetadata(item.instanceId, meta as Record<string, string | number>);
+          if (submit.ok) {
+            browserScanTagged.value++;
+            batchTagged++;
+          }
+        } catch { /* per-file failures don't poison the batch */ }
+      }
+      // Refresh — if nothing in this batch managed to flip tag_scanned, the
+      // server can't make progress so stop (would otherwise spin forever).
+      await loadPending();
+      if (batchTagged === 0) break;
+    }
+    showToast(
+      t("files.browserReadDone", { tagged: browserScanTagged.value, total: browserScanTotal.value }),
+    );
+  } finally {
+    browserScanning.value = false;
+  }
+}
+
+// 051 — auto-drain trigger. Page must be visible, the flag must be on, and
+// a non-zero pending count must exist. We delay by 5s after the user lands on
+// the page so a quick tab-flip doesn't spin up the loop unnecessarily.
+function scheduleAutoDrain() {
+  if (autoTriggerHandle !== null) {
+    clearTimeout(autoTriggerHandle);
+    autoTriggerHandle = null;
+  }
+  if (!scanBrowserAutoEnabled.value) return;
+  if (document.visibilityState !== "visible") return;
+  if (browserScanning.value) return;
+  if (pendingCount.value <= 0) return;
+  autoTriggerHandle = window.setTimeout(() => {
+    autoTriggerHandle = null;
+    if (
+      scanBrowserAutoEnabled.value &&
+      document.visibilityState === "visible" &&
+      !browserScanning.value &&
+      pendingItems.value.length > 0
+    ) {
+      drainPendingQueue();
+    }
+  }, 5000);
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === "visible") scheduleAutoDrain();
+  else if (autoTriggerHandle !== null) {
+    clearTimeout(autoTriggerHandle);
+    autoTriggerHandle = null;
   }
 }
 
@@ -466,8 +626,24 @@ async function onTagEditorSubmit(patch: Record<string, string | number>, cover?:
 
 onMounted(async () => {
   await loadSources();
-  loadDir();
+  await loadScanFeatureFlags();
+  await loadDir();
+  await loadPending();
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  scheduleAutoDrain();
 });
+
+onUnmounted(() => {
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  if (autoTriggerHandle !== null) {
+    clearTimeout(autoTriggerHandle);
+    autoTriggerHandle = null;
+  }
+});
+
+// 051 — when the pending count drops to zero (or jumps after a manual scan)
+// re-evaluate whether auto-drain should kick in.
+watch(pendingCount, () => scheduleAutoDrain());
 </script>
 
 <template>
@@ -480,6 +656,9 @@ onMounted(async () => {
       <div class="page-actions">
         <span v-if="scanning" class="scan-progress">{{ t("files.scanProgress", { processed: scanProcessed, remaining: scanRemaining ?? "…" }) }}</span>
         <span v-if="browserScanning" class="scan-progress">{{ t("files.browserReadProgress", { processed: browserScanProcessed, total: browserScanTotal }) }}</span>
+        <span v-if="!browserScanning && pendingCount > 0" class="pending-badge" :title="t('files.pendingBadgeTitle')">
+          {{ t("files.pendingBadge", { n: pendingCount }) }}
+        </span>
         <button v-if="canScan" class="btn-secondary" :disabled="scanning || browserScanning" @click="runTagScan">{{ t("files.scanTags") }}</button>
         <button v-if="canScan" class="btn-secondary" :disabled="scanning || browserScanning" @click="runBrowserRead">{{ t("files.browserRead") }}</button>
         <button v-if="canTidy" class="btn-secondary" :disabled="scanning || browserScanning || tidyBusy" @click="openTidyFolder">{{ t("files.tidy") }}</button>
@@ -670,6 +849,17 @@ onMounted(async () => {
   color: var(--color-accent-primary);
   letter-spacing: 0.05em;
   animation: pulse 2s ease-in-out infinite;
+}
+/* 051 — pending count badge in the header actions row */
+.pending-badge {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--color-border-default);
+  border-radius: 2px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-secondary);
 }
 
 .source-bar {

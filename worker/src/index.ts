@@ -18,6 +18,7 @@ import { authMiddleware } from "./auth";
 import { registerRoutes } from "./router";
 import { formPostMiddleware } from "./middleware/form_post";
 import { refreshAllChannels } from "./utils/podcastSync";
+import { maybeRunScheduledScan } from "./utils/scheduledScan";
 import { webLoginRoutes } from "./endpoints/edgesonic/auth";
 import { sharePublicRoutes } from "./endpoints/share_public";
 
@@ -77,12 +78,22 @@ app.onError((err, c) => {
 // runtime invokes for each tick. We use ctx.waitUntil so any failures inside
 // refreshAllChannels (network blips, parse errors) don't crash the worker —
 // per-channel errors are recorded into the channel row instead.
+//
+// 051 — Same tick also drives WebDAV auto-scan. maybeRunScheduledScan reads
+// scan_interval_hours + cron:last_scan_ts to decide whether to dispatch a new
+// asyncScanSource per enabled source. Independent ctx.waitUntil() calls let
+// either subsystem fail without blocking the other.
 export default {
   fetch: app.fetch.bind(app),
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(
       refreshAllChannels(env.DB).catch((e) => {
         console.error("scheduled refreshAllChannels failed:", e);
+      }),
+    );
+    ctx.waitUntil(
+      maybeRunScheduledScan(env, ctx).catch((e) => {
+        console.error("scheduled maybeRunScheduledScan failed:", e);
       }),
     );
   },

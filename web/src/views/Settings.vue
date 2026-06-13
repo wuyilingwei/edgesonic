@@ -109,6 +109,8 @@ async function loadFeatures() {
     hydrateScrapeFromFeatures();
     // 043: hydrate Last.fm key presence indicator.
     hydrateLastfmFromFeatures();
+    // 051: hydrate WebDAV scan cadence + BROWSER READ controls.
+    hydrateScanFromFeatures();
   } catch (e: unknown) {
     // 后端契约可能尚未部署 —— 优雅降级显示错误（非 JSON 响应一律视为 API 不可用）
     error.value = e instanceof SyntaxError || !(e instanceof Error)
@@ -257,6 +259,51 @@ async function saveLastfm() {
     showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
   }
   lastfmBusy.value = false;
+}
+
+// === 051 — Scan settings ===
+// Four feature_strings drive the incremental WebDAV scanner + BROWSER READ
+// queue. Stored as strings so the same updateFeatureString endpoint works.
+const scanIntervalHours = ref<number>(1);
+const scanEtagCheck = ref<boolean>(true);
+const scanRescanStrategy = ref<"auto" | "worker" | "browser">("auto");
+const scanBrowserAuto = ref<boolean>(true);
+const scanBusy = ref(false);
+
+function hydrateScanFromFeatures() {
+  const hours = parseInt(findFeatureString("scan_interval_hours", "1"), 10);
+  scanIntervalHours.value = Number.isFinite(hours) && hours >= 0 ? hours : 1;
+  scanEtagCheck.value = findFeatureString("scan_etag_check", "1") !== "0";
+  const strat = findFeatureString("scan_rescan_strategy", "auto");
+  scanRescanStrategy.value = (["auto", "worker", "browser"].includes(strat)
+    ? strat
+    : "auto") as "auto" | "worker" | "browser";
+  scanBrowserAuto.value = findFeatureString("scan_browser_auto", "1") !== "0";
+}
+
+async function saveScan() {
+  scanBusy.value = true;
+  try {
+    // Clamp hours just in case the input slips past the min/max — the worker
+    // also validates but a friendly client-side guard avoids a round-trip.
+    const hours = Math.max(0, Math.min(168, Math.floor(scanIntervalHours.value || 0)));
+    scanIntervalHours.value = hours;
+    const writes = [
+      { key: "scan_interval_hours", value: String(hours) },
+      { key: "scan_etag_check", value: scanEtagCheck.value ? "1" : "0" },
+      { key: "scan_rescan_strategy", value: scanRescanStrategy.value },
+      { key: "scan_browser_auto", value: scanBrowserAuto.value ? "1" : "0" },
+    ];
+    for (const w of writes) {
+      const data = JSON.parse(await edgesonicPost("features/updateString", w));
+      if (!data.ok) throw new Error(data.error || w.key);
+    }
+    showToast(t("settings.common.scan.saved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.scan.saveFailed")}: ${msg}`, "error");
+  }
+  scanBusy.value = false;
 }
 
 async function clearLastfm() {
@@ -642,6 +689,81 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
           </div>
         </div>
 
+        <!-- 051 — Scan settings -->
+        <div class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.scan.title") }}</span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.scan.desc") }}
+          </p>
+          <div class="transcode-grid">
+            <!-- Interval -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.scan.intervalHours") }}</span>
+              <input
+                v-model.number="scanIntervalHours"
+                type="number"
+                min="0"
+                max="168"
+                step="1"
+                class="form-input"
+                :disabled="!isSuperAdmin"
+              />
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.scan.intervalHoursDesc") }}</p>
+
+            <!-- ETag check -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.scan.etagCheck") }}</span>
+              <span class="scan-toggle">
+                <input
+                  type="checkbox"
+                  v-model="scanEtagCheck"
+                  :disabled="!isSuperAdmin"
+                />
+                <span>{{ scanEtagCheck ? t("common.on") : t("common.off") }}</span>
+              </span>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.scan.etagCheckDesc") }}</p>
+
+            <!-- Rescan strategy -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.scan.strategy") }}</span>
+              <select v-model="scanRescanStrategy" class="form-select" :disabled="!isSuperAdmin">
+                <option value="auto">{{ t("settings.common.scan.strategyAuto") }}</option>
+                <option value="worker">{{ t("settings.common.scan.strategyWorker") }}</option>
+                <option value="browser">{{ t("settings.common.scan.strategyBrowser") }}</option>
+              </select>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.scan.strategyDesc") }}</p>
+
+            <!-- Browser auto-drain -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.scan.browserAuto") }}</span>
+              <span class="scan-toggle">
+                <input
+                  type="checkbox"
+                  v-model="scanBrowserAuto"
+                  :disabled="!isSuperAdmin"
+                />
+                <span>{{ scanBrowserAuto ? t("common.on") : t("common.off") }}</span>
+              </span>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.scan.browserAutoDesc") }}</p>
+
+            <div class="tc-actions">
+              <button
+                class="btn-primary"
+                :disabled="!isSuperAdmin || scanBusy"
+                @click="saveScan"
+              >
+                {{ t("settings.common.scan.save") }}
+              </button>
+            </div>
+          </div>
+        </div>
+
         <!-- Feature flags -->
         <div class="sub-block">
           <div class="sub-header"><span class="mono-label">{{ t("settings.common.featureFlags") }}</span></div>
@@ -974,6 +1096,15 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
 }
 .tc-profile-pill input { margin: 0; }
 .tc-actions { margin-top: 0.4rem; display: flex; justify-content: flex-end; }
+
+/* --- 051 Scan toggle pill --- */
+.scan-toggle {
+  display: inline-flex; align-items: center; gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+}
+.scan-toggle input { margin: 0; }
 
 /* --- 040 Scrape source list --- */
 .scrape-source-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.6rem; }

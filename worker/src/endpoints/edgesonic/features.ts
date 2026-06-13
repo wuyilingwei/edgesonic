@@ -96,6 +96,11 @@ const STRING_FEATURE_KEYS = new Set([
   // 043 — Last.fm public read API key (server-side). Empty disables the
   // getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs proxies.
   "lastfm_api_key",
+  // 051 — incremental scan + scheduled WebDAV refresh controls.
+  "scan_interval_hours",
+  "scan_etag_check",
+  "scan_rescan_strategy",
+  "scan_browser_auto",
 ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -132,6 +137,24 @@ function validateFeatureString(key: string, value: string): string | null {
       // feature off. Anything else is accepted verbatim (last.fm keys are
       // 32-char hex but we don't want to encode that format here).
       if (value.length > 128) return "lastfm_api_key is too long";
+      return null;
+    case "scan_interval_hours": {
+      // Stored as a stringified non-negative integer in [0, 168] (one week).
+      // 0 disables the cron-driven scan; anything bigger is the cadence in
+      // hours. Reject empty / NaN / negative / >168 outright.
+      if (!/^\d+$/.test(value)) return "scan_interval_hours must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 0 || n > 168) return "scan_interval_hours must be between 0 and 168";
+      return null;
+    }
+    case "scan_etag_check":
+    case "scan_browser_auto":
+      if (value !== "0" && value !== "1") return `${key} must be '0' or '1'`;
+      return null;
+    case "scan_rescan_strategy":
+      if (!["auto", "worker", "browser"].includes(value)) {
+        return "scan_rescan_strategy must be auto|worker|browser";
+      }
       return null;
     case "scrape_enabled_sources": {
       // JSON array of strings, each one a known scrape source.
