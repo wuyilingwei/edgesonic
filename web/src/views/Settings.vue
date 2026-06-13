@@ -295,6 +295,133 @@ async function saveScan() {
   scanBusy.value = false;
 }
 
+// === 054 — Cloudflare integration ===
+// Six endpoints under /edgesonic/cf/*. Token never echoed; UI shows tokenLast4
+// so the admin can recognise which token is live. All controls hidden when
+// the user is not super-admin (level<3).
+interface CfStatus {
+  configured: boolean;
+  accountId: string;
+  tokenLast4: string;
+}
+interface CfAnalytics {
+  available: boolean;
+  requests?: number;
+  errors?: number;
+  errorRate?: number;
+  cpuMs?: number;
+  cpuP99Ms?: number;
+  error?: string;
+}
+const cfStatus = ref<CfStatus>({ configured: false, accountId: "", tokenLast4: "" });
+const cfAccountId = ref("");
+const cfToken = ref("");
+const cfBusy = ref(false);
+const cfTestBusy = ref(false);
+const cronExpression = ref("");
+const cronBusy = ref(false);
+const cfAnalytics = ref<CfAnalytics | null>(null);
+const cfAnalyticsBusy = ref(false);
+
+async function loadCfStatus() {
+  if (!isSuperAdmin.value) return;
+  try {
+    const data = JSON.parse(await edgesonicFetch("cf/getStatus")) as CfStatus & { ok: boolean };
+    if (data.ok) {
+      cfStatus.value = { configured: data.configured, accountId: data.accountId, tokenLast4: data.tokenLast4 };
+      // Pre-fill the account ID input when one is on file so re-saving the
+      // token doesn't require typing the account ID again.
+      if (data.accountId && !cfAccountId.value) cfAccountId.value = data.accountId;
+    }
+  } catch { /* status is best-effort */ }
+}
+
+async function loadCfCron() {
+  if (!isSuperAdmin.value) return;
+  try {
+    const data = JSON.parse(await edgesonicFetch("cf/getCron")) as {
+      ok: boolean;
+      schedules?: Array<{ cron: string }>;
+    };
+    if (data.ok && Array.isArray(data.schedules)) {
+      cronExpression.value = data.schedules.map((s) => s.cron).join("\n");
+    }
+  } catch { /* cron load failure is silent — the user can still type */ }
+}
+
+async function saveCfToken() {
+  if (!cfToken.value.trim() || !cfAccountId.value.trim()) {
+    showToast(t("settings.common.cf.saveFailed"), "error");
+    return;
+  }
+  cfBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("cf/setToken", {
+      accountId: cfAccountId.value.trim(),
+      token: cfToken.value.trim(),
+    })) as { ok: boolean; error?: string; tokenLast4?: string };
+    if (!data.ok) throw new Error(data.error || "setToken");
+    cfToken.value = "";
+    showToast(t("settings.common.cf.saved"));
+    // Wait a beat so env can refresh — getStatus reads from env, so we
+    // immediately follow up to surface the new tokenLast4.
+    await loadCfStatus();
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.cf.saveFailed")}: ${msg}`, "error");
+  }
+  cfBusy.value = false;
+}
+
+async function testCfConn() {
+  cfTestBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicFetch("cf/testConn")) as {
+      ok: boolean;
+      error?: string;
+      accountName?: string;
+    };
+    if (!data.ok) throw new Error(data.error || "testConn");
+    showToast(t("settings.common.cf.testOk", { name: data.accountName || cfStatus.value.accountId }));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.cf.testFailed")}: ${msg}`, "error");
+  }
+  cfTestBusy.value = false;
+}
+
+async function saveCron() {
+  cronBusy.value = true;
+  try {
+    const crons = cronExpression.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const data = JSON.parse(await edgesonicPost("cf/setCron", { crons })) as {
+      ok: boolean;
+      error?: string;
+    };
+    if (!data.ok) throw new Error(data.error || "setCron");
+    showToast(t("settings.common.cf.cronSaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.cf.cronSaveFailed")}: ${msg}`, "error");
+  }
+  cronBusy.value = false;
+}
+
+async function loadCfAnalytics() {
+  if (!isSuperAdmin.value) return;
+  cfAnalyticsBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicFetch("cf/getAnalytics")) as CfAnalytics & { ok: boolean };
+    cfAnalytics.value = data;
+  } catch (e: unknown) {
+    cfAnalytics.value = {
+      available: false,
+      error: e instanceof Error ? e.message : String(e),
+    };
+  }
+  cfAnalyticsBusy.value = false;
+}
+
 // === 052 — Worker pool ===
 // The local participate switch is the only writable control for non-admins.
 // Admins additionally see the per-status counts and per-user active load.
@@ -515,6 +642,12 @@ onMounted(() => {
   loadCredentials();
   // 052 — only super-admin sees the queue overview block; load it on mount.
   if (isSuperAdmin.value) loadWorkerStatus();
+  // 054 — pull CF status + existing cron + analytics for the super-admin.
+  if (isSuperAdmin.value) {
+    loadCfStatus();
+    loadCfCron();
+    loadCfAnalytics();
+  }
 });
 </script>
 
@@ -811,6 +944,122 @@ onMounted(() => {
                 {{ t("settings.common.scan.save") }}
               </button>
             </div>
+          </div>
+        </div>
+
+        <!-- 054 — Cloudflare integration -->
+        <div v-if="isSuperAdmin" class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.cf.title") }}</span>
+            <span class="status-badge" :class="cfStatus.configured ? 'success' : 'muted'">
+              {{ cfStatus.configured ? t("settings.common.cf.configured") : t("settings.common.cf.unconfigured") }}
+            </span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.cf.desc") }}
+          </p>
+
+          <div class="transcode-grid">
+            <!-- Account ID -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.cf.accountId") }}</span>
+              <input
+                v-model="cfAccountId"
+                type="text"
+                class="form-input"
+                :placeholder="t('settings.common.cf.accountIdPlaceholder')"
+                autocomplete="off"
+              />
+            </label>
+
+            <!-- Token -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.cf.token") }}</span>
+              <input
+                v-model="cfToken"
+                type="password"
+                class="form-input"
+                :placeholder="cfStatus.configured ? '••••' + cfStatus.tokenLast4 : t('settings.common.cf.tokenPlaceholder')"
+                autocomplete="off"
+              />
+            </label>
+
+            <div class="tc-actions">
+              <button
+                class="btn-secondary"
+                :disabled="!cfStatus.configured || cfTestBusy"
+                @click="testCfConn"
+                style="margin-right: 0.6rem"
+              >
+                {{ t("settings.common.cf.test") }}
+              </button>
+              <button
+                class="btn-primary"
+                :disabled="cfBusy || !cfToken || !cfAccountId"
+                @click="saveCfToken"
+              >
+                {{ t("settings.common.cf.save") }}
+              </button>
+            </div>
+          </div>
+
+          <hr style="margin: 0.8rem 0; border: none; border-top: 1px dashed var(--color-border-subtle)" />
+
+          <!-- Cron -->
+          <div class="transcode-grid">
+            <label class="tc-row tc-row-block">
+              <span class="tc-key">{{ t("settings.common.cf.cron") }}</span>
+              <textarea
+                v-model="cronExpression"
+                rows="3"
+                class="form-input"
+                :placeholder="t('settings.common.cf.cronPlaceholder')"
+                style="resize: vertical; font-family: var(--font-mono);"
+              ></textarea>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.cf.cronHint") }}</p>
+
+            <div class="tc-actions">
+              <button
+                class="btn-secondary"
+                :disabled="cronBusy"
+                @click="loadCfCron"
+                style="margin-right: 0.6rem"
+              >
+                {{ t("settings.common.cf.loadCron") }}
+              </button>
+              <button
+                class="btn-primary"
+                :disabled="!cfStatus.configured || cronBusy"
+                @click="saveCron"
+              >
+                {{ t("settings.common.cf.saveCron") }}
+              </button>
+            </div>
+          </div>
+
+          <hr style="margin: 0.8rem 0; border: none; border-top: 1px dashed var(--color-border-subtle)" />
+
+          <!-- Analytics -->
+          <div class="sub-header" style="margin-top: 0.3rem">
+            <span class="mono-label">{{ t("settings.common.cf.analytics") }}</span>
+            <button class="btn-secondary btn-sm" :disabled="cfAnalyticsBusy" @click="loadCfAnalytics">
+              {{ t("settings.common.cf.refresh") }}
+            </button>
+          </div>
+          <div v-if="cfAnalytics && cfAnalytics.available" class="worker-counts-row">
+            <span class="worker-count">{{ t("settings.common.cf.requests") }}: {{ cfAnalytics.requests }}</span>
+            <span class="worker-count" :class="(cfAnalytics.errors || 0) > 0 ? 'worker-count-failed' : ''">
+              {{ t("settings.common.cf.errors") }}: {{ cfAnalytics.errors }}
+            </span>
+            <span class="worker-count">{{ t("settings.common.cf.errorRate") }}: {{ ((cfAnalytics.errorRate || 0) * 100).toFixed(2) }}%</span>
+            <span class="worker-count">{{ t("settings.common.cf.cpuMs") }}: {{ cfAnalytics.cpuMs }}</span>
+            <span class="worker-count">{{ t("settings.common.cf.cpuP99Ms") }}: {{ cfAnalytics.cpuP99Ms }}</span>
+          </div>
+          <div v-else-if="cfAnalytics && !cfAnalytics.available" class="error-panel">
+            <code class="error-text">
+              {{ t("settings.common.cf.analyticsUnavailable", { error: cfAnalytics.error || "—" }) }}
+            </code>
           </div>
         </div>
 
