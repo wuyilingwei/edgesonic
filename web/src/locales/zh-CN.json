@@ -65,7 +65,15 @@
     "infoUsers": "用户数",
     "infoSources": "存储源",
     "infoApiVersion": "API 版本",
-    "infoPlatform": "运行平台"
+    "infoPlatform": "运行平台",
+    "cronWarning": {
+      "title": "⚠ Cron 未配置",
+      "message": "当前 Cloudflare Worker 没有任何调度计划。Podcast 刷新、增量扫描、工作池超时回收都不会自动触发。请前往 Settings → Cloudflare 集成 一键恢复默认 cron，或前往 Settings → 维护工具 手动回收超时任务作为短期方案。",
+      "actionEnsure": "前往 Cloudflare 集成",
+      "actionReclaim": "前往维护工具",
+      "unconfiguredTitle": "Cloudflare API 未配置",
+      "unconfiguredMessage": "当前未设置 CF_API_TOKEN / CF_ACCOUNT_ID，无法读取或修改 cron 调度。这并不影响已有功能，但在升级部署后无法一键恢复 cron，建议在 Settings 中完成配置。"
+    }
   },
   "library": {
     "title": "媒体库",
@@ -476,7 +484,14 @@
         "cleanupCoversButton": "执行清理",
         "cleanupCoversRunning": "清理中…",
         "cleanupCoversDoneToast": "完成：{groups} 组重复，已释放 {cleared} 张专辑",
-        "cleanupCoversFailed": "失败：{error}"
+        "cleanupCoversFailed": "失败：{error}",
+        "reclaimTitle": "回收超时工作任务",
+        "reclaimDesc": "扫描 work_queue 里心跳超过 worker_claim_ttl_seconds 的 claimed 任务：未到 max_attempts 的重新入队，已达上限的标记 failed。等价于 052a 定时回收，但由管理员手动触发——在 Cron 未配置时尤其有用。",
+        "reclaimButton": "🔄 回收超时工作任务",
+        "reclaimRunning": "回收中…",
+        "reclaimDoneToast": "回收 {reclaimed} 条：重新入队 {requeued}，标记失败 {failed}",
+        "reclaimFailed": "失败：{error}",
+        "reclaimHint": "若 Cron 已配置（Cloudflare 集成 → 当前调度非空），通常无需手动回收。"
       }
     },
     "sessions": {

@@ -65,7 +65,15 @@
     "infoUsers": "USERS",
     "infoSources": "SOURCES",
     "infoApiVersion": "API VERSION",
-    "infoPlatform": "PLATFORM"
+    "infoPlatform": "PLATFORM",
+    "cronWarning": {
+      "title": "⚠ Cron schedules empty",
+      "message": "This Cloudflare Worker currently has no scheduled triggers. Podcast refresh, incremental scans, and stale-work reclaim won't run automatically. Open Settings → Cloudflare integration and click 'Ensure default cron' to restore the hourly cadence. As a short-term workaround, the Maintenance tools panel also has a manual reclaim button.",
+      "actionEnsure": "Go to Cloudflare integration",
+      "actionReclaim": "Go to maintenance tools",
+      "unconfiguredTitle": "Cloudflare API not configured",
+      "unconfiguredMessage": "CF_API_TOKEN / CF_ACCOUNT_ID are not set, so the dashboard cannot read or modify the cron schedule. Existing features keep working, but you won't be able to recover the hourly cron after a redeploy without these credentials. Configure them in Settings → Cloudflare integration."
+    }
   },
   "library": {
     "title": "Library",
@@ -476,7 +484,14 @@
         "cleanupCoversButton": "Run cleanup",
         "cleanupCoversRunning": "Cleaning…",
         "cleanupCoversDoneToast": "Done: {groups} duplicate group(s), {cleared} album(s) freed",
-        "cleanupCoversFailed": "Failed: {error}"
+        "cleanupCoversFailed": "Failed: {error}",
+        "reclaimTitle": "Reclaim stale work tasks",
+        "reclaimDesc": "Scans work_queue for claimed rows whose heartbeat is older than worker_claim_ttl_seconds: rows under max_attempts go back to 'queued', rows at the limit go to 'failed'. Mirrors the 052a scheduled sweep but runs on demand — especially handy when CF cron schedules are empty.",
+        "reclaimButton": "🔄 Reclaim stale tasks",
+        "reclaimRunning": "Reclaiming…",
+        "reclaimDoneToast": "Reclaimed {reclaimed}: requeued {requeued}, failed {failed}",
+        "reclaimFailed": "Failed: {error}",
+        "reclaimHint": "If CF cron is configured (Cloudflare integration → schedules non-empty), this button is normally unnecessary."
       }
     },
     "sessions": {
