@@ -69,6 +69,16 @@ const SESSION_ONLY_PATHS = new Set([
   // 049 — transcode admin endpoints (the engine is admin-controlled)
   "/rest/transcodeFile",
   "/rest/getTranscodeStatus",
+  // 040 — metadata scrape (proxy + audit). The proxy fetches public APIs but
+  // uploading the audit row mutates D1 per user → session-bound.
+  "/rest/scrapeMetadata",
+  "/rest/submitScrapeResult",
+  "/rest/getScrapeHistory",
+  // 041 — browser-extracted metadata submission (writes D1, no file I/O)
+  "/rest/submitMetadata",
+  "/rest/findInstanceByUri",
+  // 042 — template-driven folder tidy (R2/WebDAV move). manage_files perm.
+  "/rest/tidyFolder",
 ]);
 
 // ============================================================================
