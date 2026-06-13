@@ -14,6 +14,7 @@ bindings.
 | `WORK_UPLOAD_HMAC_KEY` | 066 | HMAC-SHA-256 key for browser-pool transcode upload tokens (`/edgesonic/work/upload`). | Yes |
 | `CF_API_TOKEN` | 054 | Cloudflare API token for cron / analytics integration. Pushed dynamically via `/edgesonic/cf/setToken`. | Yes (set via Settings UI) |
 | `CF_ACCOUNT_ID` | 054 | Cloudflare account id paired with `CF_API_TOKEN`. | Yes (set via Settings UI) |
+| `STORAGE_KEY` | 068 | AES-256-GCM master key for `storage_sources.password_encrypted`. 32 bytes / 64 hex chars. | Yes |
 
 ---
 
@@ -111,7 +112,67 @@ wrangler secret put WORK_UPLOAD_HMAC_KEY   # overwrite
 
 ---
 
-## 2. `CF_API_TOKEN` / `CF_ACCOUNT_ID` (task 054)
+## 2. `STORAGE_KEY` (task 068)
+
+### Why
+
+WebDAV / Subsonic upstream credentials used to sit in `storage_sources.password`
+as plaintext, which meant any D1 reader (CF dashboard SELECT, accidental backup
+download, a leaked operator token) could see them. Task 068 introduces a new
+`password_encrypted` column whose contents are AES-256-GCM blobs of the form
+`v1:<base64url(nonce(12) || ciphertext || tag(16))>`. `STORAGE_KEY` is the
+master key those blobs are sealed under.
+
+When the secret is **unset or empty**, the worker keeps writing plaintext into
+the legacy `password` column so existing deployments keep working — and the
+`/storage/sources/migratePasswords` endpoint refuses to run. After you push
+the secret, all new add/update flows route through `encryptPassword()` and the
+migrate endpoint can sweep the legacy rows.
+
+### How to set
+
+```bash
+# 64 hex chars = 32 random bytes — AES-256 key material
+openssl rand -hex 32 | pbcopy        # macOS clipboard
+# or just: openssl rand -hex 32
+
+cd worker
+wrangler secret put STORAGE_KEY      # paste the value on stdin
+```
+
+Verify:
+
+```bash
+wrangler secret list
+# expect: STORAGE_KEY  Secret
+```
+
+### One-time migration (recommended right after setting the secret)
+
+From the Settings → Storage Sources page, an admin clicks
+"Migrate plaintext passwords". The endpoint
+`POST /storage/sources/migratePasswords` walks every row with
+`password_encrypted IS NULL AND password <> ''`, rewrites it to
+`password_encrypted = encryptPassword(password)`, clears the legacy column,
+and returns `{ migrated, failed, total }`. The button is super-admin only.
+
+### Rotation (out of scope for v1)
+
+Rotating `STORAGE_KEY` would invalidate every existing `v1:` blob. A future
+task will handle envelope-style rotation; for now treat the key as effectively
+permanent. **Make a copy when you generate it.**
+
+### Length / entropy
+
+- Exactly 64 hex chars (32 bytes raw). `parseHexKey()` rejects anything else.
+- Generate with `openssl rand -hex 32` — 256 bits is the standard AES-256 key
+  size.
+- Do **not** reuse `WORK_UPLOAD_HMAC_KEY` or `CF_API_TOKEN` here; they live in
+  separate trust domains.
+
+---
+
+## 3. `CF_API_TOKEN` / `CF_ACCOUNT_ID` (task 054)
 
 These are managed through the Settings UI → "Cloudflare 集成" sub-block. See
 the docstring in `worker/src/endpoints/edgesonic/cf.ts` and the inline notes in

@@ -38,14 +38,23 @@ bucket_name = "edgesonic-music"
 enabled = true
 
 # ---------------------------------------------------------------------------
-# 046 — Podcast Cron Trigger
+# 046 — Podcast Cron Trigger (now 067 — managed via CF API)
 # ---------------------------------------------------------------------------
-# Refresh every podcast_channels RSS feed once per hour. The scheduled handler
-# in src/index.ts wraps refreshAllChannels with ctx.waitUntil; per-channel
-# errors are persisted to podcast_channels.error_message rather than failing
-# the cron run.
-[triggers]
-crons = ["0 */1 * * *"]
+# Cron triggers are managed dynamically through the Cloudflare API. The static
+# `[triggers]` block previously declared here is intentionally removed so that
+# `wrangler deploy` no longer overwrites schedules configured at runtime via
+# /edgesonic/cf/setCron (054) or /edgesonic/cf/ensureDefaultCron (067).
+#
+# Single source of truth: the Worker's schedules list on Cloudflare.
+# Deploy flow:
+#   1. `wrangler deploy` (will clear schedules as a side effect)
+#   2. Settings → Cloudflare integration → "Ensure default cron"
+# See worker/CF_CRON.md for details.
+#
+# Default schedule that ensureDefaultCron re-applies after a deploy:
+#   crons = ["0 */1 * * *"]
+# (046 podcast RSS refresh + 051 WebDAV auto-scan + 052 stale work reclaim,
+#  all wired in src/index.ts → scheduled())
 
 # ---------------------------------------------------------------------------
 # 049 — Transcode engine (Sandbox SDK container)

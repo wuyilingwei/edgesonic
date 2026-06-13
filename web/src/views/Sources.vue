@@ -4,7 +4,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 
 const { t } = useI18n();
-const { isAdmin, storageFetch, storagePost } = useAuth();
+const { isAdmin, isSuperAdmin, storageFetch, storagePost } = useAuth();
 
 type ScanState = "idle" | "running" | "completed" | "failed";
 
@@ -27,6 +27,10 @@ interface Source {
   rootPath: string;
   enabled: boolean;
   lastSync: string;
+  // 068 — true iff the row's password_encrypted column holds a `v1:` AES-GCM
+  // blob; false for legacy plaintext or rows where the password column itself
+  // is empty (e.g. r2 / url sources, which never had a password).
+  encrypted: boolean;
   // 060 — Last scan_jobs row snapshot for this source. Populated by
   // pollScanStatus() so the action column can render idle/running/completed/
   // failed without an extra round-trip per row.
@@ -194,6 +198,9 @@ async function load() {
         rootPath: s.rootPath || "",
         enabled: s.enabled === "true" || s.enabled === "1",
         lastSync: s.lastSync && s.lastSync !== "0" ? new Date(parseInt(s.lastSync) * 1000).toLocaleString() : "Never",
+        // 068 — sources/list emits encrypted="true"|"false". Only webdav /
+        // subsonic rows ever flip to true; r2 / url stay false.
+        encrypted: s.encrypted === "true",
         scanStatus: prev?.scanStatus ?? "idle",
         scanJobId: prev?.scanJobId ?? null,
         scanTotal: prev?.scanTotal ?? 0,
@@ -294,6 +301,46 @@ function statusLabel(s: Source): string {
   return t("sources.scanStatus.idle");
 }
 
+// === 068 — bulk-encrypt legacy plaintext passwords ===
+// Super-admin only. The button is hidden for plain admins so the one-way
+// nature of the action stays out of the regular admin's foot-gun surface.
+// We don't pre-check STORAGE_KEY availability on the client because:
+//   1. The endpoint already returns ok:false + error when the secret is unset.
+//   2. Probing would leak whether a secret is configured to anyone who can
+//      reach the page.
+const migrating = ref(false);
+async function migratePasswords() {
+  if (migrating.value) return;
+  if (!confirm(t("sources.migrateConfirm"))) return;
+  migrating.value = true;
+  try {
+    const xml = await storagePost("sources/migratePasswords", {});
+    // The endpoint emits JSON (the rest of /storage/ is JSON-shaped), but
+    // storagePost returns the body as text. Parse it; if it doesn't look like
+    // JSON, surface a generic failure.
+    let body: { ok?: boolean; migrated?: number; failed?: number; total?: number; error?: string };
+    try { body = JSON.parse(xml); }
+    catch { showToast(t("sources.migrateFailed"), "error"); return; }
+    if (!body.ok) {
+      showToast(body.error || t("sources.migrateFailed"), "error");
+      return;
+    }
+    if ((body.total ?? 0) === 0) {
+      showToast(t("sources.migrateNoneed"));
+    } else {
+      showToast(t("sources.migrateSuccess", {
+        migrated: body.migrated ?? 0,
+        failed: body.failed ?? 0,
+      }));
+    }
+    await load();
+  } catch {
+    showToast(t("sources.migrateFailed"), "error");
+  } finally {
+    migrating.value = false;
+  }
+}
+
 onMounted(async () => {
   await load();
   await pollScanStatus();
@@ -310,7 +357,19 @@ onUnmounted(stopPolling);
         <div class="mono-label">{{ t("sources.label") }}</div>
         <h1 class="page-title">{{ t("sources.title") }}</h1>
       </div>
-      <button v-if="isAdmin" :class="showForm ? 'btn-secondary' : 'btn-primary'" @click="showForm = !showForm">{{ showForm ? t("common.cancel") : t("sources.add") }}</button>
+      <div class="page-header-actions">
+        <!-- 068 — super-admin only one-way bulk encrypt. Hidden behind
+             confirm() to avoid an accidental click trashing the legacy
+             password column before STORAGE_KEY is verified. -->
+        <button
+          v-if="isSuperAdmin"
+          class="btn-secondary"
+          :disabled="migrating"
+          :title="t('sources.migrateHint')"
+          @click="migratePasswords"
+        >{{ migrating ? t("sources.migrating") : t("sources.migratePasswords") }}</button>
+        <button v-if="isAdmin" :class="showForm ? 'btn-secondary' : 'btn-primary'" @click="showForm = !showForm">{{ showForm ? t("common.cancel") : t("sources.add") }}</button>
+      </div>
     </div>
 
     <div v-if="showForm" class="card" style="margin-bottom:1.25rem; max-width:500px">
@@ -341,6 +400,14 @@ onUnmounted(stopPolling);
         <div class="source-header">
           <span class="status-badge info">{{ s.type.toUpperCase() }}</span>
           <div class="source-right">
+            <!-- 068 — encrypted/plaintext badge. Only meaningful for
+                 webdav / subsonic since r2 / url never had a password to
+                 begin with; hide it for those types so the row stays tidy. -->
+            <span
+              v-if="(s.type === 'webdav' || s.type === 'subsonic') && isAdmin"
+              :class="['status-badge', s.encrypted ? 'success' : 'warn']"
+              :title="s.encrypted ? t('sources.passwordEncryptedHint') : t('sources.passwordPlaintextHint')"
+            >{{ s.encrypted ? t("sources.passwordEncrypted") : t("sources.passwordPlaintext") }}</span>
             <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
             <template v-if="isAdmin">
               <!-- 060: scan action column -->
@@ -457,6 +524,15 @@ onUnmounted(stopPolling);
 
 <style scoped>
 .page { max-width: 1000px; }
+.page-header-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+/* 068 — yellow caution variant for the plaintext badge. status-badge already
+   provides success/error/info; warn is added inline so we don't have to
+   touch palette.css for this task. */
+.status-badge.warn {
+  background: rgba(234, 179, 8, 0.15);
+  color: #facc15;
+  border-color: rgba(234, 179, 8, 0.45);
+}
 .source-card { display: flex; flex-direction: column; gap: 0.55rem; }
 .source-header { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
 .source-right { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
