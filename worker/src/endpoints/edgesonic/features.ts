@@ -86,6 +86,13 @@ const STRING_FEATURE_KEYS = new Set([
   "scan_etag_check",
   "scan_rescan_strategy",
   "scan_browser_auto",
+  // 052 — browser worker pool kill-switch and tunables. All four are stored
+  // as strings even though some look numeric, so they round-trip through the
+  // same /features/updateString endpoint as the rest of feature_strings.
+  "worker_pool_enabled",
+  "worker_poll_interval_seconds",
+  "worker_batch_size",
+  "worker_claim_ttl_seconds",
 ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -141,6 +148,33 @@ function validateFeatureString(key: string, value: string): string | null {
         return "scan_rescan_strategy must be auto|worker|browser";
       }
       return null;
+    case "worker_pool_enabled":
+      if (value !== "0" && value !== "1") return "worker_pool_enabled must be '0' or '1'";
+      return null;
+    case "worker_poll_interval_seconds": {
+      // Stored as a stringified integer in [30, 3600]. Anything lower hammers
+      // D1 / KV; anything higher means a job sits in the queue for an hour.
+      if (!/^\d+$/.test(value)) return "worker_poll_interval_seconds must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 30 || n > 3600) return "worker_poll_interval_seconds must be between 30 and 3600";
+      return null;
+    }
+    case "worker_batch_size": {
+      // 1..20 — bigger batches mean a single browser monopolises rare-cap
+      // tasks; smaller batches mean more polls per minute.
+      if (!/^\d+$/.test(value)) return "worker_batch_size must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 1 || n > 20) return "worker_batch_size must be between 1 and 20";
+      return null;
+    }
+    case "worker_claim_ttl_seconds": {
+      // 15..600 — the reclaim sweep runs hourly so anything beyond 10 minutes
+      // is effectively rounded up to the next cron tick.
+      if (!/^\d+$/.test(value)) return "worker_claim_ttl_seconds must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 15 || n > 600) return "worker_claim_ttl_seconds must be between 15 and 600";
+      return null;
+    }
     case "scrape_enabled_sources": {
       // JSON array of strings, each one a known scrape source.
       const allowed = new Set(["netease", "qmusic", "kugou", "kuwo", "migu"]);
