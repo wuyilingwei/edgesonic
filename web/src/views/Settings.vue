@@ -356,6 +356,10 @@ const cronExpression = ref("");
 const cronBusy = ref(false);
 const cfAnalytics = ref<CfAnalytics | null>(null);
 const cfAnalyticsBusy = ref(false);
+// 067 — Post-deploy "restore default cron" trigger. wrangler deploy clears
+// the Worker's schedules; this button re-applies "0 */1 * * *" when the
+// schedules list is empty (no-op when admin already wrote a custom cadence).
+const cfEnsureCronBusy = ref(false);
 
 async function loadCfStatus() {
   if (!isSuperAdmin.value) return;
@@ -439,6 +443,35 @@ async function saveCron() {
     showToast(`${t("settings.common.cf.cronSaveFailed")}: ${msg}`, "error");
   }
   cronBusy.value = false;
+}
+
+// 067 — Restore the default Worker schedule after a wrangler deploy.
+// Behaviour:
+//   - applied=true  → CF schedules were empty, default re-applied; toast OK
+//   - applied=false → schedules already populated, no change; informational toast
+//   - error path    → surface the CF error verbatim
+async function ensureDefaultCron() {
+  cfEnsureCronBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicFetch("cf/ensureDefaultCron")) as {
+      ok: boolean;
+      error?: string;
+      applied?: boolean;
+      schedules?: Array<{ cron: string }> | unknown;
+    };
+    if (!data.ok) throw new Error(data.error || "ensureDefaultCron");
+    if (data.applied) {
+      showToast(t("settings.common.cf.ensureCronApplied"));
+      // Reflect the new cron in the editable textarea so the admin sees what's live.
+      await loadCfCron();
+    } else {
+      showToast(t("settings.common.cf.ensureCronAlreadySet"));
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.cf.ensureCronFailed")}: ${msg}`, "error");
+  }
+  cfEnsureCronBusy.value = false;
 }
 
 async function loadCfAnalytics() {
@@ -1134,6 +1167,21 @@ onMounted(() => {
                 {{ t("settings.common.cf.saveCron") }}
               </button>
             </div>
+
+            <!-- 067 — Post-deploy default cron restore -->
+            <p class="feature-desc tc-desc" style="margin-top: 0.6rem; color: var(--color-accent-primary)">
+              {{ t("settings.common.cf.ensureCronWarning") }}
+            </p>
+            <div class="tc-actions">
+              <button
+                class="btn-secondary"
+                :disabled="!cfStatus.configured || cfEnsureCronBusy"
+                @click="ensureDefaultCron"
+              >
+                {{ t("settings.common.cf.ensureCron") }}
+              </button>
+            </div>
+            <p class="feature-desc tc-desc">{{ t("settings.common.cf.ensureCronDesc") }}</p>
           </div>
 
           <hr style="margin: 0.8rem 0; border: none; border-top: 1px dashed var(--color-border-subtle)" />
