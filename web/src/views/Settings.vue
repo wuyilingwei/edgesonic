@@ -14,16 +14,20 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 import { setLocale, SUPPORTED_LOCALES, type AppLocale } from "../i18n";
 import PermissionsMatrix from "../components/PermissionsMatrix.vue";
+import { useWorkerPool } from "../stores/workerPool";
 
 const router = useRouter();
 const { t, locale } = useI18n();
-const { isSuperAdmin, edgesonicFetch, edgesonicPost, logout, username } = useAuth();
+const { isSuperAdmin, isAdmin, edgesonicFetch, edgesonicPost, logout, username } = useAuth();
+// 052 — worker pool store. The Settings sub-block toggles participation and
+// surfaces live stats; admin sees a queue overview pulled from /work/status.
+const workerPool = useWorkerPool();
 
 // === Accordion ===
 type SectionKey = "common" | "sessions" | "clients" | "permissions";
@@ -306,6 +310,60 @@ async function saveScan() {
   scanBusy.value = false;
 }
 
+// === 052 — Worker pool ===
+// The local participate switch is the only writable control for non-admins.
+// Admins additionally see the per-status counts and per-user active load.
+const workerStatus = ref<{
+  counts: Record<string, number>;
+  load: Array<{ username: string; n: number }>;
+  recent: Array<{
+    id: string;
+    task_type: string;
+    status: string;
+    claimed_by: string | null;
+    attempts: number;
+    max_attempts: number;
+  }>;
+} | null>(null);
+const workerStatusLoading = ref(false);
+const workerStatusError = ref("");
+
+const workerPollIntervalText = computed(() => {
+  const ms = workerPool.pollIntervalMs;
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  return `${Math.round(ms / 60_000)}m`;
+});
+
+async function loadWorkerStatus() {
+  if (!isSuperAdmin.value) return;
+  workerStatusLoading.value = true;
+  workerStatusError.value = "";
+  try {
+    const text = await edgesonicFetch("work/status");
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "rejected");
+    workerStatus.value = {
+      counts: data.counts || {},
+      load: data.load || [],
+      recent: data.recent || [],
+    };
+  } catch (e: unknown) {
+    workerStatusError.value = e instanceof Error ? e.message : String(e);
+  }
+  workerStatusLoading.value = false;
+}
+
+async function onParticipateToggle(checked: boolean) {
+  workerPool.setEnabled(checked);
+}
+
+async function onPollNow() {
+  await workerPool.pollNow();
+  // If we're admin reload the status so the just-completed/failed task
+  // count moves in the table without a manual refresh.
+  if (isSuperAdmin.value) await loadWorkerStatus();
+}
+
 async function clearLastfm() {
   lastfmBusy.value = true;
   try {
@@ -466,7 +524,13 @@ async function copyText(text: string) {
   catch { showToast(t("settings.common.copyFailed"), "error"); }
 }
 
-onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
+onMounted(() => {
+  loadFeatures();
+  loadSessions();
+  loadCredentials();
+  // 052 — only super-admin sees the queue overview block; load it on mount.
+  if (isSuperAdmin.value) loadWorkerStatus();
+});
 </script>
 
 <template>
@@ -760,6 +824,123 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
               >
                 {{ t("settings.common.scan.save") }}
               </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 052 — Worker pool -->
+        <div class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.workerPool.title") }}</span>
+            <span class="status-badge" :class="workerPool.eligible ? (workerPool.enabled ? 'success' : 'muted') : 'warning'">
+              {{ workerPool.eligible ? (workerPool.enabled ? t("common.on") : t("common.off")) : t("common.off") }}
+            </span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.workerPool.desc") }}
+          </p>
+
+          <p v-if="!workerPool.eligible" class="feature-desc tc-desc" style="margin-left:0; color: var(--color-accent-primary)">
+            {{ t("settings.common.workerPool.ineligible") }}
+          </p>
+
+          <div class="transcode-grid">
+            <!-- Participate toggle -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.workerPool.participate") }}</span>
+              <span class="scan-toggle">
+                <input
+                  type="checkbox"
+                  :checked="workerPool.enabled"
+                  :disabled="!workerPool.eligible"
+                  @change="onParticipateToggle(($event.target as HTMLInputElement).checked)"
+                />
+                <span>{{ workerPool.enabled ? t("common.on") : t("common.off") }}</span>
+              </span>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.workerPool.participateDesc") }}</p>
+
+            <!-- Capabilities -->
+            <div class="tc-row tc-row-block">
+              <span class="tc-key">{{ t("settings.common.workerPool.capsLabel") }}</span>
+              <div class="tc-profiles">
+                <span v-for="cap in workerPool.caps" :key="cap" class="tc-profile-pill">
+                  <span>{{ cap }}</span>
+                </span>
+                <span v-if="workerPool.caps.length === 0" class="feature-desc">—</span>
+              </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="tc-row">
+              <span class="tc-key">{{ t("settings.common.workerPool.statsLabel") }}</span>
+              <span class="worker-stats">
+                <span class="worker-stat worker-stat-success">
+                  {{ t("settings.common.workerPool.statsCompleted") }}: {{ workerPool.stats.completed }}
+                </span>
+                <span class="worker-stat worker-stat-error">
+                  {{ t("settings.common.workerPool.statsFailed") }}: {{ workerPool.stats.failed }}
+                </span>
+              </span>
+            </div>
+
+            <!-- Status -->
+            <div class="tc-row">
+              <span class="tc-key">{{ t("settings.common.workerPool.statusLabel") }}</span>
+              <span class="feature-desc">
+                {{ workerPool.stats.currentTaskType
+                  ? t("settings.common.workerPool.statusRunning", { type: workerPool.stats.currentTaskType })
+                  : t("settings.common.workerPool.statusIdle") }}
+              </span>
+            </div>
+
+            <!-- Poll interval (read-only display) -->
+            <div class="tc-row">
+              <span class="tc-key">{{ t("settings.common.workerPool.pollIntervalLabel") }}</span>
+              <span class="feature-desc">{{ workerPollIntervalText }}</span>
+            </div>
+
+            <!-- Last error -->
+            <div v-if="workerPool.lastError" class="tc-row">
+              <span class="tc-key">{{ t("settings.common.workerPool.lastError") }}</span>
+              <code class="feature-desc" style="color: var(--color-accent-primary)">{{ workerPool.lastError }}</code>
+            </div>
+
+            <div class="tc-actions">
+              <button
+                class="btn-secondary"
+                :disabled="!workerPool.eligible || !workerPool.enabled"
+                @click="onPollNow"
+              >
+                {{ t("settings.common.workerPool.pollNow") }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Admin queue overview -->
+          <div v-if="isSuperAdmin" class="worker-queue-overview">
+            <div class="sub-header" style="margin-top: 0.6rem">
+              <span class="mono-label">{{ t("settings.common.workerPool.queueOverview") }}</span>
+              <button class="btn-secondary btn-sm" :disabled="workerStatusLoading" @click="loadWorkerStatus">
+                {{ workerStatusLoading ? t("settings.common.workerPool.refreshing") : t("settings.common.workerPool.refreshStatus") }}
+              </button>
+            </div>
+            <div v-if="workerStatusError" class="error-panel">
+              <code class="error-text">{{ workerStatusError }}</code>
+            </div>
+            <div v-else-if="workerStatus" class="worker-counts-row">
+              <span class="worker-count worker-count-queued">{{ t("settings.common.workerPool.queueQueued") }}: {{ workerStatus.counts.queued || 0 }}</span>
+              <span class="worker-count worker-count-claimed">{{ t("settings.common.workerPool.queueClaimed") }}: {{ workerStatus.counts.claimed || 0 }}</span>
+              <span class="worker-count worker-count-completed">{{ t("settings.common.workerPool.queueCompleted") }}: {{ workerStatus.counts.completed || 0 }}</span>
+              <span class="worker-count worker-count-failed">{{ t("settings.common.workerPool.queueFailed") }}: {{ workerStatus.counts.failed || 0 }}</span>
+              <span class="worker-count worker-count-canceled">{{ t("settings.common.workerPool.queueCanceled") }}: {{ workerStatus.counts.canceled || 0 }}</span>
+            </div>
+            <div v-if="workerStatus" class="worker-load-row">
+              <span class="mono-label">{{ t("settings.common.workerPool.queueLoad") }}</span>
+              <span v-if="workerStatus.load.length === 0" class="feature-desc">{{ t("settings.common.workerPool.noLoad") }}</span>
+              <span v-for="l in workerStatus.load" :key="l.username" class="tc-profile-pill">
+                {{ t("settings.common.workerPool.loadEntry", { user: l.username, n: l.n }) }}
+              </span>
             </div>
           </div>
         </div>
@@ -1105,6 +1286,31 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
   color: var(--color-text-secondary);
 }
 .scan-toggle input { margin: 0; }
+
+/* --- 052 Worker pool --- */
+.worker-stats { display: inline-flex; gap: 0.8rem; flex-wrap: wrap; }
+.worker-stat {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.04em;
+}
+.worker-stat-success { color: var(--color-text-primary); }
+.worker-stat-error { color: var(--color-accent-primary); }
+.worker-queue-overview { margin-top: 0.8rem; border-top: 1px dashed var(--color-border-subtle); padding-top: 0.7rem; }
+.worker-counts-row { display: flex; flex-wrap: wrap; gap: 0.6rem; padding: 0.4rem 0; }
+.worker-count {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 0.2rem 0.6rem;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+  letter-spacing: 0.05em;
+}
+.worker-count-failed, .worker-count-canceled { color: var(--color-accent-primary); }
+.worker-load-row {
+  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+  padding-top: 0.4rem;
+}
 
 /* --- 040 Scrape source list --- */
 .scrape-source-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.6rem; }

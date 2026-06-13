@@ -20,12 +20,23 @@ import { useI18n } from "vue-i18n";
 import { useAuth } from "./api";
 import PlayerBar from "./components/PlayerBar.vue";
 import { usePlayerStore } from "./stores/player";
+import { useWorkerPool } from "./stores/workerPool";
 
 const router = useRouter();
 const route = useRoute();
 const { t } = useI18n();
 const { isLoggedIn, username, level, logout } = useAuth();
 const player = usePlayerStore();
+// 052 — browser worker pool. Auto-start once the user logs in (level >= 2
+// AND opt-in flag stored locally); the store itself gates non-eligible users.
+const workerPool = useWorkerPool();
+watch(isLoggedIn, (now) => {
+  if (now) {
+    void workerPool.hydrateConfig().then(() => workerPool.start());
+  } else {
+    workerPool.reset();
+  }
+}, { immediate: true });
 
 const menuOpen = ref(false);
 watch(() => route.path, () => { menuOpen.value = false; });
@@ -63,6 +74,7 @@ const groups = computed<NavGroup[]>(() => {
 
 function doLogout() {
   player.clear();
+  workerPool.reset();
   logout();
   router.push("/login");
 }
