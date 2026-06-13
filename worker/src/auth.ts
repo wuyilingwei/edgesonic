@@ -74,9 +74,15 @@ const SESSION_ONLY_PATHS = new Set([
   "/rest/revokeSession",
   "/rest/getFeatures",
   "/rest/updateFeature",
+  "/rest/updateFeatureString",
+  "/rest/getExternalSecret",
+  "/rest/setExternalSecret",
   "/rest/listFiles",
   "/rest/scanTags",
   "/rest/writeTags",
+  // 049 — transcode admin endpoints (the engine is admin-controlled)
+  "/rest/transcodeFile",
+  "/rest/getTranscodeStatus",
 ]);
 
 // ============================================================================

@@ -27,6 +27,7 @@ import { tagEditRoutes } from "./endpoints/tagedit";
 import { playlistsRoutes } from "./endpoints/playlists";
 import { bookmarksRoutes } from "./endpoints/bookmarks";
 import { annotationRoutes } from "./endpoints/annotation";
+import { transcodeRoutes } from "./endpoints/transcode";
 
 export function registerRoutes(app: Hono) {
   app.route("/", pingRoutes);
@@ -42,4 +43,5 @@ export function registerRoutes(app: Hono) {
   app.route("/", playlistsRoutes);
   app.route("/", bookmarksRoutes);
   app.route("/", annotationRoutes);
+  app.route("/", transcodeRoutes);
 }

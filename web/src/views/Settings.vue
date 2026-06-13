@@ -45,11 +45,38 @@ function onLocaleChange(e: Event) {
 
 // === Common: features + instance ===
 interface Feature { key: string; value: number; description: string; }
+interface FeatureString { key: string; value: string; description: string; }
 const features = ref<Feature[]>([]);
+const featureStrings = ref<FeatureString[]>([]);
 const instanceId = ref("");
 const loading = ref(true);
 const error = ref("");
 const copied = ref(false);
+
+// 049 — Transcode controls. The string-valued feature flags are pulled out of
+// featureStrings into local refs so the form is plain HTML; saveTranscode()
+// pushes them back via /rest/updateFeatureString.
+const transcodeEngine = ref<"sandbox" | "external" | "disabled">("disabled");
+const transcodeMode = ref<"on_demand" | "pre_bake" | "both">("on_demand");
+const defaultProfiles = ref<string[]>([]);
+const externalUrl = ref("");
+const externalKeyInput = ref("");
+const externalKeySet = ref(false);
+const transcodeBusy = ref(false);
+const PROFILE_OPTIONS: { id: string; label: string }[] = [
+  { id: "mp3-128k", label: "MP3 128 kbps" },
+  { id: "mp3-192k", label: "MP3 192 kbps" },
+  { id: "aac-96k",  label: "AAC 96 kbps" },
+  { id: "aac-128k", label: "AAC 128 kbps" },
+  { id: "opus-64k", label: "Opus 64 kbps" },
+  { id: "opus-96k", label: "Opus 96 kbps" },
+  { id: "vorbis-96k", label: "Vorbis 96 kbps" },
+  { id: "flac-lossless", label: "FLAC (lossless)" },
+];
+
+function findFeatureString(key: string, fallback: string): string {
+  return featureStrings.value.find((f) => f.key === key)?.value ?? fallback;
+}
 
 async function loadFeatures() {
   loading.value = true;
@@ -62,14 +89,66 @@ async function loadFeatures() {
     features.value = (data.features || []).map((f: Partial<Feature>) => ({
       key: f.key || "", value: Number(f.value) || 0, description: f.description || "",
     }));
+    featureStrings.value = (data.featureStrings || []).map((f: Partial<FeatureString>) => ({
+      key: f.key || "", value: typeof f.value === "string" ? f.value : "", description: f.description || "",
+    }));
+    // Hydrate transcode form from featureStrings.
+    transcodeEngine.value = (findFeatureString("transcode_engine", "disabled") as "sandbox" | "external" | "disabled");
+    transcodeMode.value = (findFeatureString("transcode_mode", "on_demand") as "on_demand" | "pre_bake" | "both");
+    try {
+      const parsed = JSON.parse(findFeatureString("default_transcode_profiles", "[]"));
+      defaultProfiles.value = Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
+    } catch { defaultProfiles.value = []; }
+    externalUrl.value = findFeatureString("external_transcoder_url", "");
+    // Probe the secret presence (the value itself never crosses the wire).
+    try {
+      const probe = JSON.parse(await authFetch("getExternalSecret"));
+      externalKeySet.value = !!probe?.set;
+    } catch { externalKeySet.value = false; }
   } catch (e: unknown) {
     // 后端契约可能尚未部署 —— 优雅降级显示错误（非 JSON 响应一律视为 API 不可用）
     error.value = e instanceof SyntaxError || !(e instanceof Error)
       ? t("settings.common.apiUnavailable")
       : e.message;
     features.value = [];
+    featureStrings.value = [];
   }
   loading.value = false;
+}
+
+function toggleProfile(id: string, checked: boolean) {
+  if (checked && !defaultProfiles.value.includes(id)) defaultProfiles.value.push(id);
+  else if (!checked) defaultProfiles.value = defaultProfiles.value.filter((p) => p !== id);
+}
+
+async function saveTranscode() {
+  transcodeBusy.value = true;
+  try {
+    // updateFeatureString validates server-side; we batch four calls for one
+    // user-visible "Save" click. Optimistic update — fail at the first error.
+    const writes = [
+      { key: "transcode_engine", value: transcodeEngine.value },
+      { key: "transcode_mode", value: transcodeMode.value },
+      { key: "default_transcode_profiles", value: JSON.stringify(defaultProfiles.value) },
+      { key: "external_transcoder_url", value: externalUrl.value },
+    ];
+    for (const w of writes) {
+      const data = JSON.parse(await authPost("updateFeatureString", w));
+      if (!data.ok) throw new Error(data.error || w.key);
+    }
+    // External key is opaque — only POST when the input is non-empty.
+    if (externalKeyInput.value) {
+      const data = JSON.parse(await authPost("setExternalSecret", { value: externalKeyInput.value }));
+      if (!data.ok) throw new Error(data.error || "external_key");
+      externalKeySet.value = true;
+      externalKeyInput.value = "";
+    }
+    showToast(t("settings.common.transcode.saved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.transcode.saveFailed")}: ${msg}`, "error");
+  }
+  transcodeBusy.value = false;
 }
 
 async function toggleFeature(f: Feature, checked: boolean) {
@@ -258,6 +337,91 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
             <select class="form-select lang-select" :value="locale" @change="onLocaleChange">
               <option v-for="l in SUPPORTED_LOCALES" :key="l" :value="l">{{ localeLabels[l] }}</option>
             </select>
+          </div>
+        </div>
+
+        <!-- 049 — Transcode controls -->
+        <div class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.transcode.title") }}</span>
+          </div>
+          <div class="transcode-grid">
+            <!-- Engine -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.transcode.engine") }}</span>
+              <select v-model="transcodeEngine" class="form-select" :disabled="!isSuperAdmin">
+                <option value="disabled">{{ t("settings.common.transcode.engineDisabled") }}</option>
+                <option value="sandbox">{{ t("settings.common.transcode.engineSandbox") }}</option>
+                <option value="external">{{ t("settings.common.transcode.engineExternal") }}</option>
+              </select>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.transcode.engineDesc") }}</p>
+
+            <!-- Mode -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.transcode.mode") }}</span>
+              <select v-model="transcodeMode" class="form-select" :disabled="!isSuperAdmin">
+                <option value="on_demand">{{ t("settings.common.transcode.modeOnDemand") }}</option>
+                <option value="pre_bake">{{ t("settings.common.transcode.modePreBake") }}</option>
+                <option value="both">{{ t("settings.common.transcode.modeBoth") }}</option>
+              </select>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.transcode.modeDesc") }}</p>
+
+            <!-- Default profiles (multi) -->
+            <div class="tc-row tc-row-block">
+              <span class="tc-key">{{ t("settings.common.transcode.profiles") }}</span>
+              <div class="tc-profiles">
+                <label v-for="p in PROFILE_OPTIONS" :key="p.id" class="tc-profile-pill">
+                  <input
+                    type="checkbox"
+                    :checked="defaultProfiles.includes(p.id)"
+                    :disabled="!isSuperAdmin"
+                    @change="toggleProfile(p.id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span>{{ p.label }}</span>
+                </label>
+              </div>
+            </div>
+            <p class="feature-desc tc-desc">{{ t("settings.common.transcode.profilesDesc") }}</p>
+
+            <!-- External URL -->
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.transcode.externalUrl") }}</span>
+              <input
+                v-model="externalUrl"
+                class="form-input"
+                :placeholder="t('settings.common.transcode.externalUrlPlaceholder')"
+                :disabled="!isSuperAdmin"
+              />
+            </label>
+
+            <!-- External key -->
+            <label class="tc-row">
+              <span class="tc-key">
+                {{ t("settings.common.transcode.externalKey") }}
+                <span class="status-badge" :class="externalKeySet ? 'success' : 'muted'">
+                  {{ externalKeySet ? t("settings.common.transcode.externalKeySet") : t("settings.common.transcode.externalKeyUnset") }}
+                </span>
+              </span>
+              <input
+                v-model="externalKeyInput"
+                type="password"
+                class="form-input"
+                :placeholder="t('settings.common.transcode.externalKeyPlaceholder')"
+                :disabled="!isSuperAdmin"
+              />
+            </label>
+
+            <div class="tc-actions">
+              <button
+                class="btn-primary"
+                :disabled="!isSuperAdmin || transcodeBusy"
+                @click="saveTranscode"
+              >
+                {{ t("settings.common.transcode.save") }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -559,4 +723,38 @@ onMounted(() => { loadFeatures(); loadSessions(); loadCredentials(); });
 
 .error-panel { display: flex; flex-direction: column; align-items: flex-start; gap: 0.7rem; padding: 0.5rem 0; }
 .error-text { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); }
+
+/* --- 049 Transcode controls --- */
+.transcode-grid { display: flex; flex-direction: column; gap: 0.65rem; }
+.tc-row { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.tc-row-block { align-items: flex-start; }
+.tc-key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+  min-width: 180px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.tc-row .form-select,
+.tc-row .form-input { flex: 1; min-width: 220px; }
+.tc-desc { margin-left: 180px; }
+.tc-profiles { display: flex; flex-wrap: wrap; gap: 0.5rem; flex: 1; min-width: 0; }
+.tc-profile-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  user-select: none;
+}
+.tc-profile-pill input { margin: 0; }
+.tc-actions { margin-top: 0.4rem; display: flex; justify-content: flex-end; }
 </style>
