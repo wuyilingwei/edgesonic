@@ -76,7 +76,13 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
 
   // 051 — read scan_etag_check once so each background scan sees a coherent
   // snapshot; KV-fronted feature_strings makes this cheap.
-  const etagCheck = (await getFeatureString(env, "scan_etag_check", "1")) !== "0";
+  // 076 — `?force=1` query param overrides the feature flag and disables the
+  // ETag short-circuit so every existing instance hits path 2 (UPDATE +
+  // tag_scanned=0). UX: scan button Shift+click → user feels work happening
+  // when an otherwise-identical second scan would have skipped every row.
+  const forceQuery = (c.req.query("force") || "").toLowerCase();
+  const force = forceQuery === "1" || forceQuery === "true";
+  const etagCheck = force ? false : (await getFeatureString(env, "scan_etag_check", "1")) !== "0";
   // 052 — when the browser worker pool is enabled, every changed/new file
   // gets a `metadata` task pushed into work_queue so opted-in browsers will
   // parse the tags. The scan job itself is unchanged — the dispatch happens
@@ -403,6 +409,12 @@ export async function asyncScanSource(
           },
           requiredCaps: ["music-metadata"],
           priority: 5,
+          // 076 — deterministic dedup key per instance. Re-running scan twice
+          // (or hitting the existing-instance-with-tag_scanned=0 path on a
+          // skipped row) now resolves to the same work_queue row instead of
+          // piling up duplicates. Cleared once the task reaches a terminal
+          // status — see done/fail handlers in work.ts.
+          dedupKey: t.instanceId,
         })));
       } catch (e) {
         console.error(`[scan ${jobId}] dispatchWorkBatch failed:`, e);

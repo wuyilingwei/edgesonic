@@ -352,17 +352,28 @@ export interface DispatchInput {
   requiredCaps?: string[];
   maxAttempts?: number;
   expiresAt?: number;
+  // 076 — When set, the row id becomes deterministic ("wt-<taskType>-<dedupKey>")
+  // and the INSERT is INSERT OR IGNORE — re-dispatching the same logical task
+  // (e.g. same song_instances.id metadata parse) is a no-op instead of piling
+  // up duplicate rows in work_queue. Scan.ts uses this with the instanceId.
+  dedupKey?: string;
 }
 
 export async function dispatchWork(db: D1Database, input: DispatchInput): Promise<string> {
-  const id = "wq-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
+  // 076 — deterministic id when dedupKey provided. We use INSERT OR IGNORE so
+  // a re-dispatch becomes a no-op; the caller still gets the canonical id back
+  // and can look it up regardless of whether the INSERT actually inserted.
+  const id = input.dedupKey
+    ? `wt-${input.taskType}-${input.dedupKey}`
+    : "wq-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
   const priority = clampInt(input.priority ?? 5, 1, 10);
   const maxAttempts = clampInt(input.maxAttempts ?? 3, 1, 10);
   const requiredCapsJson = input.requiredCaps && input.requiredCaps.length > 0
     ? JSON.stringify(input.requiredCaps)
     : null;
+  const insertVerb = input.dedupKey ? "INSERT OR IGNORE INTO" : "INSERT INTO";
   await db.prepare(
-    `INSERT INTO work_queue (id, task_type, payload, required_caps, priority,
+    `${insertVerb} work_queue (id, task_type, payload, required_caps, priority,
                               status, max_attempts, expires_at)
      VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`,
   ).bind(
@@ -389,17 +400,22 @@ export async function dispatchWorkBatch(
 
   const stmts: D1PreparedStatement[] = [];
   for (const input of inputs) {
-    const id = "wq-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
+    // 076 — same deterministic-id + INSERT OR IGNORE story as dispatchWork.
+    // Per-row decision so the same batch can mix deduped + non-deduped rows.
+    const id = input.dedupKey
+      ? `wt-${input.taskType}-${input.dedupKey}`
+      : "wq-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
     ids.push(id);
     const priority = clampInt(input.priority ?? 5, 1, 10);
     const maxAttempts = clampInt(input.maxAttempts ?? 3, 1, 10);
     const requiredCapsJson = input.requiredCaps && input.requiredCaps.length > 0
       ? JSON.stringify(input.requiredCaps)
       : null;
+    const insertVerb = input.dedupKey ? "INSERT OR IGNORE INTO" : "INSERT INTO";
     stmts.push(
       db.prepare(
-        `INSERT INTO work_queue (id, task_type, payload, required_caps, priority,
-                                  status, max_attempts, expires_at)
+        `${insertVerb} work_queue (id, task_type, payload, required_caps, priority,
+                                    status, max_attempts, expires_at)
          VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`,
       ).bind(
         id,

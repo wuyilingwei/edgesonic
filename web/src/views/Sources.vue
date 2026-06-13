@@ -217,12 +217,17 @@ async function deleteSource(id: string) {
   catch { showToast(t("sources.deleteFailed"), "error"); }
 }
 
-async function scanSource(s: Source) {
+async function scanSource(s: Source, force = false) {
   // 060 — flip to a launching placeholder so the row immediately shows a
   // spinner instead of staying on "Scan". The 1st pollScanStatus() will
   // replace this with the real running snapshot (jobs are inserted
   // synchronously inside scan/start before the response returns, see
   // worker/src/endpoints/storage/scan.ts:50-107).
+  // 076 — `force` (Shift+click) bypasses the ETag short-circuit on the worker
+  // side so every existing instance gets an UPDATE + tag_scanned=0 reset. This
+  // gives the user a way to say "I know nothing changed metadata-wise but
+  // re-run the metadata pipeline anyway" — the common-case incremental scan
+  // would otherwise return instantly and feel like the button did nothing.
   launching.value.add(s.id);
   // Optimistically mark the row as running so the badge updates without
   // waiting for the next 3s tick.
@@ -230,11 +235,13 @@ async function scanSource(s: Source) {
     ? { ...x, scanStatus: "running" as ScanState, scanScanned: 0, scanTotal: 0, scanError: null }
     : x);
   try {
-    const xml = await storageFetch("scan/start", { id: s.id });
+    const params: Record<string, string> = { id: s.id };
+    if (force) params.force = "1";
+    const xml = await storageFetch("scan/start", params);
     const res = parseXmlAttrs(xml, "source")[0];
     if (!res) throw new Error("no scan job created");
     if (res.error) throw new Error(res.error);
-    showToast(t("sources.scanStatus.startToast"));
+    showToast(force ? t("sources.scanStatus.forceStartToast") : t("sources.scanStatus.startToast"));
     // Pull status right away so the X/Y counter starts moving.
     await pollScanStatus();
     startPolling();
@@ -345,14 +352,14 @@ onUnmounted(stopPolling);
                 <span v-else-if="s.scanStatus === 'completed'" class="scan-pill scan-pill-completed" :title="t('sources.scanStatus.completed', { total: s.scanTotal, relative: relativeTime(s.scanEndedAt || s.scanStartedAt) })">
                   <span class="scan-icon" aria-hidden="true">✓</span>
                   <span class="scan-pill-text">{{ statusLabel(s) }}</span>
-                  <button class="btn-secondary btn-sm" @click="scanSource(s)">{{ t("sources.scanStatus.idle") }}</button>
+                  <button class="btn-secondary btn-sm" :title="t('sources.scanStatus.forceHint')" @click="scanSource(s, $event.shiftKey)">{{ t("sources.scanStatus.idle") }}</button>
                 </span>
                 <span v-else-if="s.scanStatus === 'failed'" class="scan-pill scan-pill-failed" :title="s.scanError || ''">
                   <span class="scan-icon" aria-hidden="true">✗</span>
                   <span class="scan-pill-text">{{ s.scanError ? `${t('sources.scanStatus.failed')} — ${s.scanError}` : t("sources.scanStatus.failed") }}</span>
-                  <button class="btn-primary btn-sm" @click="scanSource(s)">{{ t("sources.scanStatus.retry") }}</button>
+                  <button class="btn-primary btn-sm" :title="t('sources.scanStatus.forceHint')" @click="scanSource(s, $event.shiftKey)">{{ t("sources.scanStatus.retry") }}</button>
                 </span>
-                <button v-else class="btn-primary btn-sm" @click="scanSource(s)">{{ t("sources.scanStatus.idle") }}</button>
+                <button v-else class="btn-primary btn-sm" :title="t('sources.scanStatus.forceHint')" @click="scanSource(s, $event.shiftKey)">{{ t("sources.scanStatus.idle") }}</button>
               </template>
               <button class="btn-secondary btn-sm" @click="openEdit(s)">{{ t("common.edit") }}</button>
               <button class="btn-danger btn-sm" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
