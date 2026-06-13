@@ -13,6 +13,10 @@ routes = [
 [vars]
 INSTANCE_ID = "9b83869d-397a-42b4-af9b-ea11b2a90504"
 MAX_PROXY_DEPTH = "3"
+# 081 — Worker bundle version exposed by GET /edgesonic/version so long-lived
+# SPA tabs can detect deploys and prompt a refresh. Bump (or override with
+# `wrangler deploy --var WORKER_VERSION:$(date +%s)`) before each deploy.
+WORKER_VERSION = "1"
 
 # Static Assets (Vue frontend)
 [assets]

@@ -786,5 +786,11 @@
     "songRemoved": "已移除",
     "songRemoveFailed": "移除失败",
     "reorderFailed": "排序保存失败"
+  },
+  "update": {
+    "title": "新版本可用",
+    "message": "为获得最新功能与修复，请刷新页面",
+    "refresh": "立即刷新",
+    "later": "稍后"
   }
 }
