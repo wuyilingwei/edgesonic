@@ -69,5 +69,14 @@ export async function buildTranscodeEngine(env: Env): Promise<ResolvedEngine | n
     };
   }
 
+  // 053 — Browser-pool engine. No bindings to verify beyond DB / MUSIC_BUCKET
+  // which are required by every other code path already; the queue is the
+  // contract, and an empty pool of browser workers just means rows sit
+  // queued until somebody opens the web UI.
+  if (kind === "browser_pool") {
+    const { BrowserPoolEngine } = await import("./browser_pool");
+    return { engine: new BrowserPoolEngine(env.DB, env.MUSIC_BUCKET), kind };
+  }
+
   return null;
 }

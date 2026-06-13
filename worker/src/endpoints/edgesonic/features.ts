@@ -99,8 +99,12 @@ const STRING_FEATURE_KEYS = new Set([
 function validateFeatureString(key: string, value: string): string | null {
   switch (key) {
     case "transcode_engine":
-      if (!["sandbox", "external", "disabled"].includes(value)) {
-        return "transcode_engine must be sandbox|external|disabled";
+      // 053 — `browser_pool` joins the enum. Engines that do not run ffmpeg
+      // in-Worker (browser_pool here, sandbox/external before it) all coexist
+      // behind the same string-valued flag so the Settings UI does not need
+      // to know which backend physically runs the codec.
+      if (!["sandbox", "external", "browser_pool", "disabled"].includes(value)) {
+        return "transcode_engine must be sandbox|external|browser_pool|disabled";
       }
       return null;
     case "transcode_mode":

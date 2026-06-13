@@ -279,6 +279,7 @@
         "engineDisabled": "禁用",
         "engineSandbox": "Sandbox (Cloudflare 容器)",
         "engineExternal": "外部容器",
+        "engineBrowserPool": "浏览器工作池",
         "mode": "转码模式",
         "modeDesc": "on_demand 按需触发；pre_bake 上传时预生成；both 二者结合。",
         "modeOnDemand": "按需",

@@ -21,6 +21,8 @@ import type { User } from "../../types/entities";
 import type { TranscodeInput } from "../../transcode/engine";
 import { getProfile } from "../../transcode/profiles";
 import { buildTranscodeEngine } from "../../transcode/factory";
+import { BrowserPoolEngine } from "../../transcode/browser_pool";
+import { signUploadToken } from "../../utils/workUploadToken";
 import { parseStorageUri } from "../../adapters/index";
 import { createR2Adapter } from "../../adapters/r2";
 import { urlAdapter } from "../../adapters/url";
@@ -97,6 +99,55 @@ transcodeRoutes.post("/transcode/start", permissionMiddleware("manage_sources"),
     });
   }
   const { engine, kind } = built;
+
+  // 053 — Browser-pool engine is async-only: instead of opening the source
+  // stream here and synchronously transcoding, we hand the source URI to
+  // the browser worker via the work_queue. Tested in
+  // test/browser_pool_engine.test.ts. The signed /stream URL the browser
+  // will GET against carries the session cookie, so we just build a
+  // self-referential same-origin URL the polling worker can hit.
+  if (kind === "browser_pool" && engine instanceof BrowserPoolEngine) {
+    const reqUrl = new URL(c.req.url);
+    const origin = `${reqUrl.protocol}//${reqUrl.host}`;
+    const sourceUri = `${origin}/rest/stream?id=${encodeURIComponent(body.id)}&format=raw`;
+
+    // Reserve the queue id first so we can mint a token bound to it.
+    // dispatchWork inside enqueueTranscodeTask reuses the same id format
+    // (wq-xxx) — we mint here and pass the upload URL with that id.
+    // We pre-mint by signing a placeholder; instead we ask the engine
+    // for the queue id first, then patch a freshly-signed token onto a
+    // second-step PATCH UPDATE — but D1 latency is cheap, do it in two
+    // steps for simplicity:
+    //   step 1: enqueue with a placeholder uploadUrl pointing to a token
+    //           we will sign for the returned queue id
+    //   step 2: re-write payload.uploadUrl now that we know the id.
+    // We avoid step 2 by signing AFTER we know the id: we enqueue an empty
+    // string, then UPDATE payload.uploadUrl with the signed token. That
+    // keeps dispatchWork API unchanged.
+    const queueId = await engine.enqueueTranscodeTask(sourceUri, body.id, profile, "PENDING_URL");
+    const token = await signUploadToken(env, queueId);
+    const uploadUrl = `${origin}/edgesonic/work/upload?id=${encodeURIComponent(queueId)}&token=${encodeURIComponent(token)}`;
+
+    // Patch payload.uploadUrl in-place — small JSON, single D1 UPDATE.
+    const patched = await env.DB.prepare(
+      `SELECT payload FROM work_queue WHERE id = ?`,
+    ).bind(queueId).first<{ payload: string }>();
+    if (patched?.payload) {
+      const obj = JSON.parse(patched.payload);
+      obj.uploadUrl = uploadUrl;
+      await env.DB.prepare(
+        `UPDATE work_queue SET payload = ? WHERE id = ?`,
+      ).bind(JSON.stringify(obj), queueId).run();
+    }
+
+    return c.json({
+      ok: true,
+      jobId: queueId,
+      engine: kind,
+      profile: profile.id,
+      status: "queued",
+    });
+  }
 
   const source = await openSourceStream(env, body.id);
   if (!source) {

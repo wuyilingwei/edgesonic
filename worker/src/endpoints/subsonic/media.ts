@@ -13,6 +13,8 @@ import { getFeature, parseChain } from "../../utils/features";
 // inject a FakeEngine via __setEngineFactoryForTest exported from factory.ts.
 import { DEFAULT_PROFILES } from "../../transcode/profiles";
 import { buildTranscodeEngine } from "../../transcode/factory";
+import { BrowserPoolEngine } from "../../transcode/browser_pool";
+import { signUploadToken } from "../../utils/workUploadToken";
 import type { TranscodeProfile, TranscodeInput } from "../../transcode/engine";
 
 export const mediaRoutes = new Hono();
@@ -169,6 +171,17 @@ mediaRoutes.get("/stream", async (c) => {
   const needsTranscode = formatMismatch || bitRateMismatch;
 
   if (needsTranscode) {
+    // 053 — Build a self-referential origin so the browser-pool engine can
+    // hand its workers a same-origin /rest/stream URL to fetch from (the
+    // session cookie carries through). Synthesise once here so both
+    // browser_pool and any future engine that wants a raw URL share it.
+    const reqUrl = new URL(c.req.url);
+    const origin = `${reqUrl.protocol}//${reqUrl.host}`;
+    // ExecutionContext access throws in test contexts that didn't pass one;
+    // we treat its absence as "no pre-bake plumbing available" so the
+    // browser_pool path just falls back to raw without trying to enqueue.
+    let executionCtx: ExecutionContext | null = null;
+    try { executionCtx = c.executionCtx; } catch { executionCtx = null; }
     const transcoded = await tryTranscodeStream(
       env,
       selected.storage_uri,
@@ -176,10 +189,13 @@ mediaRoutes.get("/stream", async (c) => {
       maxBitRate,
       timeOffset,
       estimateContentLength ? selected : null,
+      // browser_pool needs these to enqueue a pre-bake job + sign the
+      // upload URL; ignored by sandbox/external.
+      executionCtx ? { instanceId: id, executionCtx, origin } : undefined,
     );
     if (transcoded) return transcoded;
-    // engine disabled / no matching profile / source open failed → fall back
-    // to the original byte stream below.
+    // engine disabled / no matching profile / source open failed / engine
+    // is browser_pool (async-only) → fall back to the original byte stream.
   }
 
   const parsed = parseStorageUri(selected.storage_uri);
@@ -235,12 +251,44 @@ async function tryTranscodeStream(
   // Pass the instance only when the caller asked for Content-Length estimation
   // — keeps the calc opt-in and avoids broadcasting bit_rate noise.
   estimateInstance: { bit_rate: number | null; duration: number | null } | null,
+  // 053 — Pre-bake context for engines that can't synchronously transcode
+  // (browser_pool). When provided, an unsupported engine call falls back to
+  // a queued pre-bake instead of straight raw.
+  ctx?: { instanceId: string; executionCtx: ExecutionContext; origin: string },
 ): Promise<Response | null> {
   const profile = pickProfile(format, maxBitRate);
   if (!profile) return null;
 
   const built = await buildTranscodeEngine(env);
   if (!built) return null;
+
+  // 053 — Browser pool can't run inline; instead schedule a pre-bake task and
+  // return null so the caller serves raw. The next identical request will
+  // see the pre-baked instance once song_instances registration lands.
+  if (built.kind === "browser_pool" && built.engine instanceof BrowserPoolEngine && ctx) {
+    const engine = built.engine;
+    ctx.executionCtx.waitUntil((async () => {
+      try {
+        const sourceUri = `${ctx.origin}/rest/stream?id=${encodeURIComponent(ctx.instanceId)}&format=raw`;
+        const queueId = await engine.enqueueTranscodeTask(sourceUri, ctx.instanceId, profile, "PENDING_URL");
+        const token = await signUploadToken(env, queueId);
+        const uploadUrl = `${ctx.origin}/edgesonic/work/upload?id=${encodeURIComponent(queueId)}&token=${encodeURIComponent(token)}`;
+        const patched = await env.DB.prepare(
+          `SELECT payload FROM work_queue WHERE id = ?`,
+        ).bind(queueId).first<{ payload: string }>();
+        if (patched?.payload) {
+          const obj = JSON.parse(patched.payload);
+          obj.uploadUrl = uploadUrl;
+          await env.DB.prepare(
+            `UPDATE work_queue SET payload = ? WHERE id = ?`,
+          ).bind(JSON.stringify(obj), queueId).run();
+        }
+      } catch {
+        // pre-bake failure is non-fatal — the request still falls back to raw
+      }
+    })());
+    return null;
+  }
 
   const source = await openSourceForTranscode(env, storageUri);
   if (!source) return null;
