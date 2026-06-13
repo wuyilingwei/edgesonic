@@ -39,6 +39,8 @@ import { Hono } from "hono";
 import type { User } from "../../types/entities";
 import type { TranscodePayload } from "../../transcode/browser_pool";
 import { verifyUploadToken } from "../../utils/workUploadToken";
+import { createQueries } from "../../db/queries";
+import { getProfile } from "../../transcode/profiles";
 
 export const workUploadRoutes = new Hono<{
   Bindings: Env;
@@ -118,12 +120,80 @@ workUploadRoutes.post("/work/upload", async (c) => {
 
   // 5. Write to R2. Path scheme `cache/transcoded/<instanceId>_<profile>.<suffix>`
   //    matches the pre-bake convention the rest of EdgeSonic will eventually
-  //    use; song_instances registration is a follow-up task.
+  //    use.
   const r2Key = `cache/transcoded/${payload.instanceId}_${payload.profileId}.${payload.outputSuffix}`;
-  const contentType = c.req.header("Content-Type") || "application/octet-stream";
+  // Prefer the profile catalogue's contentType (authoritative MIME for the
+  // codec/container pair) over whatever the browser uploaded with. The
+  // browser may send `application/octet-stream` to dodge ffmpeg.wasm output
+  // sniffing — that's fine for the R2 put but bad for the song_instances
+  // row that stream selection ultimately reads.
+  const profile = getProfile(payload.profileId);
+  const reqContentType = c.req.header("Content-Type");
+  const contentType = profile?.contentType
+    || reqContentType
+    || suffixToMime(payload.outputSuffix)
+    || "application/octet-stream";
   await env.MUSIC_BUCKET.put(r2Key, buf, {
     httpMetadata: { contentType },
   });
 
-  return c.json({ ok: true, r2Key, size: buf.byteLength });
+  // 6. Register the resulting song_instances row so future identical /stream
+  //    requests (same master + same profile) bypass the engine entirely.
+  //    We DON'T fail the upload if D1 INSERT fails: the R2 bytes are still
+  //    valid and the worker shouldn't be marked failed for an indexing miss
+  //    (FK violation if the original instance was deleted between enqueue
+  //    and upload). Callers see registered:false in the ack and can
+  //    diagnose from logs.
+  let registered = false;
+  let registeredInstanceId: string | null = null;
+  try {
+    const queries = createQueries(env.DB);
+    const parent = await env.DB.prepare(
+      "SELECT master_id FROM song_instances WHERE id = ?",
+    ).bind(payload.instanceId).first<{ master_id: string }>();
+    if (parent?.master_id) {
+      // 16 hex chars from a uuidv4 → ~64 bits of entropy, collision-free at
+      // EdgeSonic's scale and visually distinguishable from upload-flow ids.
+      const newId = "si-bp-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
+      const inserted = await queries.registerTranscodedInstance({
+        id: newId,
+        masterId: parent.master_id,
+        parentInstanceId: payload.instanceId,
+        storageUri: `r2://${r2Key}`,
+        transcodeProfile: payload.profileId,
+        suffix: payload.outputSuffix,
+        contentType,
+        bitRate: profile?.bitrate ?? 0,
+        size: buf.byteLength,
+      });
+      if (inserted) {
+        registered = true;
+        registeredInstanceId = inserted;
+      }
+    }
+  } catch {
+    // swallow: see comment above
+  }
+
+  return c.json({
+    ok: true,
+    r2Key,
+    size: buf.byteLength,
+    registered,
+    instanceId: registeredInstanceId,
+  });
 });
+
+// Tiny suffix → MIME fallback for when the profile lookup misses (unknown
+// profile id sneaked through enqueue). Kept narrow to the containers the
+// 049 catalogue actually emits.
+function suffixToMime(suffix: string): string | null {
+  switch (suffix.toLowerCase()) {
+    case "mp3":  return "audio/mpeg";
+    case "m4a":  return "audio/mp4";
+    case "opus": return "audio/opus";
+    case "ogg":  return "audio/ogg";
+    case "flac": return "audio/flac";
+    default:     return null;
+  }
+}

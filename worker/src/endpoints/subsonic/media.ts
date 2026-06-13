@@ -164,7 +164,17 @@ mediaRoutes.get("/stream", async (c) => {
   const env = c.env as Env;
 
   const queries = createQueries(env.DB);
-  const instances = await queries.getSongInstances(id);
+  // 056/058 hotfix: 052b worker pool 任务 payload 携带 song_instances.id (si- 前缀)
+  // 而 Subsonic 标准 stream id = song_masters.id (sm- 前缀)。让 stream 端点宽容地
+  // 接受 instance id：当 id 以 'si-' 开头时反查对应 master_id，再走标准路径。
+  let resolvedId = id;
+  if (id.startsWith("si-")) {
+    const row = await env.DB.prepare(
+      "SELECT master_id FROM song_instances WHERE id = ?"
+    ).bind(id).first<{ master_id: string }>();
+    if (row?.master_id) resolvedId = row.master_id;
+  }
+  const instances = await queries.getSongInstances(resolvedId);
 
   if (instances.length === 0) return c.text(subsonicError(70, "Song not found"), 404, { "Content-Type": "application/xml; charset=UTF-8" });
 
@@ -186,6 +196,21 @@ mediaRoutes.get("/stream", async (c) => {
   const needsTranscode = formatMismatch || bitRateMismatch;
 
   if (needsTranscode) {
+    // 058 — Pre-baked instance short-circuit.
+    // Before we ask the engine to do work, check whether the browser pool
+    // (or any future pre-bake job) has already produced a song_instances
+    // row matching the profile the client wants. When it has, we just
+    // serve that instance verbatim — no engine call, no waitUntil.
+    const targetProfile = pickProfile(format, maxBitRate);
+    if (targetProfile) {
+      const queries2 = createQueries(env.DB);
+      const cached = await queries2.findTranscodedInstance(selected.master_id, targetProfile.id);
+      if (cached) {
+        selected = cached;
+        // Fall through to the byte-stream block below — the cached row's
+        // storage_uri is r2://cache/transcoded/... so the r2 adapter handles
+        // it directly, identical to serving an original.
+      } else {
     // 053 — Build a self-referential origin so the browser-pool engine can
     // hand its workers a same-origin /rest/stream URL to fetch from (the
     // session cookie carries through). Synthesise once here so both
@@ -211,6 +236,11 @@ mediaRoutes.get("/stream", async (c) => {
     if (transcoded) return transcoded;
     // engine disabled / no matching profile / source open failed / engine
     // is browser_pool (async-only) → fall back to the original byte stream.
+      } // end else (no cached transcoded instance)
+    } else {
+      // pickProfile returned null → no profile in catalogue matches the
+      // client's (format, maxBitRate). Same fallback as 053: serve raw.
+    }
   }
 
   const parsed = parseStorageUri(selected.storage_uri);

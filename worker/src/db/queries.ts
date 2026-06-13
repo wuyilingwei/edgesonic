@@ -869,6 +869,88 @@ export function createQueries(db: D1Database) {
       ).bind(id).first<TranscodeJob>();
     },
 
+    // ========================================================================
+    // 058 — Register a transcoded song_instance row.
+    // ========================================================================
+    // After the browser-pool worker (053) uploads a transcoded blob to R2,
+    // we persist a song_instances row so the stream endpoint can short-circuit
+    // future identical requests without queueing another transcode.
+    //
+    // - `id` is caller-provided (we use `si-bp-<random16>` from work_upload.ts
+    //   so it's easy to grep / distinguish from upload-flow instances).
+    // - `source_id` is fixed to 'r2-local' to match 049's transcode_jobs path
+    //   (the output always lives in MUSIC_BUCKET).
+    // - `parent_instance_id` is the original instance that triggered the
+    //   transcode; tracking it lets the future tidy-up job cascade cleanly.
+    // - `bit_rate` carries the profile bitrate (lossless flac is profile=0 →
+    //   row gets 0 too; downstream already tolerates it).
+    // - sample_rate / bit_depth / channels / duration are left NULL: ffmpeg.wasm
+    //   doesn't probe its own output today. A future task may UPSERT these
+    //   after the browser sends a metadata follow-up.
+    //
+    // Returns the inserted row id on success; null when the FK constraint
+    // would fail (master_id missing → original instance was deleted between
+    // enqueue and upload). The caller treats null as "no DB row, but R2 still
+    // holds the bytes" and emits the upload ack as a partial success.
+    async registerTranscodedInstance(opts: {
+      id: string;
+      masterId: string;
+      parentInstanceId: string | null;
+      storageUri: string;
+      transcodeProfile: string;
+      suffix: string;
+      contentType: string;
+      bitRate: number;
+      size: number;
+    }): Promise<string | null> {
+      const now = Math.floor(Date.now() / 1000);
+      try {
+        await db.prepare(
+          `INSERT INTO song_instances
+             (id, master_id, source_id, source_type, parent_instance_id,
+              storage_uri, transcode_profile, suffix, content_type,
+              bit_rate, size, created_at, updated_at)
+           VALUES (?, ?, 'r2-local', 'transcoded', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(
+          opts.id,
+          opts.masterId,
+          opts.parentInstanceId,
+          opts.storageUri,
+          opts.transcodeProfile,
+          opts.suffix,
+          opts.contentType,
+          opts.bitRate,
+          opts.size,
+          now,
+          now,
+        ).run();
+        return opts.id;
+      } catch {
+        // FK violation (master gone) or PK conflict (idempotent re-upload).
+        // Either way the byte payload in R2 is still valid; we just can't
+        // index it. Return null to let the caller log + ack 200.
+        return null;
+      }
+    },
+
+    // 058 — Look up a pre-baked transcoded instance for a (master, profile).
+    // Used by /rest/stream to short-circuit the 049 engine dispatch when the
+    // browser pool (or pre-bake) has already produced the requested profile.
+    async findTranscodedInstance(
+      masterId: string,
+      transcodeProfile: string,
+    ): Promise<SongInstance | null> {
+      return db.prepare(
+        `SELECT * FROM song_instances
+           WHERE master_id = ?
+             AND source_type = 'transcoded'
+             AND transcode_profile = ?
+             AND missing = 0
+         ORDER BY created_at DESC
+         LIMIT 1`
+      ).bind(masterId, transcodeProfile).first<SongInstance>();
+    },
+
     // Latest scan_job per source (one row each, newest first by source).
     async getLatestScanJobs(): Promise<Array<{
       id: string;

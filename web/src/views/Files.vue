@@ -17,13 +17,16 @@
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatSize } from "../api";
+import { useWorkerPool } from "../stores/workerPool";
 import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
 import type { ScrapeResult } from "../lib/scrape";
 import { extractMetadata, isBrowserParse, suffixOf } from "../lib/metadata";
 
 const { t } = useI18n();
-const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, uploadFile, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
+const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, edgesonicPost, uploadFile, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
+// 056 — Worker pool surface: progress / speed / pause / recent chips.
+const workerPool = useWorkerPool();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
 interface DirEntry { name: string; }
@@ -602,6 +605,109 @@ async function runTidyFolder() {
 
 function closeTidyFolder() { tidyOpen.value = false; }
 
+// ── 056 — work-queue HUD ───────────────────────────────────────────────────
+// HUD pulls /edgesonic/work/status every 30s so super-admins can watch the
+// queue counts + cancel stuck failures. Non-admins hit 403 → we just hide
+// the failed-list panel and rely on store-side stats for progress.
+interface WorkStatusRecent {
+  id: string;
+  task_type: string;
+  status: string;
+  attempts: number;
+  max_attempts: number;
+  error_message: string | null;
+  created_at: number;
+}
+interface WorkStatusResp {
+  ok: boolean;
+  counts?: Record<string, number>;
+  recent?: WorkStatusRecent[];
+  error?: string;
+}
+const workStatus = ref<WorkStatusResp | null>(null);
+const workStatusError = ref<string | null>(null);
+const cancelingId = ref<string | null>(null);
+const isSuperAdmin = computed(() => level.value >= 3);
+const showWorkQueueHud = computed(() =>
+  workerPool.isWorking ||
+  workerPool.stats.completed > 0 ||
+  workerPool.stats.failed > 0 ||
+  (workStatus.value?.counts?.queued ?? 0) > 0,
+);
+const queuedTotal = computed(() => workStatus.value?.counts?.queued ?? 0);
+const failedRows = computed(
+  () => (workStatus.value?.recent || []).filter((r) => r.status === "failed").slice(0, 10),
+);
+const failedCount = computed(() => workStatus.value?.counts?.failed ?? 0);
+const progressPct = computed(() => {
+  const done = workerPool.stats.completed;
+  const total = done + queuedTotal.value;
+  if (total <= 0) return 0;
+  return Math.min(100, Math.round((done / total) * 100));
+});
+
+async function loadWorkStatus() {
+  if (!isSuperAdmin.value) return;
+  try {
+    const text = await edgesonicFetch("work/status");
+    const data: WorkStatusResp = JSON.parse(text);
+    if (data.ok) {
+      workStatus.value = data;
+      workStatusError.value = null;
+    } else {
+      workStatusError.value = data.error || t("files.workQueue.statusLoadFailed");
+    }
+  } catch {
+    workStatusError.value = t("files.workQueue.statusLoadFailed");
+  }
+}
+
+async function cancelWorkTask(id: string) {
+  cancelingId.value = id;
+  try {
+    const text = await edgesonicPost("work/cancel", { id });
+    const data = JSON.parse(text);
+    if (data?.ok) {
+      showToast(t("files.workQueue.canceled"));
+      await loadWorkStatus();
+    } else {
+      showToast(t("files.workQueue.cancelFailed"), "error");
+    }
+  } catch {
+    showToast(t("files.workQueue.cancelFailed"), "error");
+  } finally {
+    cancelingId.value = null;
+  }
+}
+
+function toggleWorkerPool() {
+  const next = !workerPool.enabled;
+  workerPool.setEnabled(next);
+  if (next) {
+    // Force an immediate poll so the user gets feedback the resume happened.
+    void workerPool.pollNow();
+  }
+}
+
+let workStatusHandle: number | null = null;
+function startWorkStatusPolling() {
+  if (workStatusHandle !== null) return;
+  if (!isSuperAdmin.value) return;
+  // Kick off an initial fetch so the panel populates without waiting 30s.
+  void loadWorkStatus();
+  workStatusHandle = window.setInterval(loadWorkStatus, 30_000);
+}
+function stopWorkStatusPolling() {
+  if (workStatusHandle !== null) {
+    clearInterval(workStatusHandle);
+    workStatusHandle = null;
+  }
+}
+function onWorkStatusVisibilityChange() {
+  if (document.visibilityState === "visible") startWorkStatusPolling();
+  else stopWorkStatusPolling();
+}
+
 async function onTagEditorSubmit(patch: Record<string, string | number>, cover?: { data: string; mime: string }) {
   if (!editTargetId.value || (!Object.keys(patch).length && !cover)) return;
   editBusy.value = true; editMsg.value = ""; editErr.value = false;
@@ -631,6 +737,9 @@ onMounted(async () => {
   await loadPending();
   document.addEventListener("visibilitychange", onVisibilityChange);
   scheduleAutoDrain();
+  // 056 — start the work/status poller (no-op for non-super-admin).
+  document.addEventListener("visibilitychange", onWorkStatusVisibilityChange);
+  startWorkStatusPolling();
 });
 
 onUnmounted(() => {
@@ -639,6 +748,8 @@ onUnmounted(() => {
     clearTimeout(autoTriggerHandle);
     autoTriggerHandle = null;
   }
+  document.removeEventListener("visibilitychange", onWorkStatusVisibilityChange);
+  stopWorkStatusPolling();
 });
 
 // 051 — when the pending count drops to zero (or jumps after a manual scan)
@@ -664,6 +775,91 @@ watch(pendingCount, () => scheduleAutoDrain());
         <button v-if="canTidy" class="btn-secondary" :disabled="scanning || browserScanning || tidyBusy" @click="openTidyFolder">{{ t("files.tidy") }}</button>
         <button v-if="canUpload" class="btn-primary" @click="showUpload = !showUpload">{{ t("files.upload") }}</button>
       </div>
+    </div>
+
+    <!-- 056 — Work-queue HUD: progress + speed + pause + recent chips.
+         Failed list panel only shows for super-admin (the /work/status
+         endpoint is level=3, non-admins simply don't get the data). -->
+    <div v-if="showWorkQueueHud" class="work-queue-card card">
+      <div class="card-header">
+        <span class="card-title">{{ t("files.workQueue.title") }}</span>
+        <div class="wq-actions">
+          <button
+            v-if="workerPool.eligible"
+            class="btn-secondary wq-toggle"
+            :class="{ resumed: workerPool.enabled }"
+            @click="toggleWorkerPool"
+          >
+            {{ workerPool.enabled ? t("files.workQueue.pause") : t("files.workQueue.resume") }}
+          </button>
+        </div>
+      </div>
+
+      <div class="wq-progress-line">
+        <span v-if="queuedTotal > 0" class="wq-progress-text">
+          {{ t("files.workQueue.progress", { completed: workerPool.stats.completed, queued: queuedTotal }) }}
+        </span>
+        <span v-else class="wq-progress-text">
+          {{ t("files.workQueue.progressNoQueue", { completed: workerPool.stats.completed, failed: workerPool.stats.failed }) }}
+        </span>
+        <span class="wq-speed">
+          <template v-if="workerPool.speedPerMin === null">{{ t("files.workQueue.speedPending") }}</template>
+          <template v-else>{{ t("files.workQueue.speed", { speed: workerPool.speedPerMin }) }}</template>
+        </span>
+      </div>
+
+      <div v-if="queuedTotal > 0" class="wq-progress-bar">
+        <div class="wq-progress-fill" :style="{ width: progressPct + '%' }"></div>
+      </div>
+
+      <div v-if="workerPool.stats.currentTaskType" class="wq-current mono-label">
+        {{ t("files.workQueue.current", { type: workerPool.stats.currentTaskType }) }}
+      </div>
+
+      <p v-if="!workerPool.enabled" class="wq-paused-hint">{{ t("files.workQueue.paused") }}</p>
+
+      <!-- Recent task chips — only when we have something to show. -->
+      <div v-if="workerPool.recent.length" class="wq-recent">
+        <div class="mono-label wq-recent-label">{{ t("files.workQueue.recent") }}</div>
+        <div class="wq-recent-list">
+          <div
+            v-for="r in workerPool.recent"
+            :key="r.id"
+            class="wq-recent-chip"
+            :class="{ 'wq-ok': r.status === 'ok', 'wq-fail': r.status === 'fail' }"
+            :title="r.error || r.taskType"
+          >
+            <span class="wq-chip-icon">{{ r.status === "ok" ? "✓" : "✗" }}</span>
+            <span class="wq-chip-name">{{ r.fileName }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Super-admin failed-task panel — pulls /work/status every 30s. -->
+      <div v-if="isSuperAdmin && failedCount > 0" class="wq-failed">
+        <div class="wq-failed-header">
+          <span class="mono-label">{{ t("files.workQueue.failed", { n: failedCount }) }}</span>
+          <button class="btn-secondary wq-refresh" @click="loadWorkStatus">{{ t("files.workQueue.refresh") }}</button>
+        </div>
+        <div v-if="failedRows.length" class="wq-failed-list">
+          <div v-for="row in failedRows" :key="row.id" class="wq-failed-row">
+            <span class="wq-failed-text" :title="row.error_message || ''">
+              {{ t("files.workQueue.failedRow", { type: row.task_type, error: (row.error_message || "").slice(0, 80) }) }}
+            </span>
+            <button
+              class="op-btn wq-cancel"
+              :disabled="cancelingId === row.id"
+              @click="cancelWorkTask(row.id)"
+            >{{ t("files.workQueue.cancel") }}</button>
+          </div>
+        </div>
+        <div v-else class="wq-failed-empty">{{ t("files.workQueue.failedEmpty") }}</div>
+      </div>
+
+      <p v-if="workStatusError" class="wq-error">{{ workStatusError }}</p>
+
+      <div class="corner corner-tl"></div>
+      <div class="corner corner-br"></div>
     </div>
 
     <div class="source-bar">
@@ -1044,4 +1240,140 @@ watch(pendingCount, () => scheduleAutoDrain());
   color: var(--color-status-success);
 }
 .te-msg.error { color: var(--color-status-error); }
+
+/* 056 — Work-queue HUD: progress bar + chips + failed-list panel. */
+.work-queue-card { margin-bottom: 1.25rem; padding: 0.85rem 1rem; }
+.work-queue-card .card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+.wq-actions { display: flex; gap: 0.4rem; align-items: center; }
+.wq-toggle {
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  letter-spacing: 0.08em;
+  padding: 0.2rem 0.7rem;
+}
+.wq-toggle.resumed { color: var(--color-status-success); border-color: var(--color-status-success); }
+
+.wq-progress-line {
+  display: flex; align-items: center; justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+  margin-bottom: 0.4rem;
+}
+.wq-progress-text { color: var(--color-text-primary); }
+.wq-speed {
+  color: var(--color-accent-primary);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.05em;
+}
+
+.wq-progress-bar {
+  height: 6px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+}
+.wq-progress-fill {
+  height: 100%;
+  background: var(--color-accent-primary);
+  transition: width 0.3s ease;
+}
+
+.wq-current {
+  color: var(--color-accent-primary);
+  font-size: var(--fs-xs);
+  margin-bottom: 0.4rem;
+  animation: pulse 2s ease-in-out infinite;
+}
+
+.wq-paused-hint {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  margin: 0.2rem 0 0.5rem 0;
+}
+
+.wq-recent { margin-top: 0.6rem; }
+.wq-recent-label { color: var(--color-text-muted); margin-bottom: 0.35rem; }
+.wq-recent-list {
+  display: flex; gap: 0.4rem; flex-wrap: wrap;
+}
+.wq-recent-chip {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.2rem 0.55rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 2px;
+  background: var(--color-bg-secondary);
+  max-width: 16rem;
+}
+.wq-recent-chip.wq-ok { color: var(--color-text-secondary); }
+.wq-recent-chip.wq-fail {
+  color: var(--color-status-error);
+  border-color: var(--color-status-error);
+}
+.wq-chip-icon { flex-shrink: 0; font-weight: bold; }
+.wq-chip-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.wq-failed {
+  margin-top: 0.85rem;
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: 0.7rem;
+}
+.wq-failed-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 0.4rem;
+}
+.wq-failed-header .mono-label { color: var(--color-status-error); }
+.wq-refresh {
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  padding: 0.15rem 0.5rem;
+}
+.wq-failed-list {
+  display: flex; flex-direction: column; gap: 0.25rem;
+  max-height: 12rem; overflow-y: auto;
+}
+.wq-failed-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-left: 2px solid var(--color-status-error);
+  border-radius: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+.wq-failed-text {
+  flex: 1; min-width: 0;
+  color: var(--color-text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.wq-cancel {
+  opacity: 1;
+  color: var(--color-text-muted);
+}
+.wq-cancel:hover {
+  color: var(--color-status-error);
+  border-color: var(--color-status-error);
+}
+.wq-failed-empty {
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  padding: 0.3rem 0;
+}
+
+.wq-error {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-status-error);
+  margin-top: 0.4rem;
+}
 </style>
