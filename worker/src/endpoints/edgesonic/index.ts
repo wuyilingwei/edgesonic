@@ -13,6 +13,7 @@ import { transcodeRoutes } from "./transcode";
 import { workRoutes } from "./work";
 import { workUploadRoutes } from "./work_upload";
 import { cfRoutes } from "./cf";
+import { maintenanceRoutes } from "./maintenance";
 
 export const edgesonicRoutes = new Hono();
 
@@ -27,3 +28,5 @@ edgesonicRoutes.route("/", workRoutes);
 edgesonicRoutes.route("/", workUploadRoutes);
 // 054 — Cloudflare API integration (token / cron / analytics)
 edgesonicRoutes.route("/", cfRoutes);
+// 078 — operational maintenance tools (cleanup-duplicate-covers, ...)
+edgesonicRoutes.route("/", maintenanceRoutes);

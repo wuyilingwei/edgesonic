@@ -570,6 +570,33 @@ async function onBackfillCompleted() {
   workerBackfillBusy.value = false;
 }
 
+// 078 — maintenance: cleanup duplicate album cover bindings. Calls
+// /edgesonic/maintenance/cleanupDuplicateCovers, surfaces groups/cleared
+// counts in a toast, and tolerates 0/0 (no-op) gracefully. R2 objects are
+// NOT deleted — only the album.cover_r2_key column is freed for the freed
+// rows, so a subsequent getCoverArt will re-resolve per-album.
+const cleanupCoversBusy = ref(false);
+const cleanupCoversToast = ref("");
+async function onCleanupDuplicateCovers() {
+  if (!isSuperAdmin.value || cleanupCoversBusy.value) return;
+  cleanupCoversBusy.value = true;
+  cleanupCoversToast.value = "";
+  try {
+    const text = await edgesonicPost("maintenance/cleanupDuplicateCovers", {});
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "rejected");
+    cleanupCoversToast.value = t("settings.common.maintenance.cleanupCoversDoneToast", {
+      groups: data.groups || 0,
+      cleared: data.cleared || 0,
+    });
+  } catch (e: unknown) {
+    cleanupCoversToast.value = t("settings.common.maintenance.cleanupCoversFailed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  cleanupCoversBusy.value = false;
+}
+
 async function clearLastfm() {
   lastfmBusy.value = true;
   try {
@@ -1342,6 +1369,36 @@ onMounted(() => {
               </button>
               <span v-if="workerBackfillToast" class="feature-desc" style="margin-left: 0.6rem">{{ workerBackfillToast }}</span>
             </div>
+          </div>
+        </div>
+
+        <!-- 078 — Maintenance tools (super-admin only). Lives in Common because
+             that's where 077 backfill lives; both are "fix the DB state" knobs
+             tied to historical data drift. Each tool here MUST be idempotent
+             and safe to re-run — no destructive cascades. -->
+        <div v-if="isSuperAdmin" class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">🔧 {{ t("settings.common.maintenance.title") }}</span>
+          </div>
+          <p class="feature-desc" style="margin: 0 0 0.6rem 0">
+            {{ t("settings.common.maintenance.desc") }}
+          </p>
+
+          <div class="tc-row">
+            <span class="tc-key">{{ t("settings.common.maintenance.cleanupCovers") }}</span>
+            <span class="feature-desc">{{ t("settings.common.maintenance.cleanupCoversDesc") }}</span>
+          </div>
+          <div class="tc-actions">
+            <button
+              class="btn-secondary"
+              :disabled="cleanupCoversBusy"
+              @click="onCleanupDuplicateCovers"
+            >
+              {{ cleanupCoversBusy
+                ? t("settings.common.maintenance.cleanupCoversRunning")
+                : t("settings.common.maintenance.cleanupCoversButton") }}
+            </button>
+            <span v-if="cleanupCoversToast" class="feature-desc" style="margin-left: 0.6rem">{{ cleanupCoversToast }}</span>
           </div>
         </div>
 

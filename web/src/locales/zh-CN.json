@@ -463,6 +463,16 @@
         "backfillButton": "回填已完成 metadata 任务",
         "backfillRunning": "回填中…",
         "backfillDoneToast": "已处理 {processed}：成功 {applied}，失败 {failed}"
+      },
+      "maintenance": {
+        "title": "维护工具",
+        "desc": "针对数据库存量数据的一次性管理工具，全部幂等可重复执行。仅超级管理员可见。",
+        "cleanupCovers": "清理重复封面",
+        "cleanupCoversDesc": "对 albums.cover_r2_key 相同的多张专辑，只保留 id 最早的一张，其余置空。R2 文件不会删除，后续访问会按 074 修复后的逻辑各自重新解析封面。",
+        "cleanupCoversButton": "执行清理",
+        "cleanupCoversRunning": "清理中…",
+        "cleanupCoversDoneToast": "完成：{groups} 组重复，已释放 {cleared} 张专辑",
+        "cleanupCoversFailed": "失败：{error}"
       }
     },
     "sessions": {
