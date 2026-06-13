@@ -451,7 +451,12 @@
         "loadEntry": "{user}: {n}",
         "ineligible": "Your level cannot participate in the worker pool (requires level ≥ 2).",
         "refreshStatus": "Refresh queue status",
-        "refreshing": "Refreshing…"
+        "refreshing": "Refreshing…",
+        "backfillLabel": "Backfill completed tasks",
+        "backfillDesc": "Replay every status=completed task_type=metadata row's result into song_masters / song_instances. Repairs historical tasks that completed but were never applied before fix 077. Idempotent.",
+        "backfillButton": "Backfill completed metadata tasks",
+        "backfillRunning": "Running…",
+        "backfillDoneToast": "Processed {processed}: applied {applied}, failed {failed}"
       }
     },
     "sessions": {

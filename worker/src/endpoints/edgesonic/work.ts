@@ -21,6 +21,7 @@
 import { Hono } from "hono";
 import { permissionMiddleware } from "../../auth";
 import { getFeatureString } from "../../utils/features";
+import { applyMetadataResult } from "../../utils/metadataApply";
 import type { User } from "../../types/entities";
 
 export const workRoutes = new Hono<{
@@ -156,9 +157,21 @@ workRoutes.post("/work/submit", async (c) => {
   }
   if (!body.id) return c.json({ ok: false, error: "Missing id" }, 400);
 
+  // 077 — pull task_type + payload alongside the auth fields so the success
+  // path knows whether to cascade the result into song_masters/song_instances.
+  // Before 077 we only ever stored result_json against work_queue and called it
+  // done; admins saw rows pile up as "completed" while song_instances stayed
+  // tag_scanned=0 (82 completed → 1 with tag_scanned, per Rosmontis' report).
   const row = await env.DB.prepare(
-    "SELECT status, claimed_by, attempts, max_attempts FROM work_queue WHERE id = ?",
-  ).bind(body.id).first<{ status: string; claimed_by: string | null; attempts: number; max_attempts: number }>();
+    "SELECT status, claimed_by, attempts, max_attempts, task_type, payload FROM work_queue WHERE id = ?",
+  ).bind(body.id).first<{
+    status: string;
+    claimed_by: string | null;
+    attempts: number;
+    max_attempts: number;
+    task_type: string;
+    payload: string;
+  }>();
   if (!row) return c.json({ ok: false, error: "Task not found" }, 404);
   if (row.status !== "claimed") {
     return c.json({ ok: false, error: `Task is ${row.status}, not claimed` }, 409);
@@ -183,14 +196,50 @@ workRoutes.post("/work/submit", async (c) => {
   }
 
   // Success path.
+  // 077 — for task_type='metadata' we apply the worker's parse result against
+  // the business tables BEFORE flipping work_queue.status. The apply is best-
+  // effort: a failure (e.g. instance row got deleted between dispatch and
+  // submit) is recorded in result_json's "apply" annotation, but we still
+  // mark the task completed so the queue doesn't churn forever. Admins can
+  // re-run the backfill endpoint if they want to retry.
   const resultJson = body.result === undefined ? null : JSON.stringify(body.result).slice(0, 100_000);
+  let applyAnnotation: { ok: boolean; reason?: string; masterId?: string } | undefined;
+  if (row.task_type === "metadata" && body.result && typeof body.result === "object") {
+    try {
+      const r = body.result as Record<string, unknown>;
+      const tags = (r.tags && typeof r.tags === "object") ? r.tags as Record<string, unknown> : {};
+      // result.instanceId is what the worker actually processed; fall back to
+      // the dispatched payload (52a stores it as a JSON column) when the
+      // worker forgot to echo it. Both should always agree.
+      let instanceId = typeof r.instanceId === "string" ? r.instanceId : "";
+      if (!instanceId) {
+        try {
+          const payload = JSON.parse(row.payload) as Record<string, unknown>;
+          if (typeof payload?.instanceId === "string") instanceId = payload.instanceId;
+        } catch { /* malformed payload — falls through to "missing instanceId" */ }
+      }
+      const apply = await applyMetadataResult(env.DB, instanceId, tags, tags);
+      applyAnnotation = apply.updated
+        ? { ok: true, masterId: apply.masterId }
+        : { ok: false, reason: apply.reason };
+    } catch (e) {
+      // We deliberately swallow — the queue row still gets marked completed
+      // so workers don't re-poll the same task indefinitely. Backfill is the
+      // recovery path.
+      applyAnnotation = { ok: false, reason: e instanceof Error ? e.message : String(e) };
+    }
+  }
   await env.DB.prepare(
     `UPDATE work_queue
      SET status = 'completed', result_json = ?, error_message = NULL,
          heartbeat_at = ?
      WHERE id = ?`,
   ).bind(resultJson, now, body.id).run();
-  return c.json({ ok: true, status: "completed" });
+  return c.json({
+    ok: true,
+    status: "completed",
+    ...(applyAnnotation ? { applied: applyAnnotation } : {}),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -340,6 +389,81 @@ workRoutes.post("/work/cancel", async (c) => {
     return c.json({ ok: false, error: "Task not found or already terminal" }, 404);
   }
   return c.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// POST /edgesonic/work/backfillCompleted
+// ---------------------------------------------------------------------------
+// 077 — Replays applyMetadataResult against every work_queue row that finished
+// before the cascade was wired in (status='completed', task_type='metadata',
+// result_json IS NOT NULL). The fix to /work/submit means new rows land
+// correctly; this endpoint is the migration path for the ~82 historical rows
+// that completed but never wrote tag_scanned=1.
+//
+// We process rows sequentially (one applyMetadataResult per row) so a partial
+// failure on row N doesn't cancel rows N+1..M. The response carries a small
+// errors[] sample so admins can spot patterns (e.g. all failures hitting the
+// same source) without exploding the JSON body.
+//
+// Admin-only (level >= 3) — same gate as /work/status; a regular worker
+// should never need to trigger this.
+workRoutes.post("/work/backfillCompleted", async (c) => {
+  const env = c.env as Env;
+  const user = c.get("user");
+  if (user.level < 3) {
+    return c.json({ ok: false, error: "Admin level required" }, 403);
+  }
+
+  // Hard cap the candidate set so a runaway call can't pull a million rows
+  // into memory. The query optionally accepts ?limit= to override (admins
+  // may want to chunk through millions of rows; default keeps the call cheap).
+  const rawLimit = parseInt(c.req.query("limit") || "1000", 10);
+  const limit = Math.max(1, Math.min(10000, Number.isFinite(rawLimit) ? rawLimit : 1000));
+
+  const candidates = (await env.DB.prepare(
+    `SELECT id, payload, result_json
+     FROM work_queue
+     WHERE status = 'completed'
+       AND task_type = 'metadata'
+       AND result_json IS NOT NULL
+     ORDER BY created_at ASC
+     LIMIT ?`,
+  ).bind(limit).all<{ id: string; payload: string; result_json: string }>()).results;
+
+  let processed = 0;
+  let applied = 0;
+  let failed = 0;
+  const errors: { id: string; error: string }[] = [];
+
+  for (const cand of candidates) {
+    processed++;
+    try {
+      const result = JSON.parse(cand.result_json) as Record<string, unknown>;
+      const tags = (result.tags && typeof result.tags === "object")
+        ? result.tags as Record<string, unknown>
+        : {};
+      let instanceId = typeof result.instanceId === "string" ? result.instanceId : "";
+      if (!instanceId) {
+        try {
+          const payload = JSON.parse(cand.payload) as Record<string, unknown>;
+          if (typeof payload?.instanceId === "string") instanceId = payload.instanceId;
+        } catch { /* missing payload — caught below as "missing instanceId" */ }
+      }
+      const apply = await applyMetadataResult(env.DB, instanceId, tags, tags);
+      if (apply.updated) {
+        applied++;
+      } else {
+        failed++;
+        if (errors.length < 20) errors.push({ id: cand.id, error: apply.reason || "unknown" });
+      }
+    } catch (e) {
+      failed++;
+      const msg = e instanceof Error ? e.message : String(e);
+      if (errors.length < 20) errors.push({ id: cand.id, error: msg });
+    }
+  }
+
+  return c.json({ ok: true, processed, applied, failed, errors });
 });
 
 // ===========================================================================
