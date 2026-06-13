@@ -11,6 +11,7 @@ import { permissionsRoutes } from "./permissions";
 import { featuresRoutes } from "./features";
 import { transcodeRoutes } from "./transcode";
 import { workRoutes } from "./work";
+import { workUploadRoutes } from "./work_upload";
 
 export const edgesonicRoutes = new Hono();
 
@@ -21,3 +22,5 @@ edgesonicRoutes.route("/", featuresRoutes);
 edgesonicRoutes.route("/", transcodeRoutes);
 // 052 — browser worker pool (poll / submit / heartbeat / dispatch / status / cancel)
 edgesonicRoutes.route("/", workRoutes);
+// 053 — browser-pool transcode upload (binary body, HMAC-signed token)
+edgesonicRoutes.route("/", workUploadRoutes);

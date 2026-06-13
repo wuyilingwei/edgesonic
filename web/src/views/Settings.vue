@@ -45,7 +45,7 @@ const copied = ref(false);
 // 049 — Transcode controls. The string-valued feature flags are pulled out of
 // featureStrings into local refs so the form is plain HTML; saveTranscode()
 // pushes them back via /rest/updateFeatureString.
-const transcodeEngine = ref<"sandbox" | "external" | "disabled">("disabled");
+const transcodeEngine = ref<"sandbox" | "external" | "browser_pool" | "disabled">("disabled");
 const transcodeMode = ref<"on_demand" | "pre_bake" | "both">("on_demand");
 const defaultProfiles = ref<string[]>([]);
 const externalUrl = ref("");
@@ -82,7 +82,7 @@ async function loadFeatures() {
       key: f.key || "", value: typeof f.value === "string" ? f.value : "", description: f.description || "",
     }));
     // Hydrate transcode form from featureStrings.
-    transcodeEngine.value = (findFeatureString("transcode_engine", "disabled") as "sandbox" | "external" | "disabled");
+    transcodeEngine.value = (findFeatureString("transcode_engine", "disabled") as "sandbox" | "external" | "browser_pool" | "disabled");
     transcodeMode.value = (findFeatureString("transcode_mode", "on_demand") as "on_demand" | "pre_bake" | "both");
     try {
       const parsed = JSON.parse(findFeatureString("default_transcode_profiles", "[]"));
@@ -575,6 +575,7 @@ onMounted(() => {
                 <option value="disabled">{{ t("settings.common.transcode.engineDisabled") }}</option>
                 <option value="sandbox">{{ t("settings.common.transcode.engineSandbox") }}</option>
                 <option value="external">{{ t("settings.common.transcode.engineExternal") }}</option>
+                <option value="browser_pool">{{ t("settings.common.transcode.engineBrowserPool") }}</option>
               </select>
             </label>
             <p class="feature-desc tc-desc">{{ t("settings.common.transcode.engineDesc") }}</p>
