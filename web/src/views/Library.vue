@@ -968,7 +968,7 @@ async function submitCreateAndAdd() {
   color: var(--color-text-muted);
   font-size: var(--fs-md);
   padding: 0 0.25rem;
-  opacity: 0;
+  opacity: 0.5;  /* 086 fix: 与 edit-btn 一致，常态半透明可见 */
   transition: opacity 0.15s, color 0.15s;
 }
 .song-row:hover .share-btn { opacity: 1; }
@@ -1059,7 +1059,7 @@ async function submitCreateAndAdd() {
   color: var(--color-text-muted);
   font-size: var(--fs-md);
   padding: 0 0.25rem;
-  opacity: 0;
+  opacity: 0.5;  /* 086 fix: 与 edit-btn / share-btn 一致，常态半透明可见 */
   transition: opacity 0.15s, color 0.15s;
 }
 .song-row:hover .add-playlist-btn { opacity: 1; }
