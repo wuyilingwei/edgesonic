@@ -663,10 +663,10 @@ async function submitCreateAndAdd() {
           @click="openBatchEditor"
         >{{ t("library.batchEdit") }}</button>
       </div>
-      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin ? '24px ' : ''}36px 1fr 1fr auto auto${isAdmin ? ' 32px' : ''}`">
+      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin ? '24px ' : ''}36px 1fr 1fr auto auto${isAdmin ? ' 32px' : ''} 32px 32px`">
         <div class="table-header">
           <span v-if="isAdmin"></span>
-          <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span>
+          <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span><span></span><span></span>
         </div>
         <div
           v-for="(s, i) in allSongs"
@@ -960,17 +960,12 @@ async function submitCreateAndAdd() {
    album-share-btn: standalone button above the song table in album drilldown. */
 .song-row { position: relative; }
 .share-btn {
-  position: absolute;
-  /* 086 fix: edit-btn 是 inline 在 grid 最右列，share/add-playlist 是 absolute
-     默认 right:0.4rem 会与 edit-btn 重叠。把它推到 edit 左侧 ~3.5rem 处避开。 */
-  right: 3.5rem;
-  top: 50%;
-  transform: translateY(-50%);
+  /* 086 fix v3: 改为 grid inline (与 edit-btn 一致)，从 grid 列中分配空间 */
   background: none; border: none; cursor: pointer;
   color: var(--color-text-muted);
   font-size: var(--fs-md);
   padding: 0 0.25rem;
-  opacity: 0.5;  /* 086 fix: 与 edit-btn 一致，常态半透明可见 */
+  opacity: 0.5;
   transition: opacity 0.15s, color 0.15s;
 }
 .song-row:hover .share-btn { opacity: 1; }
@@ -1054,16 +1049,12 @@ async function submitCreateAndAdd() {
    to right: 1.8rem (see existing rule) so we push this one further to
    right: 4.8rem to keep the gap consistent. */
 .add-playlist-btn {
-  position: absolute;
-  /* 086 fix: 推到 share-btn 左侧，与 share-btn 间隔 ~2rem */
-  right: 5.5rem;
-  top: 50%;
-  transform: translateY(-50%);
+  /* 086 fix v3: 改为 grid inline */
   background: none; border: none; cursor: pointer;
   color: var(--color-text-muted);
   font-size: var(--fs-md);
   padding: 0 0.25rem;
-  opacity: 0.5;  /* 086 fix: 与 edit-btn / share-btn 一致，常态半透明可见 */
+  opacity: 0.5;
   transition: opacity 0.15s, color 0.15s;
 }
 .song-row:hover .add-playlist-btn { opacity: 1; }
