@@ -25,11 +25,22 @@
 
 import { Hono } from "hono";
 import type { User } from "../../types/entities";
+import { permissionMiddleware } from "../../auth";
 
 export const cfRoutes = new Hono<{
   Bindings: Env;
   Variables: { user: User };
 }>();
+
+// 087 — unified permission model. Every endpoint here used to call the local
+// `requireSuper(user)` helper which checked `user.level < 3` directly. That
+// hardcoded level check violated the project rule that authorisation lives in
+// the user_permissions table, not in the level integer. We now mount a route-
+// level permissionMiddleware against the new `manage_cloudflare` permission
+// row (see migration 0024), which defaults to L3=1 and everyone else=0 so the
+// behaviour is identical for existing operators but an admin can grant it to
+// L2 via the Permissions UI without a code change.
+cfRoutes.use("*", permissionMiddleware("manage_cloudflare"));
 
 // Script name must match wrangler.toml `name = "edgesonic"`. We hard-code
 // rather than reading from env so a misconfigured deployment can't push a
@@ -39,22 +50,6 @@ const SCRIPT_NAME = "edgesonic";
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-// Guard: every endpoint in this file requires level=3. We don't use
-// permissionMiddleware because the 054 brief specifies level-only access
-// (no per-permission row in user_permissions).
-function requireSuper(user: User): { ok: false; resp: Response } | { ok: true } {
-  if (user.level < 3) {
-    return {
-      ok: false,
-      resp: Response.json(
-        { ok: false, error: "Super admin (level 3) required" },
-        { status: 403 },
-      ),
-    };
-  }
-  return { ok: true };
-}
 
 // Wrap CF REST API. Always returns `result` on success and throws on error.
 // success=false bodies surface as the first error message — that matches what
@@ -110,9 +105,6 @@ async function readJsonBody<T = Record<string, unknown>>(req: Request): Promise<
 // fall back to using the new token to write itself — works because the new
 // token has Workers Scripts:Edit on the same account.
 cfRoutes.post("/cf/setToken", async (c) => {
-  const user = c.get("user");
-  const guard = requireSuper(user);
-  if (!guard.ok) return guard.resp;
 
   const body = await readJsonBody<{ accountId?: string; token?: string }>(c.req.raw);
   if (!body || typeof body.token !== "string" || !body.token.trim()) {
@@ -181,9 +173,6 @@ cfRoutes.post("/cf/setToken", async (c) => {
 // Returns whether env has the secrets loaded, plus the last 4 chars of the
 // token for human verification. We never echo the full token.
 cfRoutes.get("/cf/getStatus", async (c) => {
-  const user = c.get("user");
-  const guard = requireSuper(user);
-  if (!guard.ok) return guard.resp;
   const token = c.env.CF_API_TOKEN || "";
   return c.json({
     ok: true,
@@ -199,9 +188,6 @@ cfRoutes.get("/cf/getStatus", async (c) => {
 // Uses the live env.CF_API_TOKEN to call /accounts/{id} as a connectivity
 // probe. Useful right after setToken to confirm the new secret took effect.
 cfRoutes.get("/cf/testConn", async (c) => {
-  const user = c.get("user");
-  const guard = requireSuper(user);
-  if (!guard.ok) return guard.resp;
   const token = c.env.CF_API_TOKEN;
   const accountId = c.env.CF_ACCOUNT_ID;
   if (!token || !accountId) {
@@ -228,9 +214,6 @@ cfRoutes.get("/cf/testConn", async (c) => {
 // Replaces the Worker's schedule list. The CF API expects a JSON array of
 // `{ cron: <expr> }` objects; passing an empty array clears all schedules.
 cfRoutes.post("/cf/setCron", async (c) => {
-  const user = c.get("user");
-  const guard = requireSuper(user);
-  if (!guard.ok) return guard.resp;
   const token = c.env.CF_API_TOKEN;
   const accountId = c.env.CF_ACCOUNT_ID;
   if (!token || !accountId) {
@@ -269,9 +252,6 @@ cfRoutes.post("/cf/setCron", async (c) => {
 // GET /edgesonic/cf/getCron
 // ---------------------------------------------------------------------------
 cfRoutes.get("/cf/getCron", async (c) => {
-  const user = c.get("user");
-  const guard = requireSuper(user);
-  if (!guard.ok) return guard.resp;
   const token = c.env.CF_API_TOKEN;
   const accountId = c.env.CF_ACCOUNT_ID;
   if (!token || !accountId) {
@@ -316,9 +296,6 @@ cfRoutes.get("/cf/getCron", async (c) => {
 const DEFAULT_CRON = "0 */1 * * *";
 
 cfRoutes.get("/cf/ensureDefaultCron", async (c) => {
-  const user = c.get("user");
-  const guard = requireSuper(user);
-  if (!guard.ok) return guard.resp;
   const token = c.env.CF_API_TOKEN;
   const accountId = c.env.CF_ACCOUNT_ID;
   if (!token || !accountId) {
@@ -378,9 +355,6 @@ cfRoutes.get("/cf/ensureDefaultCron", async (c) => {
 // GraphQL failures are swallowed into a { available: false } shape so the
 // Settings page can show "analytics unavailable" without erroring.
 cfRoutes.get("/cf/getAnalytics", async (c) => {
-  const user = c.get("user");
-  const guard = requireSuper(user);
-  if (!guard.ok) return guard.resp;
   const token = c.env.CF_API_TOKEN;
   const accountId = c.env.CF_ACCOUNT_ID;
   if (!token || !accountId) {
