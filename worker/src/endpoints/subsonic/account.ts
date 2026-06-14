@@ -7,6 +7,7 @@
 // getAvatar is open to any authenticated user (it just streams the binary).
 import { Hono } from "hono";
 import { subsonicError, sha256 } from "../../auth";
+import { hasPermission } from "../../utils/permissions";
 import { subsonicOK } from "../../utils/xml";
 import type { User } from "../../types/entities";
 
@@ -31,10 +32,16 @@ const changePasswordHandler = async (c: import("hono").Context<{ Bindings: Env; 
 
   const caller = c.get("user");
   const isSelf = caller.username === username;
-  if (!isSelf && caller.level < 3) {
-    return c.text(subsonicError(50, "Not authorized to change another user's password"), 403, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
+  // 087 — cross-user rotation gated by manage_users (the same permission used
+  // by /edgesonic/users/{create,update,delete}). Pre-087 used a hardcoded
+  // `caller.level < 3` which violated the permission-model rule.
+  if (!isSelf) {
+    const canManage = await hasPermission(c.env.DB, caller, "manage_users");
+    if (!canManage) {
+      return c.text(subsonicError(50, "manage_users permission required"), 403, {
+        "Content-Type": "application/xml; charset=UTF-8",
+      });
+    }
   }
 
   const db = c.env.DB;
