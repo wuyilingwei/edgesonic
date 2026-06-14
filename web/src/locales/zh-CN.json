@@ -73,6 +73,40 @@
       "actionReclaim": "前往维护工具",
       "unconfiguredTitle": "Cloudflare API 未配置",
       "unconfiguredMessage": "当前未设置 CF_API_TOKEN / CF_ACCOUNT_ID，无法读取或修改 cron 调度。这并不影响已有功能，但在升级部署后无法一键恢复 cron，建议在 Settings 中完成配置。"
+    },
+    "systemActivity": {
+      "label": "// 系统活动"
+    },
+    "workPool": {
+      "title": "工作池",
+      "refresh": "立即刷新",
+      "progress": "解析进度",
+      "queued": "队列",
+      "claimed": "进行中",
+      "completed": "完成",
+      "failed": "失败",
+      "activeWorkers": "活跃浏览器 worker",
+      "noActive": "无浏览器在线",
+      "workerLoad": "{n} 个任务",
+      "resetFailedBtn": "🔁 重启失败",
+      "reclaimStaleBtn": "🔄 回收超时",
+      "loadFailed": "读取工作池状态失败"
+    },
+    "scanStatus": {
+      "sectionTitle": "扫描状态",
+      "noScans": "尚无扫描记录",
+      "scanning": "扫描中",
+      "lastScan": "上次扫描 {ago}",
+      "lastScanCount": "{n} 个文件",
+      "failed": "扫描失败",
+      "loadFailed": "读取扫描状态失败",
+      "never": "从未",
+      "relative": {
+        "justNow": "刚刚",
+        "minutesAgo": "{n} 分钟前",
+        "hoursAgo": "{n} 小时前",
+        "daysAgo": "{n} 天前"
+      }
     }
   },
   "library": {

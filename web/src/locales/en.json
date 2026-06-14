@@ -73,6 +73,40 @@
       "actionReclaim": "Go to maintenance tools",
       "unconfiguredTitle": "Cloudflare API not configured",
       "unconfiguredMessage": "CF_API_TOKEN / CF_ACCOUNT_ID are not set, so the dashboard cannot read or modify the cron schedule. Existing features keep working, but you won't be able to recover the hourly cron after a redeploy without these credentials. Configure them in Settings → Cloudflare integration."
+    },
+    "systemActivity": {
+      "label": "// SYSTEM ACTIVITY"
+    },
+    "workPool": {
+      "title": "Work Pool",
+      "refresh": "Refresh now",
+      "progress": "Metadata Progress",
+      "queued": "Queued",
+      "claimed": "In Progress",
+      "completed": "Completed",
+      "failed": "Failed",
+      "activeWorkers": "Active browser workers",
+      "noActive": "No browser online",
+      "workerLoad": "{n} task(s)",
+      "resetFailedBtn": "🔁 Reset failed",
+      "reclaimStaleBtn": "🔄 Reclaim stale",
+      "loadFailed": "Failed to load work pool status"
+    },
+    "scanStatus": {
+      "sectionTitle": "Scan Status",
+      "noScans": "No scans yet",
+      "scanning": "Scanning",
+      "lastScan": "Last scan {ago}",
+      "lastScanCount": "{n} file(s)",
+      "failed": "Scan failed",
+      "loadFailed": "Failed to load scan status",
+      "never": "never",
+      "relative": {
+        "justNow": "just now",
+        "minutesAgo": "{n}m ago",
+        "hoursAgo": "{n}h ago",
+        "daysAgo": "{n}d ago"
+      }
     }
   },
   "library": {
