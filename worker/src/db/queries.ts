@@ -24,12 +24,31 @@ export function createQueries(db: D1Database) {
 
       if (masters.results.length === 0) return [];
 
-      const ids = masters.results.map((r) => r.album_id);
-      const placeholders = ids.map(() => "?").join(",");
-      const result = await db.prepare(
-        `SELECT * FROM albums WHERE id IN (${placeholders}) ORDER BY year DESC, sort_name ASC NULLS LAST`
-      ).bind(...ids).all<Album>();
-      return result.results;
+      // 084 — D1 SQLite single-statement ? bind limit ~100. Batch ≤ 80 to leave
+      // headroom for future fixed params. Multi-batch ORDER BY is reassembled
+      // in JS to preserve the same year DESC, sort_name ASC NULLS LAST semantics.
+      const ids = Array.from(new Set(masters.results.map((r) => r.album_id)));
+      const BATCH = 80;
+      const rows: Album[] = [];
+      for (let i = 0; i < ids.length; i += BATCH) {
+        const batch = ids.slice(i, i + BATCH);
+        const placeholders = batch.map(() => "?").join(",");
+        const result = await db.prepare(
+          `SELECT * FROM albums WHERE id IN (${placeholders})`
+        ).bind(...batch).all<Album>();
+        rows.push(...result.results);
+      }
+      rows.sort((a, b) => {
+        // year DESC NULLS LAST
+        const ay = a.year ?? -Infinity;
+        const by = b.year ?? -Infinity;
+        if (by !== ay) return by - ay;
+        // sort_name ASC NULLS LAST
+        const an = a.sort_name ?? "￿";
+        const bn = b.sort_name ?? "￿";
+        return an.localeCompare(bn);
+      });
+      return rows;
     },
 
     async listAlbums(
@@ -213,14 +232,23 @@ export function createQueries(db: D1Database) {
     },
 
     // Fetch song_masters by an arbitrary id list (deduped, order preserved by caller).
+    // 084 — D1 SQLite has a ~100 bind variable cap per statement. Batch ≤ 80
+    // so callers like /rest/getNowPlaying (KV active streams) and bookmarks
+    // listings don't crash with "too many SQL variables" on large inputs.
     async getSongMastersByIds(ids: string[]): Promise<SongMaster[]> {
       if (ids.length === 0) return [];
       const uniq = Array.from(new Set(ids));
-      const placeholders = uniq.map(() => "?").join(",");
-      const result = await db.prepare(
-        `SELECT * FROM song_masters WHERE id IN (${placeholders})`
-      ).bind(...uniq).all<SongMaster>();
-      return result.results;
+      const BATCH = 80;
+      const rows: SongMaster[] = [];
+      for (let i = 0; i < uniq.length; i += BATCH) {
+        const batch = uniq.slice(i, i + BATCH);
+        const placeholders = batch.map(() => "?").join(",");
+        const result = await db.prepare(
+          `SELECT * FROM song_masters WHERE id IN (${placeholders})`
+        ).bind(...batch).all<SongMaster>();
+        rows.push(...result.results);
+      }
+      return rows;
     },
 
     // Song Instances
@@ -279,6 +307,9 @@ export function createQueries(db: D1Database) {
     // 035 — Batch lookup for browsing field back-fill.
     // Returns Map keyed by `${itemType}:${itemId}` → annotation row.
     // Empty `ids` short-circuits to avoid an empty IN(...) query.
+    // 084 — D1 SQLite caps bind variables at ~100 per statement; search3 with
+    // songCount=500 used to crash with "too many SQL variables at offset 28".
+    // Chunk to ≤ 80 ids per query (leaves 2 slots for user_id + item_type).
     async getAnnotationsMap(
       userId: string,
       itemType: "song" | "album" | "artist",
@@ -287,13 +318,17 @@ export function createQueries(db: D1Database) {
       const map = new Map<string, Annotation>();
       if (ids.length === 0) return map;
       const uniq = Array.from(new Set(ids));
-      const placeholders = uniq.map(() => "?").join(",");
-      const result = await db.prepare(
-        `SELECT * FROM annotations
-         WHERE user_id = ? AND item_type = ? AND item_id IN (${placeholders})`
-      ).bind(userId, itemType, ...uniq).all<Annotation>();
-      for (const row of result.results) {
-        map.set(`${row.item_type}:${row.item_id}`, row);
+      const BATCH = 80;
+      for (let i = 0; i < uniq.length; i += BATCH) {
+        const batch = uniq.slice(i, i + BATCH);
+        const placeholders = batch.map(() => "?").join(",");
+        const result = await db.prepare(
+          `SELECT * FROM annotations
+           WHERE user_id = ? AND item_type = ? AND item_id IN (${placeholders})`
+        ).bind(userId, itemType, ...batch).all<Annotation>();
+        for (const row of result.results) {
+          map.set(`${row.item_type}:${row.item_id}`, row);
+        }
       }
       return map;
     },
@@ -1214,15 +1249,30 @@ export function createQueries(db: D1Database) {
 // ============================================================================
 async function computePlaylistTotals(db: D1Database, songIds: string[]): Promise<{ count: number; duration: number }> {
   if (songIds.length === 0) return { count: 0, duration: 0 };
-  const placeholders = songIds.map(() => "?").join(",");
-  const row = await db.prepare(
-    `SELECT COUNT(*) AS count, COALESCE(SUM(duration), 0) AS duration
-     FROM song_masters WHERE id IN (${placeholders})`
-  ).bind(...songIds).first<{ count: number; duration: number }>();
+  // 084 — D1 SQLite caps bind variables at ~100. Large playlists (>100 songs)
+  // would otherwise crash here on createPlaylist / replacePlaylistSongs. We
+  // dedupe by song id (the existing comment about COUNT(*) collapsing dupes
+  // already reflects this) then chunk-sum.
+  const uniq = Array.from(new Set(songIds));
+  const BATCH = 80;
+  let totalCount = 0;
+  let totalDuration = 0;
+  for (let i = 0; i < uniq.length; i += BATCH) {
+    const batch = uniq.slice(i, i + BATCH);
+    const placeholders = batch.map(() => "?").join(",");
+    const row = await db.prepare(
+      `SELECT COUNT(*) AS count, COALESCE(SUM(duration), 0) AS duration
+       FROM song_masters WHERE id IN (${placeholders})`
+    ).bind(...batch).first<{ count: number; duration: number }>();
+    totalCount += row?.count ?? 0;
+    totalDuration += row?.duration ?? 0;
+  }
   return {
-    count: row?.count ?? songIds.length,
-    // Multi-occurrences of the same songId still count once in COUNT(*), so fall back.
-    duration: row?.duration ?? 0,
+    // Multi-occurrences of the same songId still count once in COUNT(*) per
+    // batch; on empty rows we fall back to the dedup'd input length so the
+    // playlists.song_count column never lies about what was inserted.
+    count: totalCount || uniq.length,
+    duration: totalDuration,
   };
 }
 
