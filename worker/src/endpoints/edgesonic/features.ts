@@ -95,6 +95,9 @@ const STRING_FEATURE_KEYS = new Set([
   "worker_poll_interval_seconds",
   "worker_batch_size",
   "worker_claim_ttl_seconds",
+  // 088 — concurrent Web Workers per browser. Bigger = faster queue drain but
+  // higher fetch bandwidth and CPU on the participating browser. Clamped 1..8.
+  "worker_max_concurrent",
   // 065 — Cross-Origin Isolation kill switch. When '1', the global response
   // middleware in index.ts stamps COOP/COEP/CORP headers so the browser flips
   // `crossOriginIsolated = true`, unlocking SharedArrayBuffer + ffmpeg.wasm
@@ -188,6 +191,16 @@ function validateFeatureString(key: string, value: string): string | null {
       if (!/^\d+$/.test(value)) return "worker_claim_ttl_seconds must be a non-negative integer";
       const n = parseInt(value, 10);
       if (n < 15 || n > 600) return "worker_claim_ttl_seconds must be between 15 and 600";
+      return null;
+    }
+    case "worker_max_concurrent": {
+      // 088 — 1..8. The lower bound preserves the pre-088 serial behaviour
+      // when an operator wants to roll back; the upper bound caps the per-
+      // browser fan-out so a single participating tab can't saturate the
+      // queue endpoint or the user's downlink.
+      if (!/^\d+$/.test(value)) return "worker_max_concurrent must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 1 || n > 8) return "worker_max_concurrent must be between 1 and 8";
       return null;
     }
     case "scrape_enabled_sources": {

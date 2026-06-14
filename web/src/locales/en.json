@@ -508,7 +508,11 @@
         "backfillDesc": "Replay every status=completed task_type=metadata row's result into song_masters / song_instances. Repairs historical tasks that completed but were never applied before fix 077. Idempotent.",
         "backfillButton": "Backfill completed metadata tasks",
         "backfillRunning": "Running…",
-        "backfillDoneToast": "Processed {processed}: applied {applied}, failed {failed}"
+        "backfillDoneToast": "Processed {processed}: applied {applied}, failed {failed}",
+        "maxConcurrent": "Concurrency",
+        "maxConcurrentHint": "1-8, higher = faster but more bandwidth/CPU",
+        "maxConcurrentSaved": "Concurrency saved",
+        "maxConcurrentSaveFailed": "Save concurrency failed"
       },
       "maintenance": {
         "title": "Maintenance tools",

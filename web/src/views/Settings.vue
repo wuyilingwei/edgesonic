@@ -536,6 +536,35 @@ async function onParticipateToggle(checked: boolean) {
   workerPool.setEnabled(checked);
 }
 
+// 088 — concurrent Web Worker count. The input mirrors workerPool.maxConcurrent
+// so the field shows the currently-live value on mount (and after a feature
+// reload) without an extra round-trip. saveMaxConcurrent() POSTs to
+// /features/updateString and rehydrates the store so future polls use the new
+// `limit` immediately.
+const maxConcurrentInput = ref<number>(workerPool.maxConcurrent);
+const maxConcurrentBusy = ref(false);
+async function saveMaxConcurrent() {
+  const n = Math.max(1, Math.min(8, Math.floor(Number(maxConcurrentInput.value) || 0)));
+  maxConcurrentInput.value = n;
+  maxConcurrentBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "worker_max_concurrent",
+      value: String(n),
+    }));
+    if (!data.ok) throw new Error(data.error || "worker_max_concurrent");
+    await workerPool.hydrateConfig();
+    // Re-sync the input in case hydrate clamped to a different value (e.g.
+    // server rejected and store stayed at the previous setting).
+    maxConcurrentInput.value = workerPool.maxConcurrent;
+    showToast(t("settings.common.workerPool.maxConcurrentSaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.workerPool.maxConcurrentSaveFailed")}: ${msg}`, "error");
+  }
+  maxConcurrentBusy.value = false;
+}
+
 async function onPollNow() {
   await workerPool.pollNow();
   // If we're admin reload the status so the just-completed/failed task
@@ -1388,6 +1417,33 @@ onMounted(() => {
               <span class="tc-key">{{ t("settings.common.workerPool.pollIntervalLabel") }}</span>
               <span class="feature-desc">{{ workerPollIntervalText }}</span>
             </div>
+
+            <!-- 088 — Concurrency knob. Admin-writable; non-admin sees the
+                 value but the input + save button are disabled. -->
+            <div class="tc-row">
+              <span class="tc-key">{{ t("settings.common.workerPool.maxConcurrent") }}</span>
+              <span class="scan-toggle">
+                <input
+                  type="number"
+                  min="1"
+                  max="8"
+                  step="1"
+                  v-model.number="maxConcurrentInput"
+                  class="form-input"
+                  style="width: 5rem"
+                  :disabled="!isSuperAdmin"
+                />
+                <button
+                  class="btn-secondary btn-sm"
+                  :disabled="!isSuperAdmin || maxConcurrentBusy"
+                  @click="saveMaxConcurrent"
+                  style="margin-left: 0.6rem"
+                >
+                  {{ t("common.save") }}
+                </button>
+              </span>
+            </div>
+            <p class="feature-desc tc-desc">{{ t("settings.common.workerPool.maxConcurrentHint") }}</p>
 
             <!-- Last error -->
             <div v-if="workerPool.lastError" class="tc-row">
