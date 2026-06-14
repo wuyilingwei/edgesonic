@@ -961,7 +961,9 @@ async function submitCreateAndAdd() {
 .song-row { position: relative; }
 .share-btn {
   position: absolute;
-  right: 0.4rem;
+  /* 086 fix: edit-btn 是 inline 在 grid 最右列，share/add-playlist 是 absolute
+     默认 right:0.4rem 会与 edit-btn 重叠。把它推到 edit 左侧 ~3.5rem 处避开。 */
+  right: 3.5rem;
   top: 50%;
   transform: translateY(-50%);
   background: none; border: none; cursor: pointer;
@@ -975,7 +977,8 @@ async function submitCreateAndAdd() {
 .share-btn:hover { color: var(--color-accent-primary); }
 /* Nudge share-btn left when an edit-btn is also visible so they don't overlap.
    The edit-btn lives inside the grid cell; share-btn floats outside it. */
-.song-row .edit-btn ~ .share-btn { right: 1.8rem; }
+/* 086 fix: 删除 ~ 选择器 (edit-btn 在 grid cell 内，share-btn 在 song-row 内，
+   不是兄弟节点，~ 不匹配)；改在默认 right 中处理避开重叠。 */
 
 .album-card { position: relative; }
 .card-share-btn {
@@ -1052,7 +1055,8 @@ async function submitCreateAndAdd() {
    right: 4.8rem to keep the gap consistent. */
 .add-playlist-btn {
   position: absolute;
-  right: 3.6rem;
+  /* 086 fix: 推到 share-btn 左侧，与 share-btn 间隔 ~2rem */
+  right: 5.5rem;
   top: 50%;
   transform: translateY(-50%);
   background: none; border: none; cursor: pointer;
@@ -1064,7 +1068,7 @@ async function submitCreateAndAdd() {
 }
 .song-row:hover .add-playlist-btn { opacity: 1; }
 .add-playlist-btn:hover { color: var(--color-accent-primary); }
-.song-row .edit-btn ~ .add-playlist-btn { right: 4.8rem; }
+/* 086 fix: 同上 ~ 选择器不匹配，已在默认 right:5.5rem 中处理。 */
 
 .add-playlist-modal { max-width: 480px; }
 .add-playlist-list {
