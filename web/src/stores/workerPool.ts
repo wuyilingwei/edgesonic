@@ -240,7 +240,9 @@ export const useWorkerPool = defineStore("workerPool", () => {
   async function pollAndDrain(): Promise<void> {
     if (draining) return;            // serialise: never two drains at once
     if (!enabled.value || !eligible.value) return;
-    if (typeof document !== "undefined" && document.hidden) return;
+    // 085 fix: 移除 document.hidden 检查 — Web Worker 不影响其他 tab，
+    // 用户切到别的 tab 时 EdgeSonic 应继续后台消化 work_queue。Chrome
+    // visibility hidden 的 setInterval 会被节流但仍能跑，不影响功能。
     draining = true;
     isDraining.value = true;
     lastError.value = null;
@@ -368,10 +370,12 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // ---------------------------------------------------------------------------
   // visibility wiring
   // ---------------------------------------------------------------------------
+  // 085 fix: 移除 visibility hidden 时 stop() — Web Worker 不阻塞其他 tab
+  // 用户切到别的 tab 时 EdgeSonic 应继续后台消化 work_queue。
+  // 仍然在 visible 变化时尝试 start() (如果之前因为别的原因停了的话)。
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) stop();
-      else if (enabled.value && eligible.value) start();
+      if (!document.hidden && enabled.value && eligible.value) start();
     });
   }
 
