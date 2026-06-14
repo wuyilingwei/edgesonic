@@ -90,6 +90,12 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // mis-configured — feature_strings.worker_poll_interval_seconds is clamped
   // 30..3600 by the worker validator.
   const pollIntervalMs = ref(DEFAULT_POLL_MS);
+  // 088 — number of concurrent Web Workers used by pollAndDrain. Drives both
+  // the /work/poll `limit=` (so the server hands us exactly N tasks) and the
+  // Promise.all fan-out below. Hydrated from feature_strings.worker_max_concurrent
+  // on start; admin can change it live via Settings → workerPool sub-block.
+  // Clamped 1..8 on both sides (server validator + client hydrate guard).
+  const maxConcurrent = ref(3);
   const stats = ref({ completed: 0, failed: 0, currentTaskType: "" });
   const lastError = ref<string | null>(null);
   const lastPollAt = ref<number>(0);
@@ -248,15 +254,21 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastError.value = null;
     lastPollAt.value = Date.now();
     try {
+      // 088 — `limit` matches the concurrency cap: a one-shot poll fetches as
+      // many tasks as we can run in parallel, then Promise.all fans them out
+      // through executeOne. Each executeOne owns its own Web Worker so they
+      // never share state — fetch + parseBuffer + submit run concurrently.
       const text = await edgesonicFetch("work/poll", {
         caps: caps.value.join(","),
-        limit: "5",
+        limit: String(maxConcurrent.value),
       });
       const data: PollResponse = JSON.parse(text);
       if (!data.ok) throw new Error(data.error || "poll rejected");
-      for (const task of data.tasks || []) {
-        await executeOne(task);
-      }
+      // 088 — concurrent drain. `Promise.all` doesn't short-circuit on first
+      // rejection here because executeOne catches its own errors (recording
+      // failed stats + pushRecent) and resolves anyway, so a single bad task
+      // doesn't stop its siblings.
+      await Promise.all((data.tasks || []).map((task) => executeOne(task)));
     } catch (e) {
       lastError.value = e instanceof Error ? e.message : String(e);
     } finally {
@@ -394,6 +406,13 @@ export const useWorkerPool = defineStore("workerPool", () => {
         // Rotate the interval if it's running so the new cadence applies.
         if (intervalId !== null) { stop(); start(); }
       }
+      // 088 — pull worker_max_concurrent. Clamp client-side to 1..8 as a
+      // belt-and-braces guard; the server validator already rejects anything
+      // outside the same range. Default 3 matches the migration seed.
+      const mc = parseInt(fs.find((f) => f.key === "worker_max_concurrent")?.value || "3", 10);
+      if (Number.isFinite(mc) && mc >= 1 && mc <= 8) {
+        maxConcurrent.value = mc;
+      }
     } catch { /* fail-quiet — keep DEFAULT_POLL_MS */ }
   }
 
@@ -415,6 +434,9 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastError,
     lastPollAt,
     pollIntervalMs,
+    // 088 — concurrency knob (live), surfaced so Settings.vue can read+display
+    // alongside pollIntervalMs without a separate fetch.
+    maxConcurrent,
     // 056 — HUD-facing
     recent,
     speedPerMin,
