@@ -171,10 +171,10 @@ sourcesRoutes.post(
   "/sources/migratePasswords",
   permissionMiddleware("manage_sources"),
   async (c) => {
-    const user = c.get("user");
-    if (!user || user.level < 3) {
-      return c.json({ ok: false, error: "Super-admin required" }, 403);
-    }
+    // 087 — the previous redundant `user.level < 3` check was removed. The
+    // manage_sources permission middleware (above) is the canonical gate; an
+    // operator who has been granted manage_sources is by definition allowed
+    // to migrate passwords.
     const env = c.env;
     if (!env.STORAGE_KEY || env.STORAGE_KEY.length === 0) {
       return c.json({ ok: false, error: "STORAGE_KEY not configured" }, 400);

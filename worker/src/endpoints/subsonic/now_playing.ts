@@ -34,6 +34,7 @@
 import { Hono } from "hono";
 import { createQueries } from "../../db/queries";
 import { permissionMiddleware } from "../../auth";
+import { hasPermission } from "../../utils/permissions";
 import { subsonicOK } from "../../utils/xml";
 import { mapSong } from "../../types/subsonic";
 import type { User, SongMaster } from "../../types/entities";
@@ -71,8 +72,11 @@ const getNowPlayingHandler = async (c: import("hono").Context<{
   const listed = await env.KV.list({ prefix: PREFIX, limit: 1000 });
 
   // Visibility filter (before fetching values — saves KV reads).
-  const isAdmin = user.level === 3;
-  const visibleKeys = isAdmin
+  // 087 — replaces the pre-existing `user.level === 3` hardcoded admin check
+  // with the view_all_users_items permission. Default behaviour is unchanged
+  // (L3 carries the permission by default).
+  const seeAll = await hasPermission(env.DB, user, "view_all_users_items");
+  const visibleKeys = seeAll
     ? listed.keys.map((k) => k.name)
     : listed.keys
         .map((k) => k.name)

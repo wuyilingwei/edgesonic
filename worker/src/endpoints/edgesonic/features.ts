@@ -15,6 +15,7 @@
 
 import { Hono } from "hono";
 import { invalidateFeature, invalidateFeatureString } from "../../utils/features";
+import { permissionMiddleware } from "../../auth";
 import type { User } from "../../types/entities";
 
 // Feature flag management (DESIGN.md §3.3).
@@ -25,11 +26,12 @@ export const featuresRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-featuresRoutes.get("/features/list", async (c) => {
-  const user = c.get("user");
-  if (user.level < 2) {
-    return c.json({ ok: false, error: "Admin level required" }, 403);
-  }
+// 087 — gated by manage_permissions (the same permission used by the write
+// endpoints below). Pre-087 used a hardcoded `if (user.level < 2)` which
+// violated the permission-model rule; the new check now flows through
+// user_permissions.manage_permissions (L3=1, L2=0 by default — operators can
+// flip L2 on via the Permissions UI without a code change).
+featuresRoutes.get("/features/list", permissionMiddleware("manage_permissions"), async (c) => {
   const result = await c.env.DB.prepare(
     "SELECT key, value, description, updated_at FROM features ORDER BY key ASC"
   ).all<{ key: string; value: number; description: string | null; updated_at: number }>();

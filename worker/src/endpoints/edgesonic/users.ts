@@ -29,6 +29,7 @@
 // 404), matching setAvatar's convention from 064.
 import { Hono } from "hono";
 import { permissionMiddleware, sha256 } from "../../auth";
+import { hasPermission } from "../../utils/permissions";
 import type { User } from "../../types/entities";
 
 export const usersRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
@@ -163,11 +164,17 @@ usersRoutes.post("/users/setAvatar", async (c) => {
     return c.json({ ok: false, error: "Missing username / imageBase64 / mimeType" }, 400);
   }
 
-  // ---- Auth: self or admin -----------------------------------------------
+  // ---- Auth: self or manage_users -----------------------------------------
+  // 087 — cross-user write gated by manage_users (matches the list/create/
+  // update/delete endpoints in this file). Pre-087 used a hardcoded
+  // `caller.level < 2` which violated the permission-model rule.
   const caller = c.get("user");
   const isSelf = caller.username === targetUsername;
-  if (!isSelf && caller.level < 2) {
-    return c.json({ ok: false, error: "Not authorized to edit another user's avatar" }, 403);
+  if (!isSelf) {
+    const canManage = await hasPermission(c.env.DB, caller, "manage_users");
+    if (!canManage) {
+      return c.json({ ok: false, error: "manage_users permission required" }, 403);
+    }
   }
 
   // ---- Validate target exists --------------------------------------------

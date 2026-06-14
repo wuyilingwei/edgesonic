@@ -325,14 +325,11 @@ workRoutes.post("/work/dispatch", permissionMiddleware("dispatch_work"), async (
 // ---------------------------------------------------------------------------
 // GET /edgesonic/work/status — admin overview.
 // ---------------------------------------------------------------------------
-// One D1 aggregate + one per-user load + the last 100 rows. Only level=3 may
-// call it (so a regular worker can't enumerate everyone's tasks).
-workRoutes.get("/work/status", async (c) => {
+// One D1 aggregate + one per-user load + the last 100 rows. 087 — gated by
+// dispatch_work permission (super-admin by default per 052a); pre-087 used a
+// hardcoded `if (user.level < 3)` which violated the permission-model rule.
+workRoutes.get("/work/status", permissionMiddleware("dispatch_work"), async (c) => {
   const env = c.env as Env;
-  const user = c.get("user");
-  if (user.level < 3) {
-    return c.json({ ok: false, error: "Admin level required" }, 403);
-  }
 
   // Aggregate by status.
   const counts = (await env.DB.prepare(
@@ -381,14 +378,13 @@ workRoutes.get("/work/status", async (c) => {
 // ---------------------------------------------------------------------------
 // POST /edgesonic/work/cancel { id }
 // ---------------------------------------------------------------------------
-// Force-cancel a task regardless of state. Only level=3 — a worker shouldn't
-// be able to drop somebody else's queued metadata batch.
-workRoutes.post("/work/cancel", async (c) => {
+// Force-cancel a task regardless of state. 087 — gated by dispatch_work
+// permission (super-admin default per 052a). A regular worker can't drop
+// somebody else's queued metadata batch because they don't hold the
+// permission row; the previous level<3 check was a violation of the
+// permission-model rule.
+workRoutes.post("/work/cancel", permissionMiddleware("dispatch_work"), async (c) => {
   const env = c.env as Env;
-  const user = c.get("user");
-  if (user.level < 3) {
-    return c.json({ ok: false, error: "Admin level required" }, 403);
-  }
   let body: { id?: string };
   try { body = await c.req.json(); } catch {
     return c.json({ ok: false, error: "Invalid JSON body" }, 400);
@@ -420,14 +416,12 @@ workRoutes.post("/work/cancel", async (c) => {
 // errors[] sample so admins can spot patterns (e.g. all failures hitting the
 // same source) without exploding the JSON body.
 //
-// Admin-only (level >= 3) — same gate as /work/status; a regular worker
-// should never need to trigger this.
-workRoutes.post("/work/backfillCompleted", async (c) => {
+// Admin-only — 087: gated by dispatch_work (super-admin per 052a), same gate
+// as /work/status. A regular worker should never need to trigger this.
+workRoutes.post("/work/backfillCompleted",
+  permissionMiddleware("dispatch_work"),
+  async (c) => {
   const env = c.env as Env;
-  const user = c.get("user");
-  if (user.level < 3) {
-    return c.json({ ok: false, error: "Admin level required" }, 403);
-  }
 
   // Hard cap the candidate set so a runaway call can't pull a million rows
   // into memory. The query optionally accepts ?limit= to override (admins

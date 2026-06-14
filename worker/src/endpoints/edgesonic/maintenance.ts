@@ -37,11 +37,18 @@
 import { Hono } from "hono";
 import type { User } from "../../types/entities";
 import { getFeatureString } from "../../utils/features";
+import { permissionMiddleware } from "../../auth";
 
 export const maintenanceRoutes = new Hono<{
   Bindings: Env;
   Variables: { user: User };
 }>();
+
+// 087 — Maintenance endpoints previously gated by `if (user.level < 3)`. The
+// hardcoded level check was replaced by permissionMiddleware against three
+// new permission rows (maintenance_cleanup / maintenance_reclaim /
+// maintenance_reset, see migration 0024) so operators can delegate the
+// tooling to L2 admins via the Permissions UI without a code change.
 
 // ---------------------------------------------------------------------------
 // POST /edgesonic/maintenance/cleanupDuplicateCovers
@@ -60,12 +67,10 @@ export const maintenanceRoutes = new Hono<{
 // album that was created first keeps the cover binding. A future variant
 // could pick by song_count or updated_at, but the simplest tie-break is also
 // the easiest to reason about during recovery.
-maintenanceRoutes.post("/maintenance/cleanupDuplicateCovers", async (c) => {
+maintenanceRoutes.post("/maintenance/cleanupDuplicateCovers",
+  permissionMiddleware("maintenance_cleanup"),
+  async (c) => {
   const env = c.env as Env;
-  const user = c.get("user");
-  if (user.level < 3) {
-    return c.json({ ok: false, error: "Admin level required" }, 403);
-  }
 
   // Aggregate the duplicate cover_r2_key values. We deliberately skip rows
   // where cover_r2_key IS NULL — those are albums without a cover at all and
@@ -137,12 +142,10 @@ maintenanceRoutes.post("/maintenance/cleanupDuplicateCovers", async (c) => {
 // We use a single UPDATE … RETURNING so the read and the write happen against
 // a consistent snapshot — without RETURNING we'd risk reclaiming rows that
 // changed status between the SELECT and the UPDATE.
-maintenanceRoutes.post("/maintenance/reclaimStaleWork", async (c) => {
+maintenanceRoutes.post("/maintenance/reclaimStaleWork",
+  permissionMiddleware("maintenance_reclaim"),
+  async (c) => {
   const env = c.env as Env;
-  const user = c.get("user");
-  if (user.level < 3) {
-    return c.json({ ok: false, error: "Admin level required" }, 403);
-  }
 
   // Feature key was registered in 052a (default 60s) — the same one workReclaim
   // reads, so the manual button reuses the operator's tuning.
@@ -225,12 +228,10 @@ maintenanceRoutes.post("/maintenance/reclaimStaleWork", async (c) => {
 //     UI shows it as a fresh queued row.
 //
 // Idempotent: re-running with zero failed rows just returns reset=0.
-maintenanceRoutes.post("/maintenance/resetFailedWork", async (c) => {
+maintenanceRoutes.post("/maintenance/resetFailedWork",
+  permissionMiddleware("maintenance_reset"),
+  async (c) => {
   const env = c.env as Env;
-  const user = c.get("user");
-  if (user.level < 3) {
-    return c.json({ ok: false, error: "Admin level required" }, 403);
-  }
 
   // Optional filter — drop the param entirely if absent so the SQL stays
   // bind-arity-clean (avoids a "?" with no matching bind).

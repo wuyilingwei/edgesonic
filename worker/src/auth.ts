@@ -341,22 +341,15 @@ export const permissionMiddleware = (requiredPermission: string) =>
   });
 
 // ============================================================================
-// Minimum Level Guard
+// 087 — minLevel() was deleted.
+// ----------------------------------------------------------------------------
+// The function existed but was never imported anywhere; its presence merely
+// advertised the wrong pattern. EdgeSonic's security model is "authorisation
+// lives on permission rows in user_permissions, NOT on the level integer".
+// Use `permissionMiddleware("<perm>")` for request guards or `hasPermission`
+// (see utils/permissions.ts) for in-handler degradation decisions. If a new
+// capability needs a permission row, add it to the next migration file.
 // ============================================================================
-export function minLevel(level: number) {
-  return createMiddleware<{
-    Bindings: Env;
-    Variables: { user: User };
-  }>(async (c, next) => {
-    const user = c.get("user");
-    if (user.level < level) {
-      return c.text(subsonicError(50, "Insufficient permissions"), 403, {
-        "Content-Type": "application/xml; charset=UTF-8",
-      });
-    }
-    return next();
-  });
-}
 
 // ============================================================================
 // Subsonic XML Error Helper

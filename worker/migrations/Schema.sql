@@ -511,3 +511,35 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
 --   dispatch_work    — POST /work/dispatch (default super-admin only)
 -- ============================================================================
 
+-- ============================================================================
+-- 17. Unified permission model (087, migration 0024)
+-- ============================================================================
+-- Background: EdgeSonic's design principle is "security policy lives on
+-- permission rows in user_permissions, NOT on the level integer". Up through
+-- 084 we had ~20 endpoints that violated this with hardcoded
+-- `if (user.level < N) return 403` checks. 087 replaces every one of them
+-- with permissionMiddleware("<perm>") (request guard) or hasPermission(...)
+-- (visibility helper) so an operator can grant the capability to L2 admins
+-- via the Permissions UI without a code change.
+--
+-- INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph)
+-- VALUES (level × permission grid) — see 0024_admin_permissions.sql.
+--
+-- New permissions:
+--   manage_cloudflare      — 054 cf.ts route-level middleware
+--   maintenance_cleanup    — 078 cleanupDuplicateCovers
+--   maintenance_reclaim    — 080 reclaimStaleWork
+--   maintenance_reset      — 082 resetFailedWork
+--   view_all_users_items   — cross-user playlist / share / now_playing
+--                            visibility (hasPermission helper, not middleware,
+--                            because the handler degrades to "self only" when
+--                            the caller lacks the permission rather than 403)
+--
+-- Reused permissions (already on disk):
+--   dispatch_work          052a — also gates /work/status and /work/cancel
+--   manage_users           0001 — gates cross-user changePassword / setAvatar
+--   manage_sources         0001 — gates /sources/migratePasswords
+--
+-- Concurrent change: auth.ts.minLevel() is deleted. It was unused but its
+-- presence advertised the wrong pattern.
+-- ============================================================================

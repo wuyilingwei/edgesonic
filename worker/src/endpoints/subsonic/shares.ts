@@ -36,6 +36,7 @@ import { createQueries } from "../../db/queries";
 import { subsonicOK } from "../../utils/xml";
 import { mapShareDetail } from "../../types/subsonic";
 import { permissionMiddleware, subsonicError } from "../../auth";
+import { hasPermission } from "../../utils/permissions";
 import type { User } from "../../types/entities";
 
 export const sharesRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
@@ -141,7 +142,11 @@ function parseExpiresMs(raw: string | undefined): { present: false } | { present
 const getSharesHandler = async (c: import("hono").Context<{ Bindings: Env; Variables: { user: User } }>) => {
   const user = c.get("user");
   const queries = createQueries(c.env.DB);
-  const shares = await queries.getSharesForUser(user.username, user.level === 3);
+  // 087 — was `user.level === 3` (cross-user visibility). Replaced with the
+  // view_all_users_items permission so an operator can delegate the "see all
+  // shares" capability without granting full super-admin.
+  const seeAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+  const shares = await queries.getSharesForUser(user.username, seeAll);
 
   const sharePayload: Array<{
     _attributes: Record<string, string | number | boolean | undefined>;
@@ -224,8 +229,12 @@ const updateShareHandler = async (c: import("hono").Context<{ Bindings: Env; Var
   const queries = createQueries(c.env.DB);
   const existing = await queries.getShareById(id);
   if (!existing) return c.text(subsonicError(70, "Share not found"), 404, XML);
-  if (existing.user_id !== user.username && user.level !== 3) {
-    return c.text(subsonicError(50, "Not authorized to modify this share"), 403, XML);
+  // 087 — cross-user modification gated by view_all_users_items.
+  if (existing.user_id !== user.username) {
+    const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+    if (!canAll) {
+      return c.text(subsonicError(50, "Not authorized to modify this share"), 403, XML);
+    }
   }
 
   const descRaw = await readField(c, "description");
@@ -253,8 +262,12 @@ const deleteShareHandler = async (c: import("hono").Context<{ Bindings: Env; Var
   const queries = createQueries(c.env.DB);
   const existing = await queries.getShareById(id);
   if (!existing) return c.text(subsonicError(70, "Share not found"), 404, XML);
-  if (existing.user_id !== user.username && user.level !== 3) {
-    return c.text(subsonicError(50, "Not authorized to delete this share"), 403, XML);
+  // 087 — cross-user delete gated by view_all_users_items.
+  if (existing.user_id !== user.username) {
+    const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+    if (!canAll) {
+      return c.text(subsonicError(50, "Not authorized to delete this share"), 403, XML);
+    }
   }
 
   await queries.deleteShare(id);
