@@ -2,9 +2,12 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
+import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
 const { isLoggedIn, username, isAdmin, isSuperAdmin, level, authFetch, storageFetch, edgesonicFetch, edgesonicPost } = useAuth();
+const workerPool = useWorkerPool();
+const loading = ref(true);
 const stats = ref({ artists: 0, albums: 0, songs: 0, sources: 0, users: 0 });
 const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year: string }>>([]);
 
@@ -228,7 +231,11 @@ onMounted(async () => {
       songCount += (albumXml.match(/<song\s/g) || []).length;
     }
     stats.value.songs = songCount;
-  } catch {}
+  } catch {
+    // Network error or auth failure — leave stats at 0, UI shows skeleton
+  } finally {
+    loading.value = false;
+  }
 
   // 080 — super-admin only: read CF schedules and decide whether to show the
   // "cron missing" banner. We do this AFTER the main stats so the banner
@@ -405,6 +412,29 @@ onUnmounted(() => {
         </div>
 
         <div v-if="workError" class="wp-error">{{ t("dashboard.workPool.loadFailed") }} — {{ workError }}</div>
+
+        <!-- P2 — Browser worker enable toggle + last error -->
+        <div class="wp-worker-toggle">
+          <label class="wp-toggle-label">
+            <input
+              type="checkbox"
+              :checked="workerPool.enabled"
+              :disabled="!workerPool.eligible"
+              @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)"
+            />
+            <span class="wp-toggle-text">
+              {{ t("dashboard.workPool.toggleLabel") }}:
+              <span :class="workerPool.enabled ? 'wp-toggle-on' : 'wp-toggle-off'">
+                {{ workerPool.enabled ? t("dashboard.workPool.enable") : t("dashboard.workPool.disabled") }}
+              </span>
+            </span>
+          </label>
+        </div>
+        <div v-if="workerPool.lastError" class="wp-last-error">
+          <span class="wp-last-error-icon">⚠</span>
+          <span class="wp-last-error-label">{{ t("dashboard.workPool.lastErrorLabel") }}:</span>
+          <code class="wp-last-error-msg">{{ workerPool.lastError }}</code>
+        </div>
       </div>
 
       <!-- Scan status row -->
@@ -451,22 +481,34 @@ onUnmounted(() => {
     <!-- Stats -->
     <div class="grid grid-4 stats-grid">
       <div class="stat-card card hoverable">
-        <div class="stat-num">{{ stats.artists }}</div>
+        <div class="stat-num">
+          <span v-if="loading" class="skeleton-text" style="width:3rem">　</span>
+          <span v-else>{{ stats.artists }}</span>
+        </div>
         <div class="mono-label">{{ t("dashboard.artists") }}</div>
         <div class="corner corner-tr"></div><div class="corner corner-bl"></div>
       </div>
       <div class="stat-card card hoverable">
-        <div class="stat-num">{{ stats.albums }}</div>
+        <div class="stat-num">
+          <span v-if="loading" class="skeleton-text" style="width:3rem">　</span>
+          <span v-else>{{ stats.albums }}</span>
+        </div>
         <div class="mono-label">{{ t("dashboard.albums") }}</div>
         <div class="corner corner-tr"></div><div class="corner corner-bl"></div>
       </div>
       <div class="stat-card card hoverable">
-        <div class="stat-num">{{ stats.songs }}</div>
+        <div class="stat-num">
+          <span v-if="loading" class="skeleton-text" style="width:3rem">　</span>
+          <span v-else>{{ stats.songs }}</span>
+        </div>
         <div class="mono-label">{{ t("dashboard.songs") }}</div>
         <div class="corner corner-tr"></div><div class="corner corner-bl"></div>
       </div>
       <div v-if="isAdmin" class="stat-card card hoverable">
-        <div class="stat-num">{{ stats.sources }}</div>
+        <div class="stat-num">
+          <span v-if="loading" class="skeleton-text" style="width:3rem">　</span>
+          <span v-else>{{ stats.sources }}</span>
+        </div>
         <div class="mono-label">{{ t("dashboard.storageSources") }}</div>
         <div class="corner corner-tr"></div><div class="corner corner-bl"></div>
       </div>
@@ -483,7 +525,10 @@ onUnmounted(() => {
         <div class="card-header">
           <span class="card-title">{{ t("dashboard.recentAlbums") }}</span>
         </div>
-        <div v-if="recentAlbums.length" class="recent-table" style="--grid-cols: 2fr 1fr auto">
+        <div v-if="loading" class="recent-skeleton">
+          <div v-for="i in 3" :key="i" class="skeleton" style="height:2rem; margin-bottom:0.5rem; border-radius:2px"></div>
+        </div>
+        <div v-else-if="recentAlbums.length" class="recent-table" style="--grid-cols: 2fr 1fr auto">
           <div class="table-header"><span>{{ t("dashboard.colName") }}</span><span>{{ t("dashboard.colArtist") }}</span><span>{{ t("dashboard.colYear") }}</span></div>
           <div v-for="a in recentAlbums" :key="a.id" class="table-row">
             <span class="row-name">{{ a.name }}</span>
@@ -783,6 +828,53 @@ onUnmounted(() => {
   color: #ef4444;
   font-family: var(--font-mono);
 }
+
+/* P2 — Worker toggle + last error */
+.wp-worker-toggle {
+  margin-top: 0.7rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed var(--color-border-subtle);
+}
+.wp-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+.wp-toggle-text {
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+.wp-toggle-on { color: #10b981; }
+.wp-toggle-off { color: var(--color-text-muted); }
+.wp-last-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  background: rgba(239, 68, 68, 0.07);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-left: 3px solid #ef4444;
+}
+.wp-last-error-icon { color: #ef4444; flex-shrink: 0; }
+.wp-last-error-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  margin-top: 0.05rem;
+}
+.wp-last-error-msg {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: #ef4444;
+  word-break: break-all;
+}
+
+/* P3 — recent albums skeleton */
+.recent-skeleton { padding: 0.4rem 0; }
 
 .activity-toast {
   position: fixed;

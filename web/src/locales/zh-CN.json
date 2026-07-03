@@ -25,7 +25,6 @@
       "sources": "存储源",
       "users": "用户",
       "settings": "设置",
-      "transcoder": "转码器",
       "radio": "电台",
       "podcasts": "播客",
       "shares": "分享",
@@ -90,7 +89,11 @@
       "workerLoad": "{n} 个任务",
       "resetFailedBtn": "🔁 重启失败",
       "reclaimStaleBtn": "🔄 回收超时",
-      "loadFailed": "读取工作池状态失败"
+      "loadFailed": "读取工作池状态失败",
+      "toggleLabel": "浏览器 Worker",
+      "enable": "已启用",
+      "disabled": "已禁用",
+      "lastErrorLabel": "最近错误"
     },
     "scanStatus": {
       "sectionTitle": "扫描状态",
@@ -255,6 +258,13 @@
     "tidyFrom": "原路径",
     "tidyTo": "目标",
     "tidySkipped": "跳过：{reason}",
+    "crossCopyTo": "复制到其它源",
+    "crossCopyTitle": "跨源复制",
+    "crossCopyPath": "目标路径",
+    "crossCopyBtn": "复制",
+    "crossCopied": "已复制",
+    "crossCopyFailed": "复制失败",
+    "localR2": "本地 R2",
     "workQueue": {
       "title": "工作节点队列",
       "progress": "已解析 {completed} / 待解析 {queued}",
@@ -319,24 +329,6 @@
       "open": "管理头像"
     }
   },
-  "transcoder": {
-    "label": "// 管理",
-    "title": "转码器",
-    "source": "源文件",
-    "inputFile": "输入文件",
-    "outputSettings": "输出设置",
-    "format": "格式",
-    "bitrate": "码率：{n} kbps",
-    "start": "开始转码",
-    "log": "日志",
-    "logEmpty": "转码日志将显示在这里…",
-    "selectFirst": "请先选择文件",
-    "loadingWasm": "正在加载 FFmpeg WASM…",
-    "done": "完成！已开始下载。",
-    "failed": "转码失败",
-    "description": "浏览器内 ffmpeg.wasm 转码，不上传服务器",
-    "hint": "选文件 → 选格式 → 下载"
-  },
   "player": {
     "noTrack": "未加载曲目",
     "selectSong": "在媒体库中选择一首歌",
@@ -364,31 +356,6 @@
       "updateFailed": "更新 {key} 失败",
       "copyFailed": "复制失败",
       "levelRequired": "需要等级 3",
-      "transcode": {
-        "title": "转码",
-        "engine": "转码引擎",
-        "engineDesc": "选择实际跑 ffmpeg 的后端；切到 disabled 可彻底关闭转码。",
-        "engineDisabled": "禁用",
-        "engineSandbox": "Sandbox (Cloudflare 容器)",
-        "engineExternal": "外部容器",
-        "engineBrowserPool": "浏览器工作池",
-        "mode": "转码模式",
-        "modeDesc": "on_demand 按需触发；pre_bake 上传时预生成；both 二者结合。",
-        "modeOnDemand": "按需",
-        "modePreBake": "预生成",
-        "modeBoth": "二者",
-        "profiles": "默认档位",
-        "profilesDesc": "用于预生成（pre_bake / both 模式）的目标格式。",
-        "externalUrl": "外部容器 URL",
-        "externalUrlPlaceholder": "https://transcoder.example.com",
-        "externalKey": "外部容器密钥",
-        "externalKeySet": "已设置",
-        "externalKeyUnset": "未设置",
-        "externalKeyPlaceholder": "粘贴 openssl rand -hex 32 生成的密钥",
-        "save": "保存",
-        "saved": "已保存",
-        "saveFailed": "保存失败"
-      },
       "scrape": {
         "title": "元数据刮削源",
         "desc": "选择标签编辑器“刮削”按钮使用的外部源以及优先级顺序。浏览器直连通常被 CORS 拒绝，所有源都会自动走 Worker 代理。",
@@ -649,8 +616,15 @@
     "scanning": "扫描中…",
     "scanDone": "扫描完成：发现 {found} 个文件，新增 {added} 首",
     "scanFailed": "扫描失败",
+    "mode": {
+      "label": "模式",
+      "library": "入库模式（扫描时索引）",
+      "syncOnly": "仅同步",
+      "hint": "仅同步模式不会将文件索引到媒体库，适合用作跨源复制的目标存储。"
+    },
     "scanStatus": {
       "idle": "扫描",
+      "rescan": "重新扫描",
       "running": "扫描中 ({scanned} / {total})",
       "runningUnknown": "扫描中…",
       "completed": "已完成 {total} 文件 · {relative}",

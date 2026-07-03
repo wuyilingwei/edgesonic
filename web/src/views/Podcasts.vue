@@ -270,15 +270,40 @@ const totalChannels = computed(() => channels.value.length);
 let pollHandle: number | null = null;
 const POLL_MS = 30_000;
 
+function startPolling(): void {
+  if (pollHandle !== null) return;
+  pollHandle = window.setInterval(() => { void loadAll(); }, POLL_MS);
+}
+
+function stopPolling(): void {
+  if (pollHandle !== null) {
+    clearInterval(pollHandle);
+    pollHandle = null;
+  }
+}
+
+// P6 — pause the poll while the tab is hidden; resume + immediately refresh
+// when it becomes visible again. Mirrors Dashboard.vue onActivityVisibility.
+function onVisibilityChange(): void {
+  if (document.hidden) {
+    stopPolling();
+  } else {
+    void loadAll();
+    startPolling();
+  }
+}
+
 onMounted(async () => {
   await loadAll();
   // Light background polling so a download/refresh kicked off elsewhere
   // eventually reflects in the UI. 30s keeps cost negligible.
-  pollHandle = window.setInterval(() => { void loadAll(); }, POLL_MS);
+  startPolling();
+  document.addEventListener("visibilitychange", onVisibilityChange);
 });
 
 onUnmounted(() => {
-  if (pollHandle !== null) clearInterval(pollHandle);
+  stopPolling();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
 });
 </script>
 

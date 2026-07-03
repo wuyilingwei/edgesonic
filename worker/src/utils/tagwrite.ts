@@ -58,7 +58,7 @@ export function rebuildTagPrefix(head: Uint8Array, suffix: string, tags: SongTag
 
 // --- ID3v2 ---
 
-const REPLACED_FRAMES = new Set(["TIT2", "TPE1", "TPE2", "TALB", "TCON", "TRCK", "TYER", "TDRC"]);
+const REPLACED_FRAMES = new Set(["TIT2", "TPE1", "TPE2", "TALB", "TCON", "TRCK", "TYER", "TDRC", "USLT"]);
 
 function rebuildID3(buf: Uint8Array, tags: SongTags, cover?: TagWriteCover): PrefixRewrite | null {
   const major = buf[3];
@@ -117,7 +117,53 @@ function frameValueProvided(id: string, tags: SongTags): boolean {
     case "TCON": return !!tags.genre;
     case "TRCK": return !!tags.track;
     case "TYER": case "TDRC": return !!tags.year;
+    case "USLT": return typeof tags.lyrics === "string" && tags.lyrics.length > 0;
     default: return false;
+  }
+}
+
+// USLT frame body: encoding(1) + lang(3 bytes) + content_descriptor NUL + lyrics text
+// We always emit UTF-8 (enc=3 for ID3v2.4, UTF-16 enc=1 for v2.3 for broadest compat).
+function buildUSLTFrame(major: number, lyrics: string): Uint8Array {
+  const langBytes = new Uint8Array([0x58, 0x58, 0x58]); // 'XXX' — language undetermined
+  if (major === 4) {
+    // UTF-8 encoding (enc=3), NUL-terminated empty descriptor, then lyrics in UTF-8
+    const lyricsBytes = new TextEncoder().encode(lyrics);
+    const body = new Uint8Array(1 + 3 + 1 + lyricsBytes.length);
+    let p = 0;
+    body[p++] = 3; // encoding: UTF-8
+    body.set(langBytes, p); p += 3;
+    body[p++] = 0; // content descriptor NUL (empty, latin1-terminated)
+    body.set(lyricsBytes, p);
+    const out = new Uint8Array(10 + body.length);
+    out[0] = 0x55; out[1] = 0x53; out[2] = 0x4c; out[3] = 0x54; // "USLT"
+    writeFrameSize(out, 4, body.length, major);
+    out[8] = 0; out[9] = 0;
+    out.set(body, 10);
+    return out;
+  } else {
+    // ID3v2.3: UTF-16LE with BOM (enc=1); descriptor = two-byte UTF-16 NUL
+    const lyricsStr = lyrics;
+    const utf16Bytes = new Uint8Array(2 + lyricsStr.length * 2);
+    utf16Bytes[0] = 0xff; utf16Bytes[1] = 0xfe; // BOM
+    for (let i = 0; i < lyricsStr.length; i++) {
+      const code = lyricsStr.charCodeAt(i);
+      utf16Bytes[2 + i * 2] = code & 0xff;
+      utf16Bytes[3 + i * 2] = code >> 8;
+    }
+    // body: enc(1) + lang(3) + descriptor NUL UTF-16(2 bytes) + lyrics UTF-16
+    const body = new Uint8Array(1 + 3 + 2 + utf16Bytes.length);
+    let p = 0;
+    body[p++] = 1; // encoding: UTF-16
+    body.set(langBytes, p); p += 3;
+    body[p++] = 0; body[p++] = 0; // UTF-16 NUL descriptor
+    body.set(utf16Bytes, p);
+    const out = new Uint8Array(10 + body.length);
+    out[0] = 0x55; out[1] = 0x53; out[2] = 0x4c; out[3] = 0x54; // "USLT"
+    writeFrameSize(out, 4, body.length, major);
+    out[8] = 0; out[9] = 0;
+    out.set(body, 10);
+    return out;
   }
 }
 
@@ -132,6 +178,9 @@ function buildID3Tag(major: 3 | 4 | number, kept: Array<{ id: string; f1: number
   if (tags.genre) text("TCON", tags.genre);
   if (tags.track) text("TRCK", String(tags.track));
   if (tags.year) text(major === 4 ? "TDRC" : "TYER", String(tags.year));
+  if (typeof tags.lyrics === "string" && tags.lyrics.length > 0) {
+    frames.push(buildUSLTFrame(major, tags.lyrics));
+  }
 
   // Put the new front-cover APIC first so the canonical reader (which returns
   // the first APIC it finds) always sees the latest cover. Kept frames — back
@@ -208,7 +257,7 @@ function writeFrameSize(buf: Uint8Array, off: number, size: number, major: numbe
 
 // --- FLAC ---
 
-const REPLACED_COMMENTS = new Set(["TITLE", "ARTIST", "ALBUM", "ALBUMARTIST", "GENRE", "TRACKNUMBER", "DATE", "YEAR"]);
+const REPLACED_COMMENTS = new Set(["TITLE", "ARTIST", "ALBUM", "ALBUMARTIST", "GENRE", "TRACKNUMBER", "DATE", "YEAR", "LYRICS"]);
 
 function rebuildFLAC(buf: Uint8Array, tags: SongTags, cover?: TagWriteCover): PrefixRewrite | null {
   // Walk metadata blocks; keep everything but VORBIS_COMMENT verbatim.
@@ -336,6 +385,7 @@ function buildVorbisComment(old: Uint8Array | null, tags: SongTags): Uint8Array 
   if (tags.genre) add("GENRE", tags.genre);
   if (tags.track) add("TRACKNUMBER", String(tags.track));
   if (tags.year) add("DATE", String(tags.year));
+  if (typeof tags.lyrics === "string" && tags.lyrics.length > 0) add("LYRICS", tags.lyrics);
 
   let total = 4 + vendor.length + 4;
   for (const e of entries) total += 4 + e.length;
@@ -357,6 +407,7 @@ function commentValueProvided(key: string, tags: SongTags): boolean {
     case "GENRE": return !!tags.genre;
     case "TRACKNUMBER": return !!tags.track;
     case "DATE": case "YEAR": return !!tags.year;
+    case "LYRICS": return typeof tags.lyrics === "string" && tags.lyrics.length > 0;
     default: return false;
   }
 }

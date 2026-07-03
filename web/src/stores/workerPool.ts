@@ -150,22 +150,9 @@ export const useWorkerPool = defineStore("workerPool", () => {
 
   // capabilities — what this browser can actually execute. The Worker poll
   // endpoint takes a `caps=` parameter; we filter on the server using these.
+  // P1: ffmpeg/transcode cap removed — browser workers no longer run ffmpeg.
   const caps = computed<string[]>(() => {
-    const c: string[] = ["music-metadata", "scrape"];
-    // ffmpeg.wasm needs SharedArrayBuffer, which requires the page to be
-    // cross-origin isolated. 065 ships the COOP/COEP/CORP middleware that
-    // flips `crossOriginIsolated = true`. We gate on both the global symbol
-    // (engine support) AND the runtime flag (page actually isolated) — a
-    // browser may expose SharedArrayBuffer but refuse to materialise its
-    // shared memory backing when isolation is off.
-    if (
-      typeof SharedArrayBuffer !== "undefined" &&
-      typeof globalThis !== "undefined" &&
-      (globalThis as { crossOriginIsolated?: boolean }).crossOriginIsolated === true
-    ) {
-      c.push("ffmpeg");
-    }
-    return c;
+    return ["music-metadata", "scrape"];
   });
 
   // Only level ≥ 2 may participate. Lower levels get the toggle disabled in

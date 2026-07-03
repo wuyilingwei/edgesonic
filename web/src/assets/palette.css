@@ -378,3 +378,20 @@ img { max-width: 100%; display: block; }
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
 }
+
+/* --- Skeleton loading placeholders (P3) --- */
+/* Block placeholder: use as a div with explicit width/height */
+.skeleton {
+  background: var(--color-bg-tertiary);
+  border-radius: 2px;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+/* Inline text-line placeholder: use as a <span> inside a text container */
+.skeleton-text {
+  display: inline-block;
+  height: 0.85em;
+  border-radius: 2px;
+  background: var(--color-bg-tertiary);
+  animation: pulse 1.6s ease-in-out infinite;
+  vertical-align: middle;
+}

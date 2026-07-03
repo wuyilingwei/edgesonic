@@ -37,12 +37,15 @@
 CREATE TABLE storage_sources (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL CHECK (type IN ('webdav', 'subsonic', 'r2', 'url')),
+  name TEXT NOT NULL DEFAULT '',         -- 005: human-readable label
   base_url TEXT NOT NULL,
   username TEXT,
   password TEXT,
+  password_encrypted TEXT,              -- 023: AES-256-GCM blob (`v1:<base64url>`)
   root_path TEXT NOT NULL DEFAULT '',    -- path inside the remote; effective URL = base_url + root_path
   last_sync INTEGER,
   enabled INTEGER DEFAULT 1,
+  mode TEXT NOT NULL DEFAULT 'library', -- 026: 'library' | 'sync_only'
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );

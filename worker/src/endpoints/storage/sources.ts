@@ -41,12 +41,13 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
   const db = c.env.DB;
   const result = await db.prepare(
     `SELECT id, type, name, base_url, username, password, password_encrypted,
-            root_path, last_sync, enabled
+            root_path, last_sync, enabled, mode
      FROM storage_sources ORDER BY created_at ASC`
   ).all<{
     id: string; type: string; name: string; base_url: string; username: string | null;
     password: string | null; password_encrypted: string | null;
     root_path: string | null; last_sync: number | null; enabled: number;
+    mode: string;
   }>();
   const sources = result.results.map((s) => ({
     _attributes: {
@@ -60,15 +61,25 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
       // rather than test STORAGE_KEY validity here — list shouldn't perform
       // crypto on the hot path).
       encrypted: String(isEncryptedPassword(s.password_encrypted)),
+      // 089 S2 — 'library' | 'sync_only'
+      mode: s.mode ?? "library",
     },
   }));
   return c.text(subsonicOK({ storageSources: { source: sources } }), 200, XML);
 });
 
 sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async (c) => {
-  const body = await c.req.json<{ type: string; base_url: string; name?: string; username?: string; password?: string; root_path?: string }>();
+  const body = await c.req.json<{
+    type: string; base_url: string; name?: string; username?: string;
+    password?: string; root_path?: string; mode?: string;
+  }>();
   if (!body.type || !body.base_url) {
     return c.text(subsonicError(0, "Missing type or base_url"), 400, XML);
+  }
+  // 089 S2 — validate mode
+  const mode = body.mode ?? "library";
+  if (mode !== "library" && mode !== "sync_only") {
+    return c.text(subsonicError(0, "Invalid mode: must be 'library' or 'sync_only'"), 400, XML);
   }
   const db = c.env.DB;
   const id = crypto.randomUUID().substring(0, 8);
@@ -77,13 +88,13 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
   const { password_encrypted, password } = await preparePasswordWrite(plaintext, c.env);
   await db.prepare(
     `INSERT INTO storage_sources
-       (id, type, name, base_url, username, password, password_encrypted, root_path, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, type, name, base_url, username, password, password_encrypted, root_path, mode, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, body.type, body.name || "", body.base_url, body.username || null,
     // Don't INSERT NULL for password since the legacy column is NOT NULL on some
     // older deployments — empty string is the safe sentinel.
-    password, password_encrypted, body.root_path || "", now, now,
+    password, password_encrypted, body.root_path || "", mode, now, now,
   ).run();
   return c.text(subsonicOK({}), 200, XML);
 });
@@ -91,10 +102,14 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
 sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), async (c) => {
   const body = await c.req.json<{
     id: string; name?: string; base_url?: string; username?: string; password?: string;
-    root_path?: string; enabled?: number;
+    root_path?: string; enabled?: number; mode?: string;
   }>();
   if (!body.id) {
     return c.text(subsonicError(0, "Missing id"), 400, XML);
+  }
+  // 089 S2 — validate mode if provided
+  if (body.mode !== undefined && body.mode !== "library" && body.mode !== "sync_only") {
+    return c.text(subsonicError(0, "Invalid mode: must be 'library' or 'sync_only'"), 400, XML);
   }
   const db = c.env.DB;
   const sets: string[] = [];
@@ -114,6 +129,8 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   }
   if (body.root_path !== undefined) { sets.push("root_path = ?"); binds.push(body.root_path); }
   if (body.enabled !== undefined) { sets.push("enabled = ?"); binds.push(body.enabled ? 1 : 0); }
+  // 089 S2 — update mode
+  if (body.mode !== undefined) { sets.push("mode = ?"); binds.push(body.mode); }
   if (sets.length === 0) {
     return c.text(subsonicError(0, "Nothing to update"), 400, XML);
   }

@@ -18,6 +18,11 @@ export function createSubsonicAdapter(
   env?: { STORAGE_KEY?: string },
 ): StorageAdapter {
   return {
+    // 089 S2 — Subsonic sources are read-only; writing is not supported.
+    async put(): Promise<void> {
+      throw new Error("read-only source: subsonic adapter does not support put");
+    },
+
     async stream(uri: string, range?: string): Promise<StreamResult> {
       const { path } = parseStorageUri(uri);
       const creds = await getSourceCredentials(db, "subsonic", env);
