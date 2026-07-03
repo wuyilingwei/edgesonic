@@ -24,6 +24,11 @@ import { reclaimStaleWork } from "./utils/workReclaim";
 import { webLoginRoutes } from "./endpoints/edgesonic/auth";
 import { sharePublicRoutes } from "./endpoints/share_public";
 
+// 049 — Re-export Sandbox class so the Cloudflare runtime can instantiate the
+// Durable Object backing SandboxTranscodeEngine. This export must exist even
+// when the engine is not in use (containers binding is declared in wrangler.toml).
+export { Sandbox } from "@cloudflare/sandbox";
+
 const app = new Hono();
 
 // 065 — Cross-Origin Isolation response headers. Lives in

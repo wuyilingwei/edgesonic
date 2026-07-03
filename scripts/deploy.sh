@@ -22,6 +22,10 @@ cd "$ROOT"
 
 CONFIG="worker/wrangler.toml"
 DB="edgesonic-db"
+# Sandbox 转码容器（049）走 [[containers]]，正常 deploy 会尝试用 Docker 构建镜像。
+# 本地无 Docker 时用 --containers-rollout=none：只部署 Worker + 保留 Sandbox DO 绑定
+# （避免 CF error 10064 孤立 DO），跳过容器构建/更新。需要更新容器镜像时删掉此变量并确保 Docker 运行。
+CONTAINERS_FLAG="--containers-rollout=none"
 
 MIGRATE_FILE=""
 VERSION_ONLY=0
@@ -51,7 +55,7 @@ else
 fi
 
 if [ -n "$MIGRATE_FILE" ]; then
-  echo "▶ [D1] 应用迁移到远端数据库 $DB： $MIGRATE_FILE"
+  echo "▶ [D1] 应用迁移到远端数据库 ${DB}: $MIGRATE_FILE"
   npx wrangler d1 execute "$DB" --remote --config "$CONFIG" --file "$MIGRATE_FILE"
 fi
 
@@ -61,7 +65,7 @@ if [ "$VERSION_ONLY" -eq 1 ]; then
   npx wrangler versions upload --config "$CONFIG" --var WORKER_VERSION:"$VERSION"
 else
   echo "▶ [部署] wrangler deploy（含 web/dist 静态资源）…"
-  npx wrangler deploy --config "$CONFIG" --var WORKER_VERSION:"$VERSION"
+  npx wrangler deploy --config "$CONFIG" $CONTAINERS_FLAG --var WORKER_VERSION:"$VERSION"
 fi
 
 echo ""

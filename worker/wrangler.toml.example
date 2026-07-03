@@ -55,6 +55,23 @@ bucket_name = "<YOUR_R2_BUCKET_NAME>"
 [observability]
 enabled = true
 
+# 049 — 服务端转码引擎（Sandbox SDK 容器）。默认引擎 disabled，容器在管理员启用
+# sandbox 引擎前不会构建/启动。只要线上 Worker 仍注册着 Sandbox DO，就必须保留
+# 下面的 DO 绑定，否则 wrangler deploy 会因 DO 被孤立而报错（CF error 10064）。
+[[containers]]
+class_name = "Sandbox"
+image = "./transcoder-image/Dockerfile"
+instance_type = "lite"
+max_instances = 3
+
+[[durable_objects.bindings]]
+class_name = "Sandbox"
+name = "Sandbox"
+
+[[migrations]]
+tag = "v1-sandbox"
+new_sqlite_classes = ["Sandbox"]
+
 # ---------------------------------------------------------------------------
 # Cron 触发器由 Cloudflare API 动态管理（067），此处不声明静态 [triggers]，
 # 以免 `wrangler deploy` 覆盖运行时配置的计划任务。部署后到
