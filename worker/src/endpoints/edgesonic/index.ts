@@ -9,7 +9,9 @@ import { edgesonicAuthRoutes } from "./auth";
 import { usersRoutes } from "./users";
 import { permissionsRoutes } from "./permissions";
 import { featuresRoutes } from "./features";
+import { transcodeRoutes } from "./transcode";
 import { workRoutes } from "./work";
+import { workUploadRoutes } from "./work_upload";
 import { cfRoutes } from "./cf";
 import { maintenanceRoutes } from "./maintenance";
 import { versionRoutes } from "./version";
@@ -20,8 +22,11 @@ edgesonicRoutes.route("/", edgesonicAuthRoutes);
 edgesonicRoutes.route("/", usersRoutes);
 edgesonicRoutes.route("/", permissionsRoutes);
 edgesonicRoutes.route("/", featuresRoutes);
+edgesonicRoutes.route("/", transcodeRoutes);
 // 052 — browser worker pool (poll / submit / heartbeat / dispatch / status / cancel)
 edgesonicRoutes.route("/", workRoutes);
+// 053 — browser-pool transcode upload (binary body, HMAC-signed token)
+edgesonicRoutes.route("/", workUploadRoutes);
 // 054 — Cloudflare API integration (token / cron / analytics)
 edgesonicRoutes.route("/", cfRoutes);
 // 078 — operational maintenance tools (cleanup-duplicate-covers, ...)
