@@ -1,0 +1,62 @@
+# EdgeSonic Worker — wrangler 配置模板
+# ---------------------------------------------------------------------------
+# 这是公开可提交的模板。真正的 worker/wrangler.toml 含私有资源标识
+# (account_id / database_id / kv id / INSTANCE_ID / 自定义域名)，已被 .gitignore
+# 排除，不会上传到公开仓库。
+#
+# 首次部署：
+#   cp worker/wrangler.toml.example worker/wrangler.toml
+#   然后把下面的 <占位符> 替换为你自己的 Cloudflare 资源标识。
+#
+# 机密 (WORK_UPLOAD_HMAC_KEY / STORAGE_KEY / CF_* 等) 不放这里，用
+#   cd worker && npx wrangler secret put <NAME>
+# 详见 worker/SECRETS.md。
+# ---------------------------------------------------------------------------
+name = "edgesonic"
+main = "src/index.ts"
+compatibility_date = "2025-05-24"
+compatibility_flags = ["nodejs_compat"]
+account_id = "<YOUR_CLOUDFLARE_ACCOUNT_ID>"
+
+# Routes — 部署到自定义域名（没有自定义域名可整块删除，改用 *.workers.dev）
+routes = [
+  { pattern = "<your-domain.example.com>", custom_domain = true }
+]
+
+# Instance identity (anti-loop chain marker, docs/DESIGN.md §3.2)
+[vars]
+# 每个实例应唯一，可用 `uuidgen` 生成
+INSTANCE_ID = "<GENERATE_A_UUID>"
+MAX_PROXY_DEPTH = "3"
+# 081 — GET /edgesonic/version 暴露此值，长时间打开的 SPA 据此检测新部署并提示刷新。
+# 每次部署前 bump（或用 `wrangler deploy --var WORKER_VERSION:$(date +%s)` 覆盖）。
+WORKER_VERSION = "1"
+
+# Static Assets (Vue frontend) — 需先 `npm run build:web` 生成 web/dist
+[assets]
+directory = "../web/dist"
+
+# D1 Database
+[[d1_databases]]
+binding = "DB"
+database_name = "edgesonic-db"
+database_id = "<YOUR_D1_DATABASE_ID>"
+
+# KV Namespace
+[[kv_namespaces]]
+binding = "KV"
+id = "<YOUR_KV_NAMESPACE_ID>"
+
+# R2 Bucket
+[[r2_buckets]]
+binding = "MUSIC_BUCKET"
+bucket_name = "<YOUR_R2_BUCKET_NAME>"
+
+[observability]
+enabled = true
+
+# ---------------------------------------------------------------------------
+# Cron 触发器由 Cloudflare API 动态管理（067），此处不声明静态 [triggers]，
+# 以免 `wrangler deploy` 覆盖运行时配置的计划任务。部署后到
+# Settings → Cloudflare → "Ensure default cron" 重新应用。详见 worker/CF_CRON.md。
+# ---------------------------------------------------------------------------

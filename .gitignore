@@ -1,0 +1,24 @@
+# --- 私有 / 本地文件（公开仓库不应上传）---
+# 真实 wrangler 配置含 account_id / database_id / INSTANCE_ID / 域名等私有标识。
+# 只提交 worker/wrangler.toml.example 模板。
+worker/wrangler.toml
+# wrangler 本地状态（含本地 D1/KV/R2 miniflare 数据，可能含真实用户数据）
+.wrangler/
+worker/.wrangler/
+# wrangler 本地机密
+.dev.vars
+worker/.dev.vars
+.env
+.env.*
+
+# --- 构建产物 / 依赖 ---
+node_modules/
+web/dist/
+dist/
+
+# --- 杂项 ---
+*.log
+.DS_Store
+
+# --- 原有 ---
+/docs
