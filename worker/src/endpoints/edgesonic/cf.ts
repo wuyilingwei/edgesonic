@@ -40,7 +40,12 @@ export const cfRoutes = new Hono<{
 // row (see migration 0024), which defaults to L3=1 and everyone else=0 so the
 // behaviour is identical for existing operators but an admin can grant it to
 // L2 via the Permissions UI without a code change.
-cfRoutes.use("*", permissionMiddleware("manage_cloudflare"));
+// NOTE: scope to "/cf/*" — NOT "*". cfRoutes is mounted with `.route("/", ...)`,
+// so a bare "*" middleware leaks onto every sibling /edgesonic/* route: it runs
+// for /edgesonic/version (NO_AUTH → no user → `user.level` throws → 500) and
+// forces manage_cloudflare on unrelated endpoints (work pool, features, users…).
+// Scoping to this file's /cf/* prefix keeps the protection without the leak.
+cfRoutes.use("/cf/*", permissionMiddleware("manage_cloudflare"));
 
 // Script name must match wrangler.toml `name = "edgesonic"`. We hard-code
 // rather than reading from env so a misconfigured deployment can't push a
