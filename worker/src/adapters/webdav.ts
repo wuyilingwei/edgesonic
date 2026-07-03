@@ -25,6 +25,32 @@ export function createWebDAVAdapter(
   env?: { STORAGE_KEY?: string },
 ): StorageAdapter {
   return {
+    // 089 S2 — Write a body to WebDAV via HTTP PUT. Uses the same credential
+    // resolution and path encoding as stream(). The URI must be
+    // `webdav://<sourceId>/<relative-path>`.
+    async put(
+      uri: string,
+      body: ReadableStream<Uint8Array> | ArrayBuffer | Uint8Array,
+      contentType?: string,
+    ): Promise<void> {
+      const { path } = parseStorageUri(uri);
+      const creds = await getSourceCredentials(db, "webdav", env);
+      if (!creds) throw new Error("WebDAV source not configured or disabled");
+      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+      const fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${encodedPath}`;
+      const resp = await fetch(fullUrl, {
+        method: "PUT",
+        headers: {
+          Authorization: `Basic ${btoa(`${creds.username}:${creds.password}`)}`,
+          "Content-Type": contentType || "application/octet-stream",
+        },
+        body: body as BodyInit,
+      });
+      if (!resp.ok) {
+        throw new Error(`WebDAV PUT failed: ${resp.status} ${resp.statusText}`);
+      }
+    },
+
     async stream(uri: string, range?: string): Promise<StreamResult> {
       const { path } = parseStorageUri(uri);
       const creds = await getSourceCredentials(db, "webdav", env);

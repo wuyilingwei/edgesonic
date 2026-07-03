@@ -36,9 +36,8 @@ featuresRoutes.get("/features/list", permissionMiddleware("manage_permissions"),
     "SELECT key, value, description, updated_at FROM features ORDER BY key ASC"
   ).all<{ key: string; value: number; description: string | null; updated_at: number }>();
 
-  // 049 — string-valued feature flags (transcode_engine, transcode_mode, etc).
-  // Returned alongside the boolean flags so the Settings UI can render them in
-  // the same Common section without a second round-trip.
+  // String-valued feature flags returned alongside the boolean flags so the
+  // Settings UI can render them in the same Common section without a second round-trip.
   const strResult = await c.env.DB.prepare(
     "SELECT key, value, description, updated_at FROM feature_strings ORDER BY key ASC"
   ).all<{ key: string; value: string; description: string | null; updated_at: number }>();
@@ -85,14 +84,10 @@ featuresRoutes.post("/features/update", async (c) => {
   return c.json({ ok: true });
 });
 
-// 049 — Update a string-valued feature flag (transcode_engine, etc).
+// Update a string-valued feature flag.
 // Same authorisation as updateFeature (manage_permissions). The set of valid
 // keys is constrained server-side so we never write into an unknown row.
 const STRING_FEATURE_KEYS = new Set([
-  "transcode_engine",
-  "transcode_mode",
-  "default_transcode_profiles",
-  "external_transcoder_url",
   // 040 — priority-ordered list of enabled metadata scrape sources.
   "scrape_enabled_sources",
   // 043 — Last.fm public read API key (server-side). Empty disables the
@@ -123,36 +118,6 @@ const STRING_FEATURE_KEYS = new Set([
 // Per-key validation. Returns null on success, error message otherwise.
 function validateFeatureString(key: string, value: string): string | null {
   switch (key) {
-    case "transcode_engine":
-      // 053 — `browser_pool` joins the enum. Engines that do not run ffmpeg
-      // in-Worker (browser_pool here, sandbox/external before it) all coexist
-      // behind the same string-valued flag so the Settings UI does not need
-      // to know which backend physically runs the codec.
-      if (!["sandbox", "external", "browser_pool", "disabled"].includes(value)) {
-        return "transcode_engine must be sandbox|external|browser_pool|disabled";
-      }
-      return null;
-    case "transcode_mode":
-      if (!["on_demand", "pre_bake", "both"].includes(value)) {
-        return "transcode_mode must be on_demand|pre_bake|both";
-      }
-      return null;
-    case "default_transcode_profiles": {
-      // Must be a JSON array of strings; we don't check ids vs. catalogue here
-      // (profiles.ts parseProfileIdList silently drops unknown ids).
-      try {
-        const parsed = JSON.parse(value);
-        if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === "string")) {
-          return "default_transcode_profiles must be a JSON array of strings";
-        }
-      } catch {
-        return "default_transcode_profiles must be valid JSON";
-      }
-      return null;
-    }
-    case "external_transcoder_url":
-      if (value && !/^https?:\/\//.test(value)) return "external_transcoder_url must start with http:// or https://";
-      return null;
     case "lastfm_api_key":
       // Empty string is explicitly allowed — that's how the admin turns the
       // feature off. Anything else is accepted verbatim (last.fm keys are

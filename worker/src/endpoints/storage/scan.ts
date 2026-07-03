@@ -52,6 +52,8 @@ interface SourceRow {
   password: string | null;
   password_encrypted: string | null;
   root_path: string | null;
+  // 089 S2 — 'library' (default) | 'sync_only' (scan but skip DB inserts)
+  mode?: string | null;
 }
 
 // 051 — Existing-instance snapshot used by asyncScanSource to decide skip/UPDATE/INSERT.
@@ -73,7 +75,7 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
   const onlyId = c.req.query("id");
 
   const sources = (await db.prepare(
-    `SELECT id, base_url, username, password, password_encrypted, root_path FROM storage_sources
+    `SELECT id, base_url, username, password, password_encrypted, root_path, mode FROM storage_sources
      WHERE type = 'webdav' AND enabled = 1 ${onlyId ? "AND id = ?" : ""}`
   ).bind(...(onlyId ? [onlyId] : [])).all<SourceRow>()).results;
 
@@ -352,6 +354,17 @@ export async function asyncScanSource(
       }
 
       // -------- Path 3: brand new file → INSERT --------
+      // 089 S2 — sync_only sources: scan tracks the file but does NOT write
+      // artists/albums/song_masters/song_instances rows. `last_sync` and
+      // scan_jobs progress counters are still updated so the scan appears
+      // normal in the UI. Dispatch to the worker pool is also skipped (no
+      // instance row means no metadata task target).
+      if (src.mode === "sync_only") {
+        added++;
+        if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+        continue;
+      }
+
       const meta = guessFromPath(file.path);
       const artistId = "ar-" + md5(meta.artist).substring(0, 10);
       const albumId = "al-" + md5(meta.artist + " " + meta.album).substring(0, 10);

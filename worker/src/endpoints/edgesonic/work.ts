@@ -570,7 +570,7 @@ export async function dispatchWorkBatch(
 // ===========================================================================
 // Helpers
 // ===========================================================================
-const ALLOWED_TASK_TYPES = new Set(["metadata", "transcode", "scrape"]);
+const ALLOWED_TASK_TYPES = new Set(["metadata", "scrape"]);
 
 function parseCaps(raw: string | null | undefined): string[] {
   if (!raw) return [];

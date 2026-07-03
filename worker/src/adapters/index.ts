@@ -17,6 +17,14 @@ import { decryptPassword, isEncryptedPassword } from "../utils/sourceCrypto";
 
 export interface StorageAdapter {
   stream(uri: string, range?: string): Promise<StreamResult>;
+  // 089 S2 — Optional write capability. r2 and webdav implement this; url and
+  // subsonic are read-only and either leave it undefined or throw. Callers must
+  // check for undefined and surface a meaningful error before calling.
+  put?(
+    uri: string,
+    body: ReadableStream<Uint8Array> | ArrayBuffer | Uint8Array,
+    contentType?: string,
+  ): Promise<void>;
 }
 
 export interface StreamResult {

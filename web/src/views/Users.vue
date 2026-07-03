@@ -21,6 +21,7 @@ import { useAuth } from "../api";
 const { t } = useI18n();
 const { username: currentUsername, isAdmin, isSuperAdmin, edgesonicFetch, edgesonicPost, restUrl } = useAuth();
 const users = ref<Array<{ username: string; level: number; enabled: boolean }>>([]);
+const loading = ref(true);
 const showForm = ref(false);
 const form = ref({ username: "", password: "", level: 1 });
 const toast = ref({ show: false, msg: "", type: "success" });
@@ -169,6 +170,7 @@ function safeParse<T extends OkJson>(raw: string): T {
 }
 
 async function load() {
+  loading.value = true;
   try {
     const raw = await edgesonicFetch("users/list");
     const resp = safeParse<UsersListJson>(raw);
@@ -178,7 +180,9 @@ async function load() {
       level: typeof u.level === "number" ? u.level : parseInt(String(u.level ?? "1")),
       enabled: !!u.enabled,
     }));
-  } catch { users.value = []; }
+  } catch { users.value = []; } finally {
+    loading.value = false;
+  }
 }
 
 async function addUser() {
@@ -255,8 +259,10 @@ onMounted(load);
       <div class="corner corner-br"></div>
     </div>
 
+    <div v-if="loading" class="empty-state">{{ t("common.loading") }}</div>
+
     <!-- 064 — added a leading Avatar column; total cols now: avatar / name / level / status / actions -->
-    <div class="table-wrap" style="--grid-cols: 56px 1.5fr 1fr 1fr auto">
+    <div v-else class="table-wrap" style="--grid-cols: 56px 1.5fr 1fr 1fr auto">
       <div class="table-header">
         <span></span>
         <span>{{ t("users.colUsername") }}</span><span>{{ t("users.colLevel") }}</span><span>{{ t("users.colStatus") }}</span><span>{{ t("users.colActions") }}</span>

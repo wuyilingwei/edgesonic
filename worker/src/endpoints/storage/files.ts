@@ -16,6 +16,10 @@
 import { Hono } from "hono";
 import { permissionMiddleware } from "../../auth";
 import { getSourceCredentials } from "../../adapters/index";
+import { createR2Adapter } from "../../adapters/r2";
+import { createWebDAVAdapter } from "../../adapters/webdav";
+import { urlAdapter } from "../../adapters/url";
+import { createSubsonicAdapter } from "../../adapters/subsonic";
 
 export const filesRoutes = new Hono();
 
@@ -146,6 +150,124 @@ filesRoutes.post("/files/copy", permissionMiddleware("upload"), async (c) => {
 
   await env.MUSIC_BUCKET.put(dest, obj.body, { httpMetadata: obj.httpMetadata, customMetadata: obj.customMetadata });
   return c.json({ ok: true });
+});
+
+// 089 S2 — Cross-source file copy (byte-level copy between any two adapters).
+//
+// POST /rest/files/crossCopy  body: { srcUri, destSource, destPath }
+//
+//   srcUri     — Full storage URI of the source file:
+//                  r2://music/album/track.mp3
+//                  webdav://<sourceId>/path/track.mp3
+//                  url://https://...
+//                  subsonic://<sourceId>/rest/stream?id=...
+//
+//   destSource — 'r2' for the local R2 bucket, OR a storage_sources.id for
+//                a remote source. Only r2 and webdav sources are writable;
+//                url and subsonic always return an error.
+//
+//   destPath   — Relative path at the destination (e.g. "Music/album/track.mp3").
+//                For R2 destinations `music/` is prepended automatically if not
+//                already present. For WebDAV the path is relative to the
+//                source's root (as stored in the adapter credentials).
+//
+// This endpoint copies bytes only — it does NOT insert records into the
+// library. Whether scanned files are entered into the media library is
+// controlled by the destination source's `mode` column ('library' | 'sync_only')
+// and is evaluated at scan time, not copy time.
+//
+// Response: { ok: true, destUri } or { ok: false, error: "..." }
+filesRoutes.post("/files/crossCopy", permissionMiddleware("upload"), async (c) => {
+  const env = c.env as Env;
+  const body = await c.req.json<{ srcUri?: string; destSource?: string; destPath?: string }>();
+  const { srcUri, destSource, destPath } = body;
+
+  if (!srcUri || !destSource || !destPath) {
+    return c.json({ ok: false, error: "Missing srcUri, destSource, or destPath" }, 400);
+  }
+
+  // ── 1. Resolve source read adapter ──────────────────────────────────────
+  const colonIdx = srcUri.indexOf("://");
+  if (colonIdx < 0) return c.json({ ok: false, error: "Invalid srcUri: missing scheme" }, 400);
+  const srcScheme = srcUri.substring(0, colonIdx) as "r2" | "url" | "webdav" | "subsonic";
+
+  let srcStream: { body: ReadableStream<Uint8Array> | null; statusCode: number; contentType: string };
+  switch (srcScheme) {
+    case "r2":
+      srcStream = await createR2Adapter(env.MUSIC_BUCKET).stream(srcUri);
+      break;
+    case "webdav":
+      srcStream = await createWebDAVAdapter(env.DB, env).stream(srcUri);
+      break;
+    case "url":
+      srcStream = await urlAdapter.stream(srcUri);
+      break;
+    case "subsonic":
+      srcStream = await createSubsonicAdapter(env.DB, {}, env).stream(srcUri);
+      break;
+    default:
+      return c.json({ ok: false, error: `Unknown source scheme: ${srcScheme}` }, 400);
+  }
+
+  if (!srcStream.body || srcStream.statusCode >= 400) {
+    return c.json({ ok: false, error: `Source stream failed with status ${srcStream.statusCode}` }, 502);
+  }
+
+  // ── 2. Resolve destination adapter + URI ────────────────────────────────
+  let destUri: string;
+  let destPut: ((uri: string, body: ReadableStream<Uint8Array>, contentType?: string) => Promise<void>) | null = null;
+
+  if (destSource === "r2") {
+    // Strip leading 'music/' to avoid double-prefix, then re-add it.
+    const cleanPath = destPath.replace(/^music\/?/, "");
+    const key = "music/" + cleanPath;
+    destUri = `r2://${key}`;
+    const adapter = createR2Adapter(env.MUSIC_BUCKET);
+    destPut = adapter.put!.bind(adapter);
+  } else {
+    // destSource is a storage_sources.id
+    const row = await env.DB.prepare(
+      "SELECT id, type FROM storage_sources WHERE id = ? AND enabled = 1",
+    ).bind(destSource).first<{ id: string; type: string }>();
+
+    if (!row) {
+      return c.json({ ok: false, error: `Destination source not found or disabled: ${destSource}` }, 404);
+    }
+
+    switch (row.type) {
+      case "r2": {
+        const key = "music/" + destPath.replace(/^music\/?/, "");
+        destUri = `r2://${key}`;
+        const adapter = createR2Adapter(env.MUSIC_BUCKET);
+        destPut = adapter.put!.bind(adapter);
+        break;
+      }
+      case "webdav": {
+        destUri = `webdav://${row.id}/${destPath}`;
+        const wdAdapter = createWebDAVAdapter(env.DB, env);
+        destPut = wdAdapter.put!.bind(wdAdapter);
+        break;
+      }
+      case "url":
+        return c.json({ ok: false, error: "Destination source is read-only (url)" }, 400);
+      case "subsonic":
+        return c.json({ ok: false, error: "Destination source is read-only (subsonic)" }, 400);
+      default:
+        return c.json({ ok: false, error: `Unknown destination source type: ${row.type}` }, 400);
+    }
+  }
+
+  // ── 3. Write bytes ───────────────────────────────────────────────────────
+  try {
+    await destPut(destUri, srcStream.body as ReadableStream<Uint8Array>, srcStream.contentType);
+  } catch (e) {
+    return c.json(
+      { ok: false, error: `Write to destination failed: ${e instanceof Error ? e.message : String(e)}` },
+      500,
+    );
+  }
+
+  return c.json({ ok: true, destUri });
 });
 
 // 055 — download / downloadMultiple moved to subsonic/download.ts (they remain

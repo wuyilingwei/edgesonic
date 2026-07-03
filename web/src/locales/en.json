@@ -25,7 +25,6 @@
       "sources": "Sources",
       "users": "Users",
       "settings": "Settings",
-      "transcoder": "Transcoder",
       "radio": "Radio",
       "podcasts": "Podcasts",
       "shares": "Shares",
@@ -90,7 +89,11 @@
       "workerLoad": "{n} task(s)",
       "resetFailedBtn": "🔁 Reset failed",
       "reclaimStaleBtn": "🔄 Reclaim stale",
-      "loadFailed": "Failed to load work pool status"
+      "loadFailed": "Failed to load work pool status",
+      "toggleLabel": "Browser Worker",
+      "enable": "ENABLED",
+      "disabled": "DISABLED",
+      "lastErrorLabel": "Last error"
     },
     "scanStatus": {
       "sectionTitle": "Scan Status",
@@ -255,6 +258,13 @@
     "tidyFrom": "From",
     "tidyTo": "To",
     "tidySkipped": "Skipped: {reason}",
+    "crossCopyTo": "Copy to another source",
+    "crossCopyTitle": "Cross-source copy",
+    "crossCopyPath": "Destination path",
+    "crossCopyBtn": "Copy",
+    "crossCopied": "Copied",
+    "crossCopyFailed": "Copy failed",
+    "localR2": "Local R2",
     "workQueue": {
       "title": "Worker Queue",
       "progress": "Parsed {completed} / {queued} pending",
@@ -319,24 +329,6 @@
       "open": "Manage avatar"
     }
   },
-  "transcoder": {
-    "label": "// MANAGEMENT",
-    "title": "Transcoder",
-    "source": "Source",
-    "inputFile": "Input File",
-    "outputSettings": "Output Settings",
-    "format": "Format",
-    "bitrate": "Bitrate: {n} kbps",
-    "start": "START TRANSCODING",
-    "log": "Log",
-    "logEmpty": "TRANSCODING LOG WILL APPEAR HERE…",
-    "selectFirst": "Select a file first",
-    "loadingWasm": "Loading FFmpeg WASM…",
-    "done": "Done! Download started.",
-    "failed": "Transcoding failed",
-    "description": "In-browser ffmpeg.wasm — files never leave your machine",
-    "hint": "Select file → Pick format → Download"
-  },
   "player": {
     "noTrack": "NO TRACK LOADED",
     "selectSong": "Select a song in the library",
@@ -364,31 +356,6 @@
       "updateFailed": "Failed to update {key}",
       "copyFailed": "Copy failed",
       "levelRequired": "Level 3 required",
-      "transcode": {
-        "title": "Transcoder",
-        "engine": "Engine",
-        "engineDesc": "Backend that actually runs ffmpeg. Set to disabled to turn transcoding off entirely.",
-        "engineDisabled": "Disabled",
-        "engineSandbox": "Sandbox (Cloudflare container)",
-        "engineExternal": "External container",
-        "engineBrowserPool": "Browser pool",
-        "mode": "Mode",
-        "modeDesc": "on_demand transcodes on /stream; pre_bake at upload; both combines.",
-        "modeOnDemand": "On-Demand",
-        "modePreBake": "Pre-bake",
-        "modeBoth": "Both",
-        "profiles": "Default Profiles",
-        "profilesDesc": "Targets used for pre-bake (pre_bake / both modes).",
-        "externalUrl": "External Transcoder URL",
-        "externalUrlPlaceholder": "https://transcoder.example.com",
-        "externalKey": "External Transcoder Shared Key",
-        "externalKeySet": "SET",
-        "externalKeyUnset": "UNSET",
-        "externalKeyPlaceholder": "Paste the openssl rand -hex 32 secret",
-        "save": "Save",
-        "saved": "Saved",
-        "saveFailed": "Save failed"
-      },
       "scrape": {
         "title": "Metadata Scrape Sources",
         "desc": "Pick which external providers the editor's Scrape button queries, and in what order. Direct browser requests usually fail CORS; all sources route through the Worker proxy.",
@@ -649,8 +616,15 @@
     "scanning": "Scanning…",
     "scanDone": "Scan complete: {found} files found, {added} added",
     "scanFailed": "Scan failed",
+    "mode": {
+      "label": "Mode",
+      "library": "Library (index on scan)",
+      "syncOnly": "SYNC ONLY",
+      "hint": "Sync-only sources are not indexed into the library; use as cross-source copy targets."
+    },
     "scanStatus": {
       "idle": "Scan",
+      "rescan": "Rescan",
       "running": "Scanning ({scanned} / {total})",
       "runningUnknown": "Scanning…",
       "completed": "Done · {total} files · {relative}",

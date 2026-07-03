@@ -226,24 +226,50 @@ export function useAuth() {
     return JSON.parse(await tagPost("submit", { instanceId, tags }));
   }
 
-  async function uploadFile(file: File, target: string, path?: string, masterId?: string): Promise<string> {
+  // 089/S4 — XHR-based upload exposes onProgress for per-file progress bars.
+  // Auth is via signedParams() query string (same as all other storage calls).
+  async function uploadFile(
+    file: File,
+    target: string,
+    path?: string,
+    opts?: { masterId?: string; onProgress?: (loaded: number, total: number) => void },
+  ): Promise<string> {
     const qs = signedParams();
     qs.set("name", file.name);
     qs.set("source", target);
     if (path) qs.set("path", path);
-    if (masterId) qs.set("master_id", masterId);
-
+    if (opts?.masterId) qs.set("master_id", opts.masterId);
     // 055 — moved from /rest/files/upload to /storage/files/upload
-    const resp = await fetch(`${STORAGE_BASE}/files/upload?${qs.toString()}`, {
-      method: "POST",
-      headers: { "Content-Type": file.type || "application/octet-stream" },
-      body: file,
+    return new Promise<string>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", `${STORAGE_BASE}/files/upload?${qs.toString()}`);
+      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      if (opts?.onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) opts.onProgress!(e.loaded, e.total);
+        };
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+        else reject(new Error(`Upload failed: ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error("Upload network error"));
+      xhr.send(file);
     });
-    return resp.text();
+  }
+
+  // 089/S4 — Cross-source copy: POST /storage/files/crossCopy with JSON body.
+  // Throws with the backend error message when ok:false so callers can surface it.
+  interface CrossCopyResult { ok: boolean; destUri?: string; error?: string; }
+  async function crossCopy(srcUri: string, destSource: string, destPath: string): Promise<CrossCopyResult> {
+    const text = await storagePost("files/crossCopy", { srcUri, destSource, destPath });
+    const data: CrossCopyResult = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "Cross-copy failed");
+    return data;
   }
 
   return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
-    login, logout, authFetch, authPost, uploadFile, makeSalt, md5,
+    login, logout, authFetch, authPost, uploadFile, crossCopy, makeSalt, md5,
     tagFetch, tagPost, storageFetch, storagePost, edgesonicFetch, edgesonicPost,
     readTags, writeTags, batchWriteTags, submitMetadata, tidyFolder,
     signedParams, restUrl, streamUrl, coverArtUrl };

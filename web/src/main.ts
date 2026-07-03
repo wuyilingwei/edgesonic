@@ -25,8 +25,6 @@ import Sources from "./views/Sources.vue";
 import Files from "./views/Files.vue";
 import Users from "./views/Users.vue";
 import Settings from "./views/Settings.vue";
-import Transcoder from "./views/Transcoder.vue";
-
 const routes = [
   { path: "/login", component: Login, meta: { title: "Login", public: true } },
   { path: "/", component: Dashboard, meta: { title: "Dashboard" } },
@@ -37,7 +35,6 @@ const routes = [
   // Permissions matrix now lives inside Settings; keep the old route working.
   { path: "/permissions", redirect: "/settings" },
   { path: "/settings", component: Settings, meta: { title: "Settings" } },
-  { path: "/transcoder", component: Transcoder, meta: { title: "Transcoder" } },
   // 062 — Internet Radio management. Lazy-loaded; view is rarely needed by
   // non-admin users so we keep it out of the main chunk.
   { path: "/radio", component: () => import("./views/Radio.vue"), meta: { title: "Radio" } },
@@ -93,9 +90,18 @@ async function checkVersion() {
   }
 }
 
+// P6 — save the interval handle so it is GC-eligible; skip the request
+// whenever the tab is hidden (document.hidden) to avoid network noise while
+// the user has EdgeSonic open in a background tab.
+let versionPollIntervalId: ReturnType<typeof setInterval> | null = null;
+
 setTimeout(() => {
   void checkVersion();
-  setInterval(() => {
+  versionPollIntervalId = setInterval(() => {
+    if (document.hidden) return; // tab not visible — skip, retry next tick
     void checkVersion();
   }, VERSION_POLL_INTERVAL_MS);
 }, VERSION_FIRST_PROBE_DELAY_MS);
+
+// Export the handle so HMR / test teardown can clear it if needed.
+export { versionPollIntervalId };

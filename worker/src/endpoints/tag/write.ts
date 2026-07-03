@@ -308,9 +308,9 @@ function cleanInput(t: SongTags): SongTags {
   const track = Number(t.track), year = Number(t.year);
   if (Number.isInteger(track) && track > 0) out.track = track;
   if (Number.isInteger(year) && year > 0) out.year = year;
-  // 036 — lyrics: trim, cap, drop silently if oversized so a single bad payload
-  // doesn't poison a batch. File-level write-back (USLT / VORBIS LYRICS) is
-  // deferred to 042; this path is D1-only for v1.
+  // 036/089 — lyrics: trim, cap, drop silently if oversized. File-level write-back
+  // (USLT / VORBIS LYRICS) is handled via rewriteInstance when the instance is
+  // mp3/flac and the source is writable (r2/webdav). D1 sync is always kept.
   if (typeof t.lyrics === "string") {
     const trimmed = t.lyrics.trim();
     if (trimmed.length > 0 && trimmed.length <= MAX_LYRICS_BYTES) {

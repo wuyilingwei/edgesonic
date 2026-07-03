@@ -46,6 +46,8 @@ interface Source {
   // blob; false for legacy plaintext or rows where the password column itself
   // is empty (e.g. r2 / url sources, which never had a password).
   encrypted: boolean;
+  // P4 — library=扫描时入库; sync_only=仅作复制/同步目标，扫描不入库
+  mode: "library" | "sync_only";
   // 060 — Last scan_jobs row snapshot for this source. Populated by
   // pollScanStatus() so the action column can render idle/running/completed/
   // failed without an extra round-trip per row.
@@ -59,8 +61,10 @@ interface Source {
 }
 
 const sources = ref<Source[]>([]);
+// P3 — loading guard for initial fetch
+const loading = ref(false);
 const showForm = ref(false);
-const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "" });
+const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "", mode: "library" });
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
@@ -76,7 +80,8 @@ const HISTORY_CAP = 5;
 const scanHistory = ref<Record<string, ScanJobSnapshot[]>>({});
 const expandedSources = ref<Set<string>>(new Set());
 const pollHandle = ref<number | null>(null);
-const POLL_INTERVAL_MS = 3000;
+// P6: reduced from 3000ms — less aggressive polling
+const POLL_INTERVAL_MS = 8000;
 const STATUS_LAUNCHING = "__launching__"; // placeholder while scan/start hasn't yet returned
 const launching = ref<Set<string>>(new Set());
 
@@ -170,13 +175,25 @@ function stopPolling() {
   }
 }
 
+// P6 — pause polling when tab hidden, resume when visible
+function handleVisibilityChange() {
+  if (document.hidden) {
+    stopPolling();
+  } else {
+    if (anyRunning.value) {
+      pollScanStatus();
+      startPolling();
+    }
+  }
+}
+
 // === Edit modal ===
 const editing = ref<Source | null>(null);
-const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true });
+const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only" });
 
 function openEdit(s: Source) {
   editing.value = s;
-  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled };
+  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled, mode: s.mode };
 }
 function closeEdit() { editing.value = null; }
 
@@ -190,6 +207,7 @@ async function saveEdit() {
   if (editForm.value.password) body.password = editForm.value.password;
   if (editForm.value.root_path !== s.rootPath) body.root_path = editForm.value.root_path;
   if (editForm.value.enabled !== s.enabled) body.enabled = editForm.value.enabled ? 1 : 0;
+  if (editForm.value.mode !== s.mode) body.mode = editForm.value.mode;
   try {
     const xml = await storagePost("sources/update", body);
     if (/status="failed"/.test(xml)) throw new Error("update failed");
@@ -198,6 +216,8 @@ async function saveEdit() {
 }
 
 async function load() {
+  // P3: show loading spinner on initial fetch (skip if sources already loaded)
+  if (!sources.value.length) loading.value = true;
   try {
     const xml = await storageFetch("sources/list");
     const prevById = new Map(sources.value.map((s) => [s.id, s]));
@@ -216,6 +236,8 @@ async function load() {
         // 068 — sources/list emits encrypted="true"|"false". Only webdav /
         // subsonic rows ever flip to true; r2 / url stay false.
         encrypted: s.encrypted === "true",
+        // P4 — mode defaults to "library" when attribute is absent
+        mode: (s.mode === "sync_only" ? "sync_only" : "library") as "library" | "sync_only",
         scanStatus: prev?.scanStatus ?? "idle",
         scanJobId: prev?.scanJobId ?? null,
         scanTotal: prev?.scanTotal ?? 0,
@@ -225,7 +247,9 @@ async function load() {
         scanError: prev?.scanError ?? null,
       };
     });
-  } catch { sources.value = []; }
+  } catch { sources.value = []; } finally {
+    loading.value = false;
+  }
 }
 
 async function addSource() {
@@ -252,7 +276,7 @@ async function scanSource(s: Source, force = false) {
   // would otherwise return instantly and feel like the button did nothing.
   launching.value.add(s.id);
   // Optimistically mark the row as running so the badge updates without
-  // waiting for the next 3s tick.
+  // waiting for the next poll tick.
   sources.value = sources.value.map((x) => x.id === s.id
     ? { ...x, scanStatus: "running" as ScanState, scanScanned: 0, scanTotal: 0, scanError: null }
     : x);
@@ -360,9 +384,14 @@ onMounted(async () => {
   await load();
   await pollScanStatus();
   if (anyRunning.value) startPolling();
+  // P6: pause/resume polling on tab visibility changes
+  document.addEventListener("visibilitychange", handleVisibilityChange);
 });
 
-onUnmounted(stopPolling);
+onUnmounted(() => {
+  stopPolling();
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+});
 </script>
 
 <template>
@@ -387,9 +416,10 @@ onUnmounted(stopPolling);
       </div>
     </div>
 
-    <div v-if="showForm" class="card" style="margin-bottom:1.25rem; max-width:500px">
+    <!-- P5: use class instead of inline style; width matches grid columns -->
+    <div v-if="showForm" class="card source-form">
       <div class="card-header"><span class="card-title">{{ t("sources.newSource") }}</span></div>
-      <div style="display:flex; flex-direction:column; gap:0.8rem">
+      <div class="form-stack">
         <div class="form-group">
           <label class="form-label">{{ t("sources.type") }}</label>
           <select v-model="form.type" class="form-select"><option value="webdav">WebDAV</option><option value="subsonic">Subsonic</option></select>
@@ -403,30 +433,43 @@ onUnmounted(stopPolling);
           <input v-model="form.root_path" class="form-input" placeholder="/music" />
           <span class="field-hint">{{ t("sources.rootPathHint") }}</span>
         </div>
+        <!-- P4: mode selector -->
+        <div class="form-group">
+          <label class="form-label">{{ t("sources.mode.label") }}</label>
+          <select v-model="form.mode" class="form-select">
+            <option value="library">{{ t("sources.mode.library") }}</option>
+            <option value="sync_only">{{ t("sources.mode.syncOnly") }}</option>
+          </select>
+          <span class="field-hint">{{ t("sources.mode.hint") }}</span>
+        </div>
         <button class="btn-primary" @click="addSource">{{ t("sources.save") }}</button>
       </div>
       <div class="corner corner-tl"></div>
       <div class="corner corner-br"></div>
     </div>
 
-    <div class="grid grid-2">
+    <!-- P3: loading state -->
+    <div v-if="loading" class="loading-state">{{ t("common.loading") }}</div>
+    <div v-else class="grid grid-2">
       <div v-for="s in sources" :key="s.id" class="card hoverable source-card">
-        <!-- Top row: type badge (left) + enabled + actions (right) -->
+        <!-- Top row: type badge (left) + badges + actions (right) -->
         <div class="source-header">
           <span class="status-badge info">{{ s.type.toUpperCase() }}</span>
+          <!-- P5: split into stable badge group + action group -->
           <div class="source-right">
-            <!-- 068 — encrypted/plaintext badge. Only meaningful for
-                 webdav / subsonic since r2 / url never had a password to
-                 begin with; hide it for those types so the row stays tidy. -->
-            <span
-              v-if="(s.type === 'webdav' || s.type === 'subsonic') && isAdmin"
-              :class="['status-badge', s.encrypted ? 'success' : 'warn']"
-              :title="s.encrypted ? t('sources.passwordEncryptedHint') : t('sources.passwordPlaintextHint')"
-            >{{ s.encrypted ? t("sources.passwordEncrypted") : t("sources.passwordPlaintext") }}</span>
-            <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
-            <template v-if="isAdmin">
-              <!-- 060: scan action column -->
-              <template v-if="s.type === 'webdav'">
+            <!-- Badge row -->
+            <div class="source-badges">
+              <!-- 068 — encrypted/plaintext badge -->
+              <span
+                v-if="(s.type === 'webdav' || s.type === 'subsonic') && isAdmin"
+                :class="['status-badge', s.encrypted ? 'success' : 'warn']"
+                :title="s.encrypted ? t('sources.passwordEncryptedHint') : t('sources.passwordPlaintextHint')"
+              >{{ s.encrypted ? t("sources.passwordEncrypted") : t("sources.passwordPlaintext") }}</span>
+              <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
+              <!-- P4: mode badge — only shown for sync_only, library is the default/silent state -->
+              <span v-if="s.mode === 'sync_only'" class="status-badge mode-sync" :title="t('sources.mode.hint')">{{ t("sources.mode.syncOnly") }}</span>
+              <!-- 060: scan status pill (display only — buttons are in source-actions below) -->
+              <template v-if="isAdmin && s.type === 'webdav'">
                 <span v-if="s.scanStatus === 'running'" class="scan-pill scan-pill-running" :title="t('sources.scanStatus.progress')">
                   <span class="scan-spinner" aria-hidden="true"></span>
                   <span class="scan-pill-text">{{ statusLabel(s) }}</span>
@@ -434,18 +477,28 @@ onUnmounted(stopPolling);
                 <span v-else-if="s.scanStatus === 'completed'" class="scan-pill scan-pill-completed" :title="t('sources.scanStatus.completed', { total: s.scanTotal, relative: relativeTime(s.scanEndedAt || s.scanStartedAt) })">
                   <span class="scan-icon" aria-hidden="true">✓</span>
                   <span class="scan-pill-text">{{ statusLabel(s) }}</span>
-                  <button class="btn-secondary btn-sm" :title="t('sources.scanStatus.forceHint')" @click="scanSource(s, $event.shiftKey)">{{ t("sources.scanStatus.idle") }}</button>
                 </span>
                 <span v-else-if="s.scanStatus === 'failed'" class="scan-pill scan-pill-failed" :title="s.scanError || ''">
                   <span class="scan-icon" aria-hidden="true">✗</span>
                   <span class="scan-pill-text">{{ s.scanError ? `${t('sources.scanStatus.failed')} — ${s.scanError}` : t("sources.scanStatus.failed") }}</span>
-                  <button class="btn-primary btn-sm" :title="t('sources.scanStatus.forceHint')" @click="scanSource(s, $event.shiftKey)">{{ t("sources.scanStatus.retry") }}</button>
                 </span>
-                <button v-else class="btn-primary btn-sm" :title="t('sources.scanStatus.forceHint')" @click="scanSource(s, $event.shiftKey)">{{ t("sources.scanStatus.idle") }}</button>
+              </template>
+            </div>
+            <!-- Action row -->
+            <div v-if="isAdmin" class="source-actions">
+              <!-- P5/P10: scan buttons moved out of pill; rescan has own i18n key -->
+              <template v-if="s.type === 'webdav' && s.scanStatus !== 'running'">
+                <button
+                  :class="s.scanStatus === 'idle' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'"
+                  :title="t('sources.scanStatus.forceHint')"
+                  @click="scanSource(s, $event.shiftKey)"
+                >
+                  {{ s.scanStatus === 'completed' ? t('sources.scanStatus.rescan') : s.scanStatus === 'failed' ? t('sources.scanStatus.retry') : t('sources.scanStatus.idle') }}
+                </button>
               </template>
               <button class="btn-secondary btn-sm" @click="openEdit(s)">{{ t("common.edit") }}</button>
               <button class="btn-danger btn-sm" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
-            </template>
+            </div>
           </div>
         </div>
         <!-- Alias / display name -->
@@ -494,6 +547,7 @@ onUnmounted(stopPolling);
         <div class="corner corner-tr"></div>
         <div class="corner corner-bl"></div>
       </div>
+      <!-- P3: empty state only shown after loading completes -->
       <div v-if="!sources.length" class="empty-state" style="grid-column:1/-1">
         <div class="empty-state-icon">◌</div><div>{{ t("sources.empty") }}</div>
       </div>
@@ -503,7 +557,7 @@ onUnmounted(stopPolling);
     <div v-if="editing" class="modal-backdrop" @click.self="closeEdit">
       <div class="modal">
         <div class="modal-title">{{ t("sources.editSource") }}</div>
-        <div style="display:flex; flex-direction:column; gap:0.8rem">
+        <div class="form-stack">
           <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="editForm.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
           <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="editForm.base_url" class="form-input" placeholder="https://..." /></div>
           <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="editForm.username" class="form-input" /></div>
@@ -516,8 +570,17 @@ onUnmounted(stopPolling);
             <input v-model="editForm.root_path" class="form-input" placeholder="/music" />
             <span class="field-hint">{{ t("sources.rootPathHint") }}</span>
           </div>
+          <!-- P4: mode selector in edit modal -->
+          <div class="form-group">
+            <label class="form-label">{{ t("sources.mode.label") }}</label>
+            <select v-model="editForm.mode" class="form-select">
+              <option value="library">{{ t("sources.mode.library") }}</option>
+              <option value="sync_only">{{ t("sources.mode.syncOnly") }}</option>
+            </select>
+            <span class="field-hint">{{ t("sources.mode.hint") }}</span>
+          </div>
           <div class="form-group enabled-row">
-            <label class="form-label" style="margin-bottom:0">{{ t("sources.enabled") }}</label>
+            <label class="form-label enabled-label">{{ t("sources.enabled") }}</label>
             <label class="toggle">
               <input type="checkbox" v-model="editForm.enabled" />
               <span class="toggle-slider"></span>
@@ -540,6 +603,7 @@ onUnmounted(stopPolling);
 <style scoped>
 .page { max-width: 1000px; }
 .page-header-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
 /* 068 — yellow caution variant for the plaintext badge. status-badge already
    provides success/error/info; warn is added inline so we don't have to
    touch palette.css for this task. */
@@ -548,9 +612,74 @@ onUnmounted(stopPolling);
   color: #facc15;
   border-color: rgba(234, 179, 8, 0.45);
 }
+
+/* P4: purple variant for sync_only mode badge */
+.status-badge.mode-sync {
+  background: rgba(139, 92, 246, 0.15);
+  color: #a78bfa;
+  border-color: rgba(139, 92, 246, 0.4);
+}
+
+/* P3: loading placeholder */
+.loading-state {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.1em;
+  color: var(--color-text-muted);
+  padding: 2.5rem 0;
+  text-align: center;
+}
+
+/* P5: form card — width aligned with grid-2 column max */
+.source-form {
+  margin-bottom: 1.25rem;
+  max-width: 560px;
+}
+
+/* P5: form vertical stack — replaces repeated inline style */
+.form-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
 .source-card { display: flex; flex-direction: column; gap: 0.55rem; }
-.source-header { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
-.source-right { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }
+
+/* P5: allow the header to wrap gracefully on narrow cards */
+.source-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+/* P5: right side of header — two stable rows (badges | actions) */
+.source-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+/* Badge group: encrypted + enabled + mode + scan-pill */
+.source-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Action group: scan/rescan/retry + edit + delete */
+.source-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .source-name {
   font-size: var(--fs-base);
   font-weight: 600;
@@ -563,13 +692,19 @@ onUnmounted(stopPolling);
   color: var(--color-accent-primary);
   word-break: break-all;
 }
+
+/* P5: tighter row-gap so wrapped lines don't have uneven spacing */
 .source-meta {
-  display: flex; gap: 1rem; flex-wrap: wrap;
+  display: flex;
+  column-gap: 1rem;
+  row-gap: 0.3rem;
+  flex-wrap: wrap;
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
   letter-spacing: 0.08em;
   color: var(--color-text-secondary);
 }
+
 .text-muted { color: var(--color-text-muted); }
 .field-hint {
   display: block;
@@ -578,7 +713,10 @@ onUnmounted(stopPolling);
   font-size: var(--fs-xs);
   color: var(--color-text-muted);
 }
+
 .enabled-row { display: flex; align-items: center; gap: 0.8rem; }
+/* P5: remove inline style="margin-bottom:0" from label inside enabled-row */
+.enabled-label { margin-bottom: 0; }
 
 /* 060 — scan status pill (running/completed/failed) */
 .scan-pill {
@@ -592,8 +730,15 @@ onUnmounted(stopPolling);
   letter-spacing: 0.05em;
   border: 1px solid var(--color-border, rgba(255,255,255,0.12));
   background: rgba(255, 255, 255, 0.03);
+  /* P5: cap pill width so long error text doesn't stretch the card */
+  max-width: 240px;
+  overflow: hidden;
 }
-.scan-pill-text { white-space: nowrap; }
+.scan-pill-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .scan-pill-running {
   color: var(--color-accent-primary);
   border-color: var(--color-accent-primary);
@@ -606,7 +751,7 @@ onUnmounted(stopPolling);
   color: var(--color-error, #f87171);
   border-color: rgba(248, 113, 113, 0.4);
 }
-.scan-icon { font-weight: 700; }
+.scan-icon { font-weight: 700; flex-shrink: 0; }
 .scan-spinner {
   display: inline-block;
   width: 0.85em;
@@ -615,6 +760,7 @@ onUnmounted(stopPolling);
   border: 2px solid currentColor;
   border-top-color: transparent;
   animation: scanSpin 0.85s linear infinite;
+  flex-shrink: 0;
 }
 @keyframes scanSpin {
   to { transform: rotate(360deg); }

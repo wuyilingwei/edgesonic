@@ -17,6 +17,19 @@ import type { StorageAdapter, StreamResult } from "./index";
 
 export function createR2Adapter(bucket: R2Bucket): StorageAdapter {
   return {
+    // 089 S2 — Write a new object into the R2 bucket. The URI must be
+    // `r2://<key>` where <key> is the full object key (e.g. `music/album/track.mp3`).
+    async put(
+      uri: string,
+      body: ReadableStream<Uint8Array> | ArrayBuffer | Uint8Array,
+      contentType?: string,
+    ): Promise<void> {
+      const key = uri.substring("r2://".length);
+      await bucket.put(key, body, {
+        httpMetadata: { contentType: contentType || "application/octet-stream" },
+      });
+    },
+
     async stream(uri: string, range?: string): Promise<StreamResult> {
       const key = uri.substring("r2://".length);
 

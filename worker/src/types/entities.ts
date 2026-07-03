@@ -122,11 +122,19 @@ export interface SubsonicCredential {
 export interface StorageSource {
   id: string;
   type: string;
+  // 005 — human-readable label
+  name?: string | null;
   base_url: string;
   username: string | null;
   password: string | null;
+  // 023 — AES-256-GCM encrypted password blob (`v1:<base64url>`)
+  password_encrypted?: string | null;
+  // 0003 — path prefix inside the remote
+  root_path?: string | null;
   last_sync: number | null;
   enabled: number;
+  // 026 — scan mode: 'library' (default) | 'sync_only' (scan but skip DB inserts)
+  mode: string;
   created_at: number;
   updated_at: number;
 }

@@ -24,7 +24,7 @@ import type { ScrapeResult } from "../lib/scrape";
 import { extractMetadata, isBrowserParse, suffixOf } from "../lib/metadata";
 
 const { t } = useI18n();
-const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, edgesonicPost, uploadFile, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
+const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, edgesonicPost, uploadFile, crossCopy, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
 // 056 — Worker pool surface: progress / speed / pause / recent chips.
 const workerPool = useWorkerPool();
 
@@ -42,13 +42,22 @@ const dirs = ref<DirEntry[]>([]);
 const files = ref<FileEntry[]>([]);
 const loading = ref(false);
 
-// Upload state
+// Upload state — 089/S4: batch upload queue + per-file progress
 const showUpload = ref(false);
-const uploadFileRef = ref<File | null>(null);
 const uploadInput = ref<HTMLInputElement | null>(null);
+const uploadQueue = ref<File[]>([]);
+const uploadProgressList = ref<number[]>([]); // 0-100 per file; -1 = failed
+const uploadDoneCount = ref(0);
+const uploadFailedNames = ref<string[]>([]);
 const uploadBusy = ref(false);
 const uploadMsg = ref("");
 const uploadErr = ref(false);
+
+// Cross-source copy state — 089/S4
+const crossCopyModal = ref<{ file: FileEntry } | null>(null);
+const crossCopyDestSource = ref("r2");
+const crossCopyDestPath = ref("");
+const crossCopyBusy = ref(false);
 
 // Tag scan state
 const scanning = ref(false);
@@ -211,29 +220,76 @@ function goCrumb(index: number) {
   loadDir();
 }
 
+// 089/S4 — collect all selected files into the queue (multiple allowed)
 function onUploadFile(e: Event) {
   const target = e.target as HTMLInputElement;
-  if (target.files?.length) uploadFileRef.value = target.files[0];
+  if (target.files?.length) uploadQueue.value = Array.from(target.files);
 }
 
+// 089/S4 — serial upload loop: each file reports progress; single failure never
+// aborts the rest; a summary toast is shown after the full queue drains.
 async function doUpload() {
-  if (!uploadFileRef.value) { uploadMsg.value = t("files.selectFileFirst"); uploadErr.value = true; return; }
+  if (!uploadQueue.value.length) { uploadMsg.value = t("files.selectFileFirst"); uploadErr.value = true; return; }
   uploadBusy.value = true;
-  uploadMsg.value = t("files.uploading");
   uploadErr.value = false;
+  uploadDoneCount.value = 0;
+  uploadFailedNames.value = [];
+  uploadProgressList.value = uploadQueue.value.map(() => 0);
+  const total = uploadQueue.value.length;
   try {
-    await uploadFile(uploadFileRef.value, uploadTarget.value, path.value || undefined);
-    showToast(t("files.uploaded"));
-    uploadFileRef.value = null;
-    if (uploadInput.value) uploadInput.value.value = "";
-    uploadMsg.value = "";
+    for (let i = 0; i < total; i++) {
+      const file = uploadQueue.value[i];
+      uploadMsg.value = t("files.uploadingFile", { current: i + 1, total });
+      try {
+        await uploadFile(file, uploadTarget.value, path.value || undefined, {
+          onProgress: (loaded, size) => {
+            uploadProgressList.value[i] = size > 0 ? Math.round((loaded / size) * 100) : 0;
+          },
+        });
+        uploadProgressList.value[i] = 100;
+        uploadDoneCount.value++;
+      } catch {
+        uploadProgressList.value[i] = -1;
+        uploadFailedNames.value.push(file.name);
+      }
+    }
+    if (uploadFailedNames.value.length === 0) {
+      showToast(t("files.uploadDone", { n: total }));
+      uploadMsg.value = "";
+    } else {
+      uploadMsg.value = t("files.uploadPartialFail", { done: uploadDoneCount.value, failed: uploadFailedNames.value.length });
+      uploadErr.value = true;
+      showToast(uploadMsg.value, "error");
+    }
     loadDir();
-  } catch {
-    uploadMsg.value = t("files.uploadFailed");
-    uploadErr.value = true;
-    showToast(t("files.uploadFailed"), "error");
   } finally {
     uploadBusy.value = false;
+    uploadQueue.value = [];
+    uploadProgressList.value = [];
+    if (uploadInput.value) uploadInput.value.value = "";
+  }
+}
+
+// 089/S4 — Cross-source copy helpers
+function openCrossModal(f: FileEntry) {
+  crossCopyModal.value = { file: f };
+  crossCopyDestSource.value = "r2";
+  crossCopyDestPath.value = path.value;
+}
+function closeCrossModal() { crossCopyModal.value = null; }
+
+async function confirmCrossOp() {
+  if (!crossCopyModal.value) return;
+  const { file } = crossCopyModal.value;
+  crossCopyBusy.value = true;
+  try {
+    await crossCopy(file.uri, crossCopyDestSource.value, crossCopyDestPath.value);
+    showToast(t("files.crossCopied"));
+    closeCrossModal();
+  } catch (e) {
+    showToast(e instanceof Error ? e.message : t("files.crossCopyFailed"), "error");
+  } finally {
+    crossCopyBusy.value = false;
   }
 }
 
@@ -881,11 +937,27 @@ watch(pendingCount, () => scheduleAutoDrain());
         </div>
         <div class="form-group" style="flex:2">
           <label class="form-label">{{ t("files.file") }}</label>
-          <input ref="uploadInput" type="file" accept="audio/*" class="form-input" @change="onUploadFile" />
+          <input ref="uploadInput" type="file" multiple accept="audio/*" class="form-input" @change="onUploadFile" />
         </div>
-        <button class="btn-primary" :disabled="!uploadFileRef || uploadBusy" @click="doUpload">{{ t("files.uploadBtn") }}</button>
+        <button class="btn-primary" :disabled="!uploadQueue.length || uploadBusy" @click="doUpload">{{ t("files.uploadBtn") }}</button>
       </div>
-      <p v-if="uploadMsg" :class="['upload-msg', { error: uploadErr }]">{{ uploadMsg }}</p>
+      <!-- 089/S4: Upload queue list with per-file progress bars -->
+      <div v-if="uploadQueue.length || uploadBusy" class="upload-queue">
+        <div class="mono-label upload-queue-header">{{ t("files.uploadQueue") }}</div>
+        <div v-for="(file, i) in uploadQueue" :key="i" class="upload-queue-item">
+          <span class="upload-queue-name">{{ file.name }}</span>
+          <div class="upload-queue-bar">
+            <div
+              class="upload-queue-fill"
+              :class="{ 'fill-error': uploadProgressList[i] === -1 }"
+              :style="{ width: Math.max(0, uploadProgressList[i] ?? 0) + '%' }"
+            ></div>
+          </div>
+          <span class="upload-queue-pct">{{ uploadProgressList[i] === -1 ? '✕' : (uploadProgressList[i] ?? 0) + '%' }}</span>
+        </div>
+        <div v-if="uploadBusy" class="upload-queue-overall">{{ uploadMsg }}</div>
+      </div>
+      <p v-if="uploadMsg && !uploadBusy" :class="['upload-msg', { error: uploadErr }]">{{ uploadMsg }}</p>
       <div class="corner corner-tl"></div>
       <div class="corner corner-br"></div>
     </div>
@@ -931,6 +1003,13 @@ watch(pendingCount, () => scheduleAutoDrain());
                 :title="t('files.editTags')"
                 @click.stop="openTagEditor(f)"
               >♪</button>
+              <!-- Cross-source copy (all sources, canUpload) — 089/S4b -->
+              <button
+                v-if="canUpload"
+                class="op-btn op-cross"
+                :title="t('files.crossCopyTo')"
+                @click.stop="openCrossModal(f)"
+              >⧉</button>
               <!-- R2-only operations -->
               <template v-if="isR2 && canUpload">
                 <button class="op-btn op-rename" :title="t('files.rename')" @click.stop="startRename(f)">✎</button>
@@ -959,6 +1038,30 @@ watch(pendingCount, () => scheduleAutoDrain());
         <div class="modal-actions">
           <button class="btn-secondary" @click="closeOpModal">{{ t("common.cancel") }}</button>
           <button class="btn-primary" :disabled="opBusy" @click="confirmOp">{{ opModal.mode === "move" ? t("files.move") : t("files.copy") }}</button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
+      </div>
+    </div>
+
+    <!-- Cross-source copy modal — 089/S4b -->
+    <div v-if="crossCopyModal" class="modal-backdrop" @click.self="closeCrossModal">
+      <div class="modal">
+        <div class="modal-title">{{ t("files.crossCopyTitle") }}: {{ crossCopyModal.file.name }}</div>
+        <div class="form-group" style="margin-top:0.75rem">
+          <label class="form-label">{{ t("files.source") }}</label>
+          <select v-model="crossCopyDestSource" class="form-input">
+            <option value="r2">{{ t("files.localR2") }}</option>
+            <option v-for="s in sources" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-top:0.75rem">
+          <label class="form-label">{{ t("files.crossCopyPath") }}</label>
+          <input v-model="crossCopyDestPath" class="form-input" :placeholder="path" @keydown.enter="confirmCrossOp" @keydown.escape="closeCrossModal" />
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="closeCrossModal">{{ t("common.cancel") }}</button>
+          <button class="btn-primary" :disabled="crossCopyBusy" @click="confirmCrossOp">{{ t("files.crossCopyBtn") }}</button>
         </div>
         <div class="corner corner-tl"></div>
         <div class="corner corner-br"></div>
@@ -1171,7 +1274,7 @@ watch(pendingCount, () => scheduleAutoDrain());
   font-size: var(--fs-xs);
   cursor: pointer;
   color: var(--color-text-muted);
-  opacity: 0;
+  opacity: 0.55;
   transition: all 0.1s;
   line-height: 1.4;
 }

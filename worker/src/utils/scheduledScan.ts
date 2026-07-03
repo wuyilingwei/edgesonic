@@ -44,6 +44,8 @@ interface SourceRow {
   // 068 — encrypted column also pulled so asyncScanSource can decrypt via env.
   password_encrypted: string | null;
   root_path: string | null;
+  // 089 S2 — 'library' (default) | 'sync_only' (scan but skip DB inserts)
+  mode?: string | null;
 }
 
 const LAST_RUN_KV_KEY = "cron:last_scan_ts";
@@ -73,7 +75,7 @@ export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Pr
   // ------------------------------------------------------------------
   const db = env.DB;
   const sources = (await db.prepare(
-    `SELECT id, base_url, username, password, password_encrypted, root_path FROM storage_sources
+    `SELECT id, base_url, username, password, password_encrypted, root_path, mode FROM storage_sources
      WHERE type = 'webdav' AND enabled = 1`,
   ).all<SourceRow>()).results;
   if (!sources.length) return;
