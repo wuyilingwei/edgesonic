@@ -8,7 +8,7 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "db:migrate:local": "wrangler d1 execute edgesonic-db --local --file",
-    "db:migrate:remote": "wrangler d1 execute edgesonic-db --file",
+    "db:migrate:remote": "wrangler d1 execute edgesonic-db --remote --file",
     "db:seed": "npx tsx scripts/seed.ts"
   },
   "repository": {
