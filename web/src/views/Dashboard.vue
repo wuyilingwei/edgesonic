@@ -56,7 +56,11 @@ const resetFailedBusy = ref(false);
 const reclaimBusy = ref(false);
 const activityToast = ref<string>("");
 let activityTimer: number | null = null;
-const POLL_INTERVAL_MS = 30_000;
+// 089 — adaptive activity polling. When there's live work (queued/claimed) or a
+// running scan we refresh briskly; when idle we back off ~4x so an open-but-idle
+// Dashboard tab stops hammering /work/status + /scan/status every 30s.
+const ACTIVE_POLL_MS = 30_000;
+const IDLE_POLL_MS = 120_000;
 
 // Denominator for "metadata progress": everything except canceled (the user
 // cancelled it, it's not "work in flight" anymore). We don't divide by
@@ -139,15 +143,33 @@ async function refreshActivity() {
   await Promise.all([loadWorkStatus(), loadScanStatus()]);
 }
 
+// True while there's something worth watching closely: in-flight work or a
+// running scan. Drives the adaptive poll cadence below.
+const activityActive = computed(() =>
+  workCounts.value.queued + workCounts.value.claimed > 0 ||
+  scanSources.value.some((s) => s.status === "running"),
+);
+
 function startActivityPolling() {
   if (!isSuperAdmin.value) return;
+  scheduleNextActivityPoll();
+}
+
+// Self-scheduling timer (not a fixed setInterval) so each tick picks its delay
+// from the current activity state — brisk when busy, relaxed when idle.
+function scheduleNextActivityPoll() {
   if (activityTimer !== null) return;
-  activityTimer = window.setInterval(() => { void refreshActivity(); }, POLL_INTERVAL_MS);
+  const delay = activityActive.value ? ACTIVE_POLL_MS : IDLE_POLL_MS;
+  activityTimer = window.setTimeout(async () => {
+    activityTimer = null;
+    await refreshActivity();
+    scheduleNextActivityPoll();
+  }, delay);
 }
 
 function stopActivityPolling() {
   if (activityTimer !== null) {
-    window.clearInterval(activityTimer);
+    window.clearTimeout(activityTimer);
     activityTimer = null;
   }
 }
