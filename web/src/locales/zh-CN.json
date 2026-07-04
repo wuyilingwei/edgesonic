@@ -73,6 +73,11 @@
       "unconfiguredTitle": "Cloudflare API 未配置",
       "unconfiguredMessage": "当前未设置 CF_API_TOKEN / CF_ACCOUNT_ID，无法读取或修改 cron 调度。这并不影响已有功能，但在升级部署后无法一键恢复 cron，建议在 Settings 中完成配置。"
     },
+    "r2Presign": {
+      "title": "R2 流走 Worker 代理",
+      "message": "未启用 R2 预签名直连（enable_r2_presign 关闭或 R2 S3 凭据未配置）。R2 stream 会经过 Worker 子请求通道，多并发时可能被压到 ~1.2MB/s。启用预签名可让浏览器直连 R2，绕过子请求带宽池。见 Settings → Feature Strings + SECRETS.md §4。",
+      "action": "前往设置"
+    },
     "systemActivity": {
       "label": "// 系统活动"
     },
@@ -407,6 +412,22 @@
         "saved": "跨域隔离已保存",
         "saveFailed": "保存失败"
       },
+      "presign": {
+        "title": "预签名 URL 直连流",
+        "hint": "把 /rest/stream 302 重定向到短期签名的 R2 S3 / WebDAV UserInfo URL，让浏览器直接取字节，绕过 Worker 子请求带宽池。R2 出口免费；WebDAV 受益最大（没有 Worker 绑定快路径）。",
+        "secretsConfigured": "R2 密钥已配置",
+        "secretsMissing": "R2 密钥缺失",
+        "r2SecretsMissingHint": "R2 预签名为 OFF，因为以下三个 Workers Secrets 未设置。缺密钥时即使开关打开，stream 端点也会回退到 Worker 内代理。",
+        "secretPushHint": "用 `wrangler secret put <NAME>` 推送——见 worker/SECRETS.md §3 步骤说明。",
+        "r2Toggle": "启用 R2 预签名",
+        "r2ToggleDesc": "关闭则走 Worker 内流路径。开了但缺密钥会静默回退到 Worker 内路径。",
+        "webdavToggle": "启用 WebDAV 预签名",
+        "webdavToggleDesc": "默认开。每凭据的 stream_proxy_strategy（always/never/r2_only/webdav_only）仍控制哪些客户端启用。",
+        "save": "保存",
+        "r2Saved": "R2 预签名开关已保存",
+        "webdavSaved": "WebDAV 预签名开关已保存",
+        "saveFailed": "保存失败"
+      },
       "cf": {
         "title": "Cloudflare 集成",
         "desc": "通过 Cloudflare API 把 token 写入 Workers Secrets、动态修改 cron、读取 Worker 24h 分析数据。Token 始终留在 CF 自家密钥体系，不落 D1/KV。仅超级管理员可见。",
@@ -591,7 +612,13 @@
       "loadFailed": "凭据加载失败",
       "labelEditPlaceholder": "点击编辑备注",
       "labelSaved": "备注已更新",
-      "labelTooLong": "备注最长 200 字符"
+      "labelTooLong": "备注最长 200 字符",
+      "colStrategy": "302 策略",
+      "strategyAlways": "总是直连（302）",
+      "strategyNever": "始终走代理",
+      "strategyR2Only": "仅 R2 直连",
+      "strategyWebdavOnly": "仅 WebDAV 直连",
+      "strategySaved": "302 策略已更新"
     }
   },
   "sources": {

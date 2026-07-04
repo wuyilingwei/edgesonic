@@ -177,18 +177,23 @@ const scrobbleHandler = async (c: import("hono").Context) => {
   const queries = createQueries(env.DB);
   const nowSec = Math.floor(Date.now() / 1000);
 
-  // KV: the *last* id in the request is the currently-playing track. The
+  // 090 — now_playing moved from KV to D1 `now_playing` table.
+  // The *last* id in the request is the currently-playing track. The
   // Subsonic protocol allows batched scrobbles but the now-playing notion is
   // singular per user → take the last entry as the "now" track.
   const nowSongId = ids[ids.length - 1];
   try {
-    await env.KV.put(
-      `now_playing:${user.username}`,
-      JSON.stringify({ songId: nowSongId, startedAt: nowSec, clientId }),
-      { expirationTtl: 300 },
-    );
+    await env.DB.prepare(
+      "INSERT INTO now_playing (username, song_id, started_at, client_id, updated_at)" +
+      " VALUES (?, ?, ?, ?, ?)" +
+      " ON CONFLICT(username) DO UPDATE SET" +
+      "   song_id = excluded.song_id," +
+      "   started_at = excluded.started_at," +
+      "   client_id = excluded.client_id," +
+      "   updated_at = excluded.updated_at"
+    ).bind(user.username, nowSongId, nowSec, clientId, nowSec).run();
   } catch {
-    // KV is best-effort: a failure must not block the scrobble ack.
+    // D1 write is best-effort: a failure must not block the scrobble ack.
   }
 
   if (submission) {

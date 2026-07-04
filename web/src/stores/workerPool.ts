@@ -19,6 +19,7 @@
 import { defineStore } from "pinia";
 import { ref, computed } from "vue";
 import { useAuth } from "../api";
+import { usePlayerStore } from "./player";
 
 interface PollResponse {
   ok: boolean;
@@ -99,6 +100,9 @@ export const useWorkerPool = defineStore("workerPool", () => {
   const stats = ref({ completed: 0, failed: 0, currentTaskType: "" });
   const lastError = ref<string | null>(null);
   const lastPollAt = ref<number>(0);
+  // 089 S — true while pollAndDrain runs with reduced concurrency because the
+  // player is actively streaming. Settings UI can surface this as a hint.
+  const isPlaybackThrottled = ref(false);
 
   // 056 — surface state Files.vue needs to render the work-queue HUD.
   // - `recent` is a small FIFO ring (≤ 5) of just-finished tasks so the UI
@@ -254,13 +258,31 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastError.value = null;
     lastPollAt.value = Date.now();
     try {
+      // 089 S — Adaptive concurrency: when music is actively playing, throttle
+      // metadata workers down to 1 so they don't compete with the player's own
+      // /rest/stream Range requests for R2 bandwidth. Each metadata worker
+      // fetches up to 512 KB from /rest/stream; at maxConcurrent=3 that means
+      // 3 concurrent sub-requests competing with the player's stream → ~52 KB/s
+      // degraded throughput. Reducing to 1 during playback lets the player
+      // dominate the available bandwidth while background work still trickles
+      // through. Falls back to full concurrency when the store isn't mounted.
+      let effectiveConcurrent = maxConcurrent.value;
+      isPlaybackThrottled.value = false;
+      try {
+        const player = usePlayerStore();
+        if (player.playing) {
+          effectiveConcurrent = 1;
+          isPlaybackThrottled.value = true;
+        }
+      } catch { /* player store not available yet — keep full concurrency */ }
+
       // 088 — `limit` matches the concurrency cap: a one-shot poll fetches as
       // many tasks as we can run in parallel, then Promise.all fans them out
       // through executeOne. Each executeOne owns its own Web Worker so they
       // never share state — fetch + parseBuffer + submit run concurrently.
       const text = await edgesonicFetch("work/poll", {
         caps: caps.value.join(","),
-        limit: String(maxConcurrent.value),
+        limit: String(effectiveConcurrent),
       });
       const data: PollResponse = JSON.parse(text);
       if (!data.ok) throw new Error(data.error || "poll rejected");
@@ -437,6 +459,8 @@ export const useWorkerPool = defineStore("workerPool", () => {
     // 088 — concurrency knob (live), surfaced so Settings.vue can read+display
     // alongside pollIntervalMs without a separate fetch.
     maxConcurrent,
+    // 089 S — playback-throttle indicator for the Settings UI.
+    isPlaybackThrottled,
     // 056 — HUD-facing
     recent,
     speedPerMin,

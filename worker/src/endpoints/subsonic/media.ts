@@ -7,7 +7,7 @@ import { createWebDAVAdapter } from "../../adapters/webdav";
 import { createSubsonicAdapter } from "../../adapters/subsonic";
 import type { StreamResult } from "../../adapters/index";
 import { subsonicError } from "../../auth";
-import { getFeature, parseChain } from "../../utils/features";
+import { getFeature, getFeatureString, parseChain } from "../../utils/features";
 // Transcode factory is statically imported (it lazy-loads the Sandbox /
 // External engine modules so this is safe under tsx test runs). Tests can
 // inject a FakeEngine via __setEngineFactoryForTest exported from factory.ts.
@@ -16,8 +16,14 @@ import { buildTranscodeEngine } from "../../transcode/factory";
 import { BrowserPoolEngine } from "../../transcode/browser_pool";
 import { signUploadToken } from "../../utils/workUploadToken";
 import type { TranscodeProfile, TranscodeInput } from "../../transcode/engine";
+import { presignR2Get } from "../../utils/r2presign";
 
-export const mediaRoutes = new Hono();
+import type { User } from "../../types/entities";
+
+export const mediaRoutes = new Hono<{
+  Bindings: Env;
+  Variables: { user: User; authMethod: string; streamProxyStrategy?: string };
+}>();
 
 // ============================================================================
 // 036 — Cover size cache.
@@ -205,8 +211,11 @@ mediaRoutes.get("/stream", async (c) => {
     // ExecutionContext access throws in test contexts that didn't pass one;
     // we treat its absence as "no pre-bake plumbing available" so the
     // browser_pool path just falls back to raw without trying to enqueue.
-    let executionCtx: ExecutionContext | null = null;
-    try { executionCtx = c.executionCtx; } catch { executionCtx = null; }
+    let executionCtx: ExecutionContext<unknown> | null = null;
+    // Hono's c.executionCtx type and the global ExecutionContext<unknown> (newer
+    // @cloudflare/workers-types) differ only by the phantom `tracing` prop; the
+    // runtime object has waitUntil, so a type-only cast is safe here.
+    try { executionCtx = c.executionCtx as unknown as ExecutionContext<unknown>; } catch { executionCtx = null; }
     const transcoded = await tryTranscodeStream(
       env,
       selected.storage_uri,
@@ -231,6 +240,66 @@ mediaRoutes.get("/stream", async (c) => {
   const parsed = parseStorageUri(selected.storage_uri);
   const range = c.req.header("Range") || undefined;
   let result: StreamResult;
+
+  // 091/092 — Presigned URL short-circuit (R2 + WebDAV).
+  //
+  // When the chosen instance is on a presign-capable scheme AND the request
+  // is raw (no transcode), try to 302 the browser to a direct-fetch URL so
+  // bytes bypass the Worker sub-request bandwidth pool. Each scheme has its
+  // own global feature flag; the credential's stream_proxy_strategy further
+  // gates which schemes a given client credential is allowed to 302 on.
+  //
+  // Decision matrix:
+  //   scheme   | flag            | strategy allows scheme | → 302?
+  //   r2       | enable_r2_presign='1' + secrets set | always|r2_only      | yes
+  //   r2       | off / secrets missing               | *                   | no (proxy)
+  //   r2       | on                                  | never|webdav_only   | no (proxy)
+  //   webdav   | enable_webdav_presign='1'           | always|webdav_only   | yes
+  //   webdav   | off                                 | *                   | no (proxy)
+  //   webdav   | on                                  | never|r2_only       | no (proxy)
+  //
+  // url/subsonic schemes never presign. Transcode branch never presigns.
+  // Falls through to in-Worker stream on any failure / disabled path.
+  if (!needsTranscode) {
+    const strategy = (c.get("streamProxyStrategy") as string | undefined) || "always";
+
+    if (parsed.scheme === "r2") {
+      const presignOn = await getFeatureString(env, "enable_r2_presign", "0");
+      const accessKeyId = env.R2_ACCESS_KEY_ID;
+      const secretKey = env.R2_SECRET_ACCESS_KEY;
+      const accountId = env.R2_ACCOUNT_ID;
+      const schemeAllowed = strategy === "always" || strategy === "r2_only";
+      if (presignOn === "1" && schemeAllowed && accessKeyId && secretKey && accountId) {
+        try {
+          const key = selected.storage_uri.substring("r2://".length);
+          const presigned = await presignR2Get({
+            bucket: "edgesonic-music",
+            key,
+            accessKeyId,
+            secretAccessKey: secretKey,
+            accountId,
+            ttlSec: 300,
+            rangeHeader: range,
+          });
+          return Response.redirect(presigned, 302);
+        } catch {
+          // signing failure → fall through to in-Worker stream
+        }
+      }
+    } else if (parsed.scheme === "webdav") {
+      const presignOn = await getFeatureString(env, "enable_webdav_presign", "1");
+      const schemeAllowed = strategy === "always" || strategy === "webdav_only";
+      if (presignOn === "1" && schemeAllowed) {
+        try {
+          const adapter = createWebDAVAdapter(env.DB, env);
+          const presigned = await adapter.presign(selected.storage_uri, range);
+          if (presigned) return Response.redirect(presigned.url, 302);
+        } catch {
+          // presign failure → fall through to in-Worker stream
+        }
+      }
+    }
+  }
 
   switch (parsed.scheme) {
     case "r2":
@@ -284,7 +353,7 @@ async function tryTranscodeStream(
   // 053 — Pre-bake context for engines that can't synchronously transcode
   // (browser_pool). When provided, an unsupported engine call falls back to
   // a queued pre-bake instead of straight raw.
-  ctx?: { instanceId: string; executionCtx: ExecutionContext; origin: string },
+  ctx?: { instanceId: string; executionCtx: ExecutionContext<unknown>; origin: string },
 ): Promise<Response | null> {
   const profile = pickProfile(format, maxBitRate);
   if (!profile) return null;

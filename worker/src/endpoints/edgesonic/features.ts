@@ -98,12 +98,25 @@ const STRING_FEATURE_KEYS = new Set([
   // 088 — concurrent Web Workers per browser. Bigger = faster queue drain but
   // higher fetch bandwidth and CPU on the participating browser. Clamped 1..8.
   "worker_max_concurrent",
-  // 065 — Cross-Origin Isolation kill switch. When '1', the global response
-  // middleware in index.ts stamps COOP/COEP/CORP headers so the browser flips
-  // `crossOriginIsolated = true`, unlocking SharedArrayBuffer + ffmpeg.wasm
-  // multi-thread in the work pool. '0' restores pre-065 behaviour.
-  "enable_cross_origin_isolation",
-]);
+    // 065 — Cross-Origin Isolation kill switch. When '1', the global response
+    // middleware in index.ts stamps COOP/COEP/CORP headers so the browser flips
+    // `crossOriginIsolated = true`, unlocking SharedArrayBuffer + ffmpeg.wasm
+    // multi-thread in the work pool. '0' restores pre-065 behaviour.
+    "enable_cross_origin_isolation",
+    // 091 — R2 presigned URL short-circuit for /rest/stream raw+r2. When '1'
+    // AND R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_ACCOUNT_ID secrets are set,
+    // the stream endpoint 302-redirects the browser to a short-lived SigV4
+    // R2 S3 URL so bytes bypass the Worker sub-request bandwidth pool. '0'
+    // keeps the existing in-Worker stream path.
+    "enable_r2_presign",
+    // 092 — WebDAV presigned URL short-circuit. When '1' AND the chosen
+    // credential's stream_proxy_strategy allows WebDAV 302, the stream
+    // endpoint 302-redirects to a UserInfo-embedded WebDAV URL. Default '1'
+    // (on) — WebDAV streams benefit more than R2 since there's no Worker
+    // binding fast path. Per-credential strategy in subsonic_credentials
+    // still gates which clients opt in.
+    "enable_webdav_presign",
+  ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
 function validateFeatureString(key: string, value: string): string | null {
@@ -168,6 +181,17 @@ function validateFeatureString(key: string, value: string): string | null {
     case "enable_cross_origin_isolation":
       // 065 — only '0' or '1'. Mirrored shape on worker_pool_enabled.
       if (value !== "0" && value !== "1") return "enable_cross_origin_isolation must be '0' or '1'";
+      return null;
+    case "enable_r2_presign":
+      // 091 — only '0' or '1'. Actual R2 S3 credentials live in Workers
+      // Secrets (not D1); this flag only gates whether the stream endpoint
+      // tries the presign path. When '1' but secrets are missing, the
+      // stream endpoint silently falls back to the in-Worker stream.
+      if (value !== "0" && value !== "1") return "enable_r2_presign must be '0' or '1'";
+      return null;
+    case "enable_webdav_presign":
+      // 092 — only '0' or '1'. Mirrors enable_r2_presign shape.
+      if (value !== "0" && value !== "1") return "enable_webdav_presign must be '0' or '1'";
       return null;
     case "worker_poll_interval_seconds": {
       // Stored as a stringified integer in [30, 3600]. Anything lower hammers

@@ -5,10 +5,10 @@ set -euo pipefail
 # EdgeSonic 手动部署脚本（用 wrangler CLI，不依赖 Cloudflare Git 集成）
 # ---------------------------------------------------------------------------
 # 用法（在仓库根或任意目录执行均可）：
-#   ./scripts/deploy.sh                    构建前端 + 部署到生产
-#   ./scripts/deploy.sh --migrate FILE     部署前先把某个 SQL 迁移应用到远端 D1
-#   ./scripts/deploy.sh --version-only      只上传新版本(不切生产流量，用于灰度/预览)
-#   ./scripts/deploy.sh --no-build          跳过前端构建(web/dist 已最新时)
+#   ./deploy.sh                    构建前端 + 部署到生产
+#   ./deploy.sh --migrate FILE     部署前先把某个 SQL 迁移应用到远端 D1
+#   ./deploy.sh --version-only      只上传新版本(不切生产流量，用于灰度/预览)
+#   ./deploy.sh --no-build          跳过前端构建(web/dist 已最新时)
 #
 # 前置：
 #   - 本地存在 worker/wrangler.toml（含私有资源 id，已被 .gitignore 排除，不入库）。
@@ -17,7 +17,7 @@ set -euo pipefail
 #     绝不写进 wrangler.toml 或脚本。
 # ===========================================================================
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 CONFIG="worker/wrangler.toml"

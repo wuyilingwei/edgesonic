@@ -1,1 +1,0 @@
-ALTER TABLE storage_sources ADD COLUMN name TEXT NOT NULL DEFAULT '';
