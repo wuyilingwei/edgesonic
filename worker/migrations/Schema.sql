@@ -42,13 +42,14 @@
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS storage_sources (
   id TEXT PRIMARY KEY,
-  type TEXT NOT NULL CHECK (type IN ('webdav', 'subsonic', 'r2', 'url')),
+  type TEXT NOT NULL CHECK (type IN ('webdav', 'subsonic', 'r2', 'url', 's3')),
   name TEXT NOT NULL DEFAULT '',                     -- 005: human-readable label
   base_url TEXT NOT NULL,
   username TEXT,
   password TEXT,
   password_encrypted TEXT,                           -- 023: AES-256-GCM blob (`v1:<base64url>`) — unused after crypto removal, column kept for compat
   root_path TEXT NOT NULL DEFAULT '',                -- 003: path inside the remote; effective URL = base_url + root_path
+  region TEXT NOT NULL DEFAULT 'us-east-1',          -- 096: SigV4 region (MinIO: any value; R2: 'auto'; AWS: real region)
   last_sync INTEGER,
   enabled INTEGER DEFAULT 1,
   mode TEXT NOT NULL DEFAULT 'library',              -- 026: 'library' | 'sync_only'
