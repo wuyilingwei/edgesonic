@@ -300,16 +300,18 @@ async function startMirror(s: Source) {
       for (const item of data.items || []) {
         st.currentTitle = item.title || item.storageUri.split("/").pop() || item.instanceId;
         try {
-          // 093f — Build a tree-structured R2 path:
-          //   music/{artist}/{album}/{filename}
-          // Sanitize artist/album for filesystem safety (strip path separators
-          // and other problematic chars). Falls back to flat music/{filename}
-          // when artist/album metadata is missing.
-          const filename = item.storageUri.split("/").pop() || item.instanceId;
-          const artist = (item.artistName || "").replace(/[\/\\:*?"<>|]/g, "_").trim() || "Unknown Artist";
-          const album = (item.albumName || "").replace(/[\/\\:*?"<>|]/g, "_").trim() || "Unknown Album";
-          const destPath = `music/${artist}/${album}/${filename}`;
+          // 093f — Preserve the remote directory structure (relative to the
+          // source's root_path). storage_uri is `webdav://{sourceId}/{relPath}`
+          // where relPath already excludes root_path (the scan walks
+          // root_path + relPath). So we strip the `webdav://{sourceId}/`
+          // prefix and place the rest under music/ on R2.
+          //   webdav://6debd0f2/Album/song.flac → r2://music/Album/song.flac
+          // This keeps the original tree shape from the remote without
+          // inventing artist/album dirs that may not exist on the source.
+          const relPath = item.storageUri.replace(/^webdav:\/\/[^/]+\//, "");
+          const destPath = "music/" + relPath;
           // Determine suffix from the source URI.
+          const filename = relPath.split("/").pop() || item.instanceId;
           const suffix = item.suffix || filename.split(".").pop() || "";
           const contentType = suffix === "flac" ? "audio/flac"
             : suffix === "mp3" ? "audio/mpeg"
