@@ -202,7 +202,10 @@ workRoutes.post("/work/submit", async (c) => {
   // submit) is recorded in result_json's "apply" annotation, but we still
   // mark the task completed so the queue doesn't churn forever. Admins can
   // re-run the backfill endpoint if they want to retry.
-  const resultJson = body.result === undefined ? null : JSON.stringify(body.result).slice(0, 100_000);
+  // 093e — raised from 100KB to 500KB to accommodate embedded cover art
+  // (base64-encoded, up to 200KB raw → ~270KB base64). D1 TEXT has no
+  // practical row-size limit at this scale.
+  const resultJson = body.result === undefined ? null : JSON.stringify(body.result).slice(0, 500_000);
   let applyAnnotation: { ok: boolean; reason?: string; masterId?: string } | undefined;
   if (row.task_type === "metadata" && body.result && typeof body.result === "object") {
     try {
@@ -222,6 +225,39 @@ workRoutes.post("/work/submit", async (c) => {
       applyAnnotation = apply.updated
         ? { ok: true, masterId: apply.masterId }
         : { ok: false, reason: apply.reason };
+      // 093e — if the worker extracted an embedded cover and the apply
+      // produced a masterId (so we know which album to attach it to), write
+      // the cover bytes to R2 and update albums.cover_r2_key. Best-effort:
+      // a failure here doesn't fail the task (metadata was still applied).
+      if (apply.masterId && r.cover && typeof r.cover === "object") {
+        try {
+          const cover = r.cover as { data?: string; mime?: string };
+          if (typeof cover.data === "string" && cover.data.length > 0) {
+            // Decode base64 to bytes.
+            const bin = atob(cover.data);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            // Look up the album_id for this master.
+            const masterRow = await env.DB.prepare(
+              "SELECT album_id FROM song_masters WHERE id = ?",
+            ).bind(apply.masterId).first<{ album_id: string }>();
+            if (masterRow?.album_id) {
+              const coverKey = `covers/al-${masterRow.album_id}`;
+              const mime = (cover.mime || "image/jpeg").startsWith("image/")
+                ? cover.mime : `image/${cover.mime || "jpeg"}`;
+              await (env as Env).MUSIC_BUCKET.put(coverKey, bytes, {
+                httpMetadata: { contentType: mime },
+              });
+              await env.DB.prepare(
+                "UPDATE albums SET cover_r2_key = ?, updated_at = ? WHERE id = ? AND cover_r2_key IS NULL",
+              ).bind(coverKey, Math.floor(Date.now() / 1000), masterRow.album_id).run();
+            }
+          }
+        } catch (e) {
+          // Cover write failure is non-fatal — metadata already applied.
+          console.error(`[work/submit] cover write failed for ${instanceId}:`, e);
+        }
+      }
     } catch (e) {
       // We deliberately swallow — the queue row still gets marked completed
       // so workers don't re-poll the same task indefinitely. Backfill is the
