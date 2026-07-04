@@ -13,10 +13,9 @@ bindings.
 | ---- | ---------- | ------- | ----------------- |
 | `WORK_UPLOAD_HMAC_KEY` | 066 | HMAC-SHA-256 key for browser-pool transcode upload tokens (`/edgesonic/work/upload`). | Yes |
 | `CF_API_TOKEN` | 054 | Cloudflare API token for cron / analytics integration. Pushed dynamically via `/edgesonic/cf/setToken`. | Yes (set via Settings UI) |
-| `CF_ACCOUNT_ID` | 054 | Cloudflare account id paired with `CF_API_TOKEN`. | Yes (set via Settings UI) |
+| `CF_ACCOUNT_ID` | 054 | Cloudflare account id paired with `CF_API_TOKEN`. Also reused as the R2 account id for 091 presign. | Yes (set via Settings UI) |
 | `R2_ACCESS_KEY_ID` | 091 | R2 S3 access key for presigned URL signing. Pair with `R2_SECRET_ACCESS_KEY`. | Yes (to enable presign) |
 | `R2_SECRET_ACCESS_KEY` | 091 | R2 S3 secret key for presigned URL signing. | Yes (to enable presign) |
-| `R2_ACCOUNT_ID` | 091 | Cloudflare account id hosting the R2 bucket. Defaults to `wrangler.toml` `account_id` if absent, but must be set as a secret for presign to activate. | Yes (to enable presign) |
 
 ---
 
@@ -123,7 +122,7 @@ operators have a single inventory of all secrets the worker reads.
 
 ---
 
-## 3. `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ACCOUNT_ID` (task 091)
+## 3. `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` (task 091)
 
 ### Why
 
@@ -135,13 +134,16 @@ channel — production observed ~1.2 MB/s when the browser work pool ran 3
 metadata fetches alongside the playing stream.
 
 Task 091 adds an optional short-circuit: when `enable_r2_presign` is `'1'`
-AND all three R2 secrets are set, the stream endpoint signs a 5-minute
-SigV4 presigned URL and returns a **302 redirect**. The browser then fetches
-R2 bytes directly from the R2 S3 endpoint, entirely outside the Worker
-sub-request budget. R2 egress is free, so this costs nothing extra.
+AND both R2 S3 secrets are set AND `CF_ACCOUNT_ID` is present (already
+required by the 054 Cloudflare integration), the stream endpoint signs a
+5-minute SigV4 presigned URL and returns a **302 redirect**. The browser
+then fetches R2 bytes directly from the R2 S3 endpoint, entirely outside
+the Worker sub-request budget. R2 egress is free, so this costs nothing
+extra.
 
-When any of the three secrets is unset (or the feature flag is `'0'`), the
-endpoint falls back to the existing in-Worker stream — no behaviour change.
+When either R2 secret is unset, `CF_ACCOUNT_ID` is absent, or the feature
+flag is `'0'`, the endpoint **falls back to the existing in-Worker stream**
+— no behaviour change, no error.
 
 ### How to create the R2 S3 API token
 
@@ -166,25 +168,26 @@ wrangler secret put R2_ACCESS_KEY_ID
 # The Secret Access Key (sensitive — handle like a password)
 wrangler secret put R2_SECRET_ACCESS_KEY
 # paste the Secret Access Key from the R2 dashboard
-
-# The Cloudflare account id hosting the bucket
-wrangler secret put R2_ACCOUNT_ID
-# paste df4481f3ce1fa0394b4617442a97d147 (or your own)
 ```
+
+The R2 account id is **not** a separate secret — the worker reuses
+`CF_ACCOUNT_ID` (set via Settings → Cloudflare integration, task 054).
+If you haven't pushed `CF_ACCOUNT_ID` yet, the presign path silently falls
+back to the in-Worker stream until you do.
 
 Verify:
 
 ```bash
 wrangler secret list
-# expect: R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID
+# expect: R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY (plus CF_ACCOUNT_ID from 054)
 ```
 
 ### Enabling the feature flag
 
-After pushing the three secrets, flip the flag:
+After pushing the two R2 secrets (and `CF_ACCOUNT_ID`), flip the flag:
 
 ```bash
-# Via the Settings UI → Feature Strings → enable_r2_presign → set to "1"
+# Via the Settings UI → Presigned URL Direct Stream → enable R2 presign → Save
 # Or via D1 directly:
 npx wrangler d1 execute edgesonic-db --remote --command \
   "UPDATE feature_strings SET value='1', updated_at=unixepoch() WHERE key='enable_r2_presign'"
@@ -212,8 +215,6 @@ secret at presign time, not verified against R2's live token list). To rotate:
 - The Access Key ID is visible in the presigned URL's `X-Amz-Credential`
   query param. This is by design (S3 presigned URLs always expose it) — the
   Access Key ID alone cannot authenticate, only the paired secret can sign.
-- Do **not** set `R2_ACCOUNT_ID` in `wrangler.toml` `[vars]` — it would be
-  public in the bundle. Always use a secret.
 
 ---
 

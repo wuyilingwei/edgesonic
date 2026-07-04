@@ -417,7 +417,7 @@
         "hint": "302-redirect /rest/stream to a short-lived R2 S3 / WebDAV UserInfo URL so the browser fetches bytes directly, bypassing the Worker sub-request bandwidth pool. R2 egress is free; WebDAV streams benefit most (no Worker binding fast path).",
         "secretsConfigured": "R2 SECRETS SET",
         "secretsMissing": "R2 SECRETS MISSING",
-        "r2SecretsMissingHint": "R2 presign is OFF because the three Workers Secrets below are not set. Without them the stream endpoint falls back to the in-Worker proxy even when the flag is on.",
+        "r2SecretsMissingHint": "R2 presign is OFF because the two R2 S3 secrets (and/or CF_ACCOUNT_ID from the Cloudflare integration block) are not set. Without them the stream endpoint falls back to the in-Worker proxy even when the flag is on.",
         "secretPushHint": "Push them via `wrangler secret put <NAME>` — see worker/SECRETS.md §3 for the walkthrough.",
         "r2Toggle": "Enable R2 presign",
         "r2ToggleDesc": "Off keeps the in-Worker stream path. On without secrets silently falls back to the in-Worker path.",
