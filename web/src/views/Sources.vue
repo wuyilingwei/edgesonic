@@ -33,6 +33,8 @@ interface Source {
   encrypted: boolean;
   // P4 — library=扫描时入库; sync_only=仅作复制/同步目标，扫描不入库
   mode: "library" | "sync_only";
+  // 096 — S3 region (us-east-1 for AWS/MinIO default; 'auto' for R2)
+  region: string;
   // 060 — Last scan_jobs row snapshot for this source. Populated by
   // pollScanStatus() so the action column can render idle/running/completed/
   // failed without an extra round-trip per row.
@@ -49,7 +51,7 @@ const sources = ref<Source[]>([]);
 // P3 — loading guard for initial fetch
 const loading = ref(false);
 const showForm = ref(false);
-const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "", mode: "library" });
+const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "", mode: "library", region: "us-east-1" });
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
@@ -174,11 +176,11 @@ function handleVisibilityChange() {
 
 // === Edit modal ===
 const editing = ref<Source | null>(null);
-const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only" });
+const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only", region: "us-east-1" });
 
 function openEdit(s: Source) {
   editing.value = s;
-  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled, mode: s.mode };
+  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled, mode: s.mode, region: s.region || "us-east-1" };
 }
 function closeEdit() { editing.value = null; }
 
@@ -193,6 +195,8 @@ async function saveEdit() {
   if (editForm.value.root_path !== s.rootPath) body.root_path = editForm.value.root_path;
   if (editForm.value.enabled !== s.enabled) body.enabled = editForm.value.enabled ? 1 : 0;
   if (editForm.value.mode !== s.mode) body.mode = editForm.value.mode;
+  // 096 — region (S3 only; safe to send for other types, backend stores it)
+  if (editForm.value.region !== s.region) body.region = editForm.value.region;
   try {
     const xml = await storagePost("sources/update", body);
     if (/status="failed"/.test(xml)) throw new Error("update failed");
@@ -223,6 +227,8 @@ async function load() {
         encrypted: s.encrypted === "true",
         // P4 — mode defaults to "library" when attribute is absent
         mode: (s.mode === "sync_only" ? "sync_only" : "library") as "library" | "sync_only",
+        // 096 — region for S3-compatible sources
+        region: s.region || "us-east-1",
         scanStatus: prev?.scanStatus ?? "idle",
         scanJobId: prev?.scanJobId ?? null,
         scanTotal: prev?.scanTotal ?? 0,
@@ -499,16 +505,29 @@ onUnmounted(() => {
       <div class="form-stack">
         <div class="form-group">
           <label class="form-label">{{ t("sources.type") }}</label>
-          <select v-model="form.type" class="form-select"><option value="webdav">WebDAV</option><option value="subsonic">Subsonic</option></select>
+          <select v-model="form.type" class="form-select">
+            <option value="webdav">WebDAV</option>
+            <option value="subsonic">Subsonic</option>
+            <option value="s3">{{ t("sources.typeS3") }}</option>
+          </select>
         </div>
         <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="form.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
-        <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="form.base_url" class="form-input" placeholder="https://..." /></div>
+        <div class="form-group">
+          <label class="form-label">{{ t("sources.baseUrl") }}</label>
+          <input v-model="form.base_url" class="form-input" :placeholder="form.type === 's3' ? t('sources.s3EndpointPlaceholder') : 'https://...'" />
+        </div>
         <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="form.username" class="form-input" /></div>
         <div class="form-group"><label class="form-label">{{ t("sources.password") }}</label><input v-model="form.password" type="password" class="form-input" /></div>
         <div class="form-group">
           <label class="form-label">{{ t("sources.rootPath") }}</label>
-          <input v-model="form.root_path" class="form-input" placeholder="/music" />
-          <span class="field-hint">{{ t("sources.rootPathHint") }}</span>
+          <input v-model="form.root_path" class="form-input" :placeholder="form.type === 's3' ? 'bucket' : '/music'" />
+          <span class="field-hint">{{ form.type === 's3' ? t('sources.s3BucketHint') : t('sources.rootPathHint') }}</span>
+        </div>
+        <!-- 096: region field (S3 only) -->
+        <div v-if="form.type === 's3'" class="form-group">
+          <label class="form-label">{{ t("sources.s3Region") }}</label>
+          <input v-model="form.region" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
+          <span class="field-hint">{{ t("sources.s3RegionHint") }}</span>
         </div>
         <!-- P4: mode selector -->
         <div class="form-group">
@@ -546,7 +565,7 @@ onUnmounted(() => {
               <!-- P4: mode badge — only shown for sync_only, library is the default/silent state -->
               <span v-if="s.mode === 'sync_only'" class="status-badge mode-sync" :title="t('sources.mode.hint')">{{ t("sources.mode.syncOnly") }}</span>
               <!-- 060: scan status pill (display only — buttons are in source-actions below) -->
-              <template v-if="isAdmin && s.type === 'webdav'">
+              <template v-if="isAdmin && (s.type === 'webdav' || s.type === 's3')">
                 <span v-if="s.scanStatus === 'running'" class="scan-pill scan-pill-running" :title="t('sources.scanStatus.progress')">
                   <span class="scan-spinner" aria-hidden="true"></span>
                   <span class="scan-pill-text">{{ statusLabel(s) }}</span>
@@ -564,7 +583,7 @@ onUnmounted(() => {
             <!-- Action row -->
             <div v-if="isAdmin" class="source-actions">
               <!-- P5/P10: scan buttons moved out of pill; rescan has own i18n key -->
-              <template v-if="s.type === 'webdav' && s.scanStatus !== 'running'">
+              <template v-if="(s.type === 'webdav' || s.type === 's3') && s.scanStatus !== 'running'">
                 <button
                   :class="s.scanStatus === 'idle' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'"
                   :title="t('sources.scanStatus.forceHint')"
@@ -609,17 +628,19 @@ onUnmounted(() => {
         <div class="source-meta">
           <span v-if="s.username">{{ t("sources.user") }}: {{ s.username }}</span>
           <span v-if="s.rootPath">{{ t("sources.root") }}: {{ s.rootPath }}</span>
+          <!-- 096: show region for S3 sources -->
+          <span v-if="s.type === 's3'">{{ t("sources.s3Region") }}: {{ s.region }}</span>
           <span v-if="s.lastSync !== 'Never'">{{ t("sources.lastSync") }}: {{ s.lastSync }}</span>
           <span v-else class="text-muted">{{ t("sources.notSynced") }}</span>
         </div>
-        <!-- 060: scan history toggle (webdav only) -->
-        <div v-if="s.type === 'webdav'" class="scan-history-toggle">
+        <!-- 060: scan history toggle (webdav + s3) -->
+        <div v-if="s.type === 'webdav' || s.type === 's3'" class="scan-history-toggle">
           <button class="link-button" @click="toggleHistory(s.id)">
             {{ expandedSources.has(s.id) ? t("sources.scanStatus.collapse") : t("sources.scanStatus.expand") }}
             <span class="mono-subtle">[{{ (scanHistory[s.id] || []).length }}]</span>
           </button>
         </div>
-        <div v-if="s.type === 'webdav' && expandedSources.has(s.id)" class="scan-history">
+        <div v-if="(s.type === 'webdav' || s.type === 's3') && expandedSources.has(s.id)" class="scan-history">
           <div class="scan-history-title">{{ t("sources.scanStatus.history") }}</div>
           <div v-if="!(scanHistory[s.id] && scanHistory[s.id].length)" class="scan-history-empty">{{ t("sources.scanStatus.historyEmpty") }}</div>
           <table v-else class="scan-history-table">
@@ -679,6 +700,12 @@ onUnmounted(() => {
               <option value="sync_only">{{ t("sources.mode.syncOnly") }}</option>
             </select>
             <span class="field-hint">{{ t("sources.mode.hint") }}</span>
+          </div>
+          <!-- 096: region field in edit modal (shown for all types; only meaningful for s3) -->
+          <div v-if="editing?.type === 's3'" class="form-group">
+            <label class="form-label">{{ t("sources.s3Region") }}</label>
+            <input v-model="editForm.region" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
+            <span class="field-hint">{{ t("sources.s3RegionHint") }}</span>
           </div>
           <div class="form-group enabled-row">
             <label class="form-label enabled-label">{{ t("sources.enabled") }}</label>
