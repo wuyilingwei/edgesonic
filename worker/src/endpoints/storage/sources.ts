@@ -15,10 +15,12 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
   const db = c.env.DB;
   const result = await db.prepare(
     `SELECT id, type, name, base_url, username,
+            presign_username,
             root_path, region, last_sync, enabled, mode
      FROM storage_sources ORDER BY created_at ASC`
   ).all<{
     id: string; type: string; name: string; base_url: string; username: string | null;
+    presign_username: string | null;
     root_path: string | null; region: string | null; last_sync: number | null; enabled: number;
     mode: string;
   }>();
@@ -33,6 +35,8 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
       mode: s.mode ?? "library",
       // 096 — region for S3-compatible sources
       region: s.region ?? "us-east-1",
+      // 097 — indicate whether a read-only presign account is configured (password not returned)
+      presignUsername: s.presign_username ?? "",
     },
   }));
   return c.text(subsonicOK({ storageSources: { source: sources } }), 200, XML);
@@ -42,6 +46,7 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
   const body = await c.req.json<{
     type: string; base_url: string; name?: string; username?: string;
     password?: string; root_path?: string; mode?: string; region?: string;
+    presign_username?: string; presign_password?: string;
   }>();
   if (!body.type || !body.base_url) {
     return c.text(subsonicError(0, "Missing type or base_url"), 400, XML);
@@ -59,11 +64,13 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
   const password = body.password ?? "";
   await db.prepare(
     `INSERT INTO storage_sources
-       (id, type, name, base_url, username, password, root_path, region, mode, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, type, name, base_url, username, password, root_path, region, mode, presign_username, presign_password, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, body.type, body.name || "", body.base_url, body.username || null,
-    password, body.root_path || "", region, mode, now, now,
+    password, body.root_path || "", region, mode,
+    body.presign_username || null, body.presign_password || null,
+    now, now,
   ).run();
   return c.text(subsonicOK({}), 200, XML);
 });
@@ -72,6 +79,7 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   const body = await c.req.json<{
     id: string; name?: string; base_url?: string; username?: string; password?: string;
     root_path?: string; enabled?: number; mode?: string; region?: string;
+    presign_username?: string; presign_password?: string;
   }>();
   if (!body.id) {
     return c.text(subsonicError(0, "Missing id"), 400, XML);
@@ -96,6 +104,9 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   if (body.mode !== undefined) { sets.push("mode = ?"); binds.push(body.mode); }
   // 096 — update region
   if (body.region !== undefined && body.region !== "") { sets.push("region = ?"); binds.push(body.region); }
+  // 097 — update presign credentials (empty string → null to clear)
+  if (body.presign_username !== undefined) { sets.push("presign_username = ?"); binds.push(body.presign_username || null); }
+  if (body.presign_password !== undefined) { sets.push("presign_password = ?"); binds.push(body.presign_password || null); }
   if (sets.length === 0) {
     return c.text(subsonicError(0, "Nothing to update"), 400, XML);
   }

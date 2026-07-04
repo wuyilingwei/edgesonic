@@ -153,6 +153,34 @@ npx wrangler d1 execute edgesonic-db --remote --command \
   "INSERT INTO users (username, master_password, level) VALUES ('admin', hex(sha256('yourpassword')), 3)"
 ```
 
+## CI/CD (GitHub Actions)
+
+The workflow at `.github/workflows/deploy.yml` auto-deploys on every push to `main` and can also be triggered manually from the GitHub Actions UI.
+
+### Required repository secrets
+
+Configure these in **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Description |
+|--------|-------------|
+| `CLOUDFLARE_API_TOKEN` | CF API token with Workers:Edit, D1:Edit, R2:Edit permissions |
+| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
+| `CF_DATABASE_ID` | D1 database ID (from `wrangler d1 list`) |
+| `CF_KV_ID` | KV namespace ID (from `wrangler kv namespace list`) |
+| `CF_R2_BUCKET` | R2 bucket name (default: `edgesonic-music`) |
+| `CF_INSTANCE_ID` | Unique UUID for this deployment (generate with `uuidgen`) |
+| `CF_DOMAIN` | Custom domain (e.g. `edgesonic.example.com`); if you have no custom domain, use `<worker-name>.workers.dev` and remove the `routes` block from `worker/wrangler.toml.example` before running |
+
+### Manual trigger with worker name override
+
+Go to **Actions → Deploy EdgeSonic → Run workflow**. The optional `worker_name` input overrides the default `"edgesonic"` script name — useful for staging or multi-tenant deployments.
+
+### After every deploy
+
+> **Settings → Cloudflare → "Ensure default cron"**
+
+`wrangler deploy` clears dynamic cron schedules. Visit the admin panel after each deploy to re-apply them (see `worker/CF_CRON.md`).
+
 ## Development
 
 ```bash
