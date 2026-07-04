@@ -314,8 +314,17 @@ mediaRoutes.get("/stream", async (c) => {
           // COI/CORP stamping entirely on presign redirects: the browser
           // follows the 302 to a cross-origin R2 S3 host where EdgeSonic's
           // same-origin CORP would be wrong anyway.
+          //
+          // 093b — Cache the 302 for the same TTL as the presigned URL so the
+          // browser's <audio> Range follow-ups (seek, pre-buffer chunks) reuse
+          // the cached redirect and skip the Worker entirely on subsequent
+          // ranges. Without this, every Range request re-hit the Worker to
+          // re-sign + 302, defeating the presign bandwidth-saving purpose.
+          // The presigned URL itself is host-only signed, so any Range the
+          // browser sends to it will be accepted by R2.
           const r = c.redirect(presigned, 302);
           r.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+          r.headers.set("Cache-Control", "public, max-age=300");
           return r;
         } catch {
           // signing failure → fall through to in-Worker stream
