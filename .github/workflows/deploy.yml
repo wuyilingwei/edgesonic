@@ -1,0 +1,63 @@
+name: Deploy EdgeSonic
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      worker_name:
+        description: 'Worker script name (overrides default "edgesonic")'
+        required: false
+        default: 'edgesonic'
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    environment: production   # optional: require manual approval in GitHub Environments
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build:web
+
+      - name: Generate wrangler.toml from template
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CF_DATABASE_ID: ${{ secrets.CF_DATABASE_ID }}
+          CF_KV_ID: ${{ secrets.CF_KV_ID }}
+          CF_R2_BUCKET: ${{ secrets.CF_R2_BUCKET }}
+          CF_INSTANCE_ID: ${{ secrets.CF_INSTANCE_ID }}
+          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
+          WORKER_NAME: ${{ inputs.worker_name || 'edgesonic' }}
+        run: |
+          sed \
+            -e "s|<YOUR_CLOUDFLARE_ACCOUNT_ID>|${CF_ACCOUNT_ID}|g" \
+            -e "s|<YOUR_D1_DATABASE_ID>|${CF_DATABASE_ID}|g" \
+            -e "s|<YOUR_KV_NAMESPACE_ID>|${CF_KV_ID}|g" \
+            -e "s|<YOUR_R2_BUCKET_NAME>|${CF_R2_BUCKET}|g" \
+            -e "s|<GENERATE_A_UUID>|${CF_INSTANCE_ID}|g" \
+            -e "s|<your-domain.example.com>|${CF_DOMAIN}|g" \
+            -e "s|^name = \"edgesonic\"|name = \"${WORKER_NAME}\"|" \
+            worker/wrangler.toml.example > worker/wrangler.toml
+
+      - name: Deploy to Cloudflare Workers
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          VERSION=$(date +%s)
+          npx wrangler deploy \
+            --config worker/wrangler.toml \
+            --containers-rollout=none \
+            --var WORKER_VERSION:"${VERSION}"

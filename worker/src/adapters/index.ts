@@ -87,6 +87,38 @@ export async function getSourceCredentials(
 }
 
 // ---------------------------------------------------------------------------
+// 097 — WebDAV presign credential resolver
+// ---------------------------------------------------------------------------
+
+// For WebDAV presign: prefer presign_username/presign_password (read-only account)
+// over the main credentials. Falls back to main credentials when presign_username is absent.
+export async function getWebDAVPresignCredentials(
+  db: D1Database,
+  sourceId: string,
+): Promise<{ username: string; password: string; baseUrl: string } | null> {
+  const row = await db
+    .prepare(
+      "SELECT base_url, username, password, presign_username, presign_password, root_path FROM storage_sources WHERE id = ? AND type = 'webdav' AND enabled = 1",
+    )
+    .bind(sourceId)
+    .first<{
+      base_url: string;
+      username: string | null;
+      password: string | null;
+      presign_username: string | null;
+      presign_password: string | null;
+      root_path: string | null;
+    }>();
+  if (!row) return null;
+  const root = (row.root_path || "").replace(/^\/+|\/+$/g, "");
+  const baseUrl = row.base_url.replace(/\/+$/, "") + (root ? `/${root}` : "");
+  // prefer presign_username if non-empty, else fall back to main credentials
+  const username = row.presign_username?.trim() ? row.presign_username : (row.username || "");
+  const password = row.presign_username?.trim() ? (row.presign_password || "") : (row.password || "");
+  return { username, password, baseUrl };
+}
+
+// ---------------------------------------------------------------------------
 // 096 — S3 config resolver
 // ---------------------------------------------------------------------------
 

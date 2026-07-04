@@ -758,7 +758,13 @@
       },
       "durationSeconds": "{n} 秒",
       "durationMinutes": "{n} 分钟"
-    }
+    },
+    "presignCreds": "直连只读账户",
+    "presignCredsHint": "配置一个 WebDAV 只读账户供直连预签名 URL 使用，防止泄露写权限凭据",
+    "presignUsername": "只读用户名",
+    "presignPassword": "只读密码",
+    "presignStatusSet": "已配置只读账户",
+    "presignStatusUnset": "使用主账户（建议配置只读账户）"
   },
   "radio": {
     "label": "// 电台目录",

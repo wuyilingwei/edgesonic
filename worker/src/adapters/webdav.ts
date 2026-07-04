@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import type { StorageAdapter, StreamResult } from "./index";
-import { parseStorageUri, getSourceCredentials } from "./index";
+import { parseStorageUri, getSourceCredentials, getWebDAVPresignCredentials } from "./index";
 
 // 092 — Optional presign capability for WebDAV. Returns a UserInfo-embedded
 // URL (`https://user:pass@host/path`) so the browser can fetch bytes
@@ -95,8 +95,8 @@ export function createWebDAVAdapter(
     // encoded into the URL — the browser carries it on the redirected
     // request natively.
     async presign(uri: string, _rangeHeader?: string): Promise<WebDAVPresignResult | null> {
-      const { path } = parseStorageUri(uri);
-      const creds = await getSourceCredentials(db, "webdav");
+      const { path, sourceId } = parseStorageUri(uri);
+      const creds = await getWebDAVPresignCredentials(db, sourceId);
       if (!creds) return null;
 
       const encodedPath = path.split("/").map(encodeURIComponent).join("/");

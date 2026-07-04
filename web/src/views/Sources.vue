@@ -50,6 +50,8 @@ interface Source {
   mode: "library" | "sync_only";
   // 096 — S3 region (us-east-1 for AWS/MinIO default; 'auto' for R2)
   region: string;
+  // 097 — non-empty when a read-only presign account is configured (password not returned)
+  presignUsername: string;
   // 060 — Last scan_jobs row snapshot for this source. Populated by
   // pollScanStatus() so the action column can render idle/running/completed/
   // failed without an extra round-trip per row.
@@ -66,7 +68,7 @@ const sources = ref<Source[]>([]);
 // P3 — loading guard for initial fetch
 const loading = ref(false);
 const showForm = ref(false);
-const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "", mode: "library", region: "us-east-1" });
+const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "", mode: "library", region: "us-east-1", presign_username: "", presign_password: "" });
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
@@ -191,11 +193,15 @@ function handleVisibilityChange() {
 
 // === Edit modal ===
 const editing = ref<Source | null>(null);
-const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only", region: "us-east-1" });
+const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only", region: "us-east-1", presignUsername: "", presignPassword: "" });
+// 097 — controls whether the collapsible presign creds section is expanded
+const showPresignSection = ref(false);
 
 function openEdit(s: Source) {
   editing.value = s;
-  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled, mode: s.mode, region: s.region || "us-east-1" };
+  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled, mode: s.mode, region: s.region || "us-east-1", presignUsername: s.presignUsername || "", presignPassword: "" };
+  // Auto-expand the presign section if a read-only account is already configured
+  showPresignSection.value = !!s.presignUsername;
 }
 function closeEdit() { editing.value = null; }
 
@@ -212,6 +218,12 @@ async function saveEdit() {
   if (editForm.value.mode !== s.mode) body.mode = editForm.value.mode;
   // 096 — region (S3 only; safe to send for other types, backend stores it)
   if (editForm.value.region !== s.region) body.region = editForm.value.region;
+  // 097 — presign creds for WebDAV: always send presign_username (supports clearing via "");
+  //        send presign_password only when non-empty (like main password)
+  if (s.type === "webdav") {
+    body.presign_username = editForm.value.presignUsername; // "" → null in backend
+    if (editForm.value.presignPassword) body.presign_password = editForm.value.presignPassword;
+  }
   try {
     const xml = await storagePost("sources/update", body);
     if (/status="failed"/.test(xml)) throw new Error("update failed");
@@ -244,6 +256,8 @@ async function load() {
         mode: (s.mode === "sync_only" ? "sync_only" : "library") as "library" | "sync_only",
         // 096 — region for S3-compatible sources
         region: s.region || "us-east-1",
+        // 097 — read-only presign account indicator (password is never returned)
+        presignUsername: s.presignUsername || "",
         scanStatus: prev?.scanStatus ?? "idle",
         scanJobId: prev?.scanJobId ?? null,
         scanTotal: prev?.scanTotal ?? 0,
@@ -553,6 +567,13 @@ onUnmounted(() => {
           </select>
           <span class="field-hint">{{ t("sources.mode.hint") }}</span>
         </div>
+        <!-- 097 — Read-only presign account (WebDAV only, in add form) -->
+        <div v-if="form.type === 'webdav'" class="form-group">
+          <label class="form-label">{{ t("sources.presignCreds") }} <span class="field-hint-inline">({{ t("common.optional", "可选") }})</span></label>
+          <input v-model="form.presign_username" class="form-input" :placeholder="t('sources.presignUsername')" autocomplete="off" />
+          <input v-model="form.presign_password" type="password" class="form-input" style="margin-top:0.4rem" :placeholder="t('sources.presignPassword')" autocomplete="new-password" />
+          <span class="field-hint">{{ t("sources.presignCredsHint") }}</span>
+        </div>
         <button class="btn-primary" @click="addSource">{{ t("sources.save") }}</button>
       </div>
       <div class="corner corner-tl"></div>
@@ -579,6 +600,8 @@ onUnmounted(() => {
               <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
               <!-- P4: mode badge — only shown for sync_only, library is the default/silent state -->
               <span v-if="s.mode === 'sync_only'" class="status-badge mode-sync" :title="t('sources.mode.hint')">{{ t("sources.mode.syncOnly") }}</span>
+              <!-- 097 — read-only presign account badge -->
+              <span v-if="s.type === 'webdav' && s.presignUsername" class="status-badge presign-set" :title="t('sources.presignStatusSet')">⊙ {{ t("sources.presignCreds") }}</span>
               <!-- 060: scan status pill (display only — buttons are in source-actions below) -->
               <template v-if="isAdmin && (s.type === 'webdav' || s.type === 's3')">
                 <span v-if="s.scanStatus === 'running'" class="scan-pill scan-pill-running" :title="t('sources.scanStatus.progress')">
@@ -721,6 +744,23 @@ onUnmounted(() => {
             <label class="form-label">{{ t("sources.s3Region") }}</label>
             <input v-model="editForm.region" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
             <span class="field-hint">{{ t("sources.s3RegionHint") }}</span>
+          </div>
+          <!-- 097 — Read-only presign account (WebDAV only, collapsible) -->
+          <div v-if="editing?.type === 'webdav'" class="form-group">
+            <button type="button" class="link-button presign-toggle" @click="showPresignSection = !showPresignSection">
+              {{ showPresignSection ? "▾" : "▸" }} {{ t("sources.presignCreds") }} ({{ t("common.optional", "可选") }})
+            </button>
+            <div v-if="showPresignSection" class="presign-section">
+              <div class="form-group">
+                <label class="form-label">{{ t("sources.presignUsername") }}</label>
+                <input v-model="editForm.presignUsername" class="form-input" autocomplete="off" />
+              </div>
+              <div class="form-group">
+                <label class="form-label">{{ t("sources.presignPassword") }}</label>
+                <input v-model="editForm.presignPassword" type="password" class="form-input" :placeholder="editForm.presignUsername ? t('sources.passwordKeep') : ''" autocomplete="new-password" />
+              </div>
+              <span class="field-hint">{{ t("sources.presignCredsHint") }}</span>
+            </div>
           </div>
           <div class="form-group enabled-row">
             <label class="form-label enabled-label">{{ t("sources.enabled") }}</label>
@@ -1014,5 +1054,35 @@ onUnmounted(() => {
 .mono-cell {
   font-family: var(--font-mono);
   color: var(--color-text-primary);
+}
+
+/* 097 — presign read-only account badge (teal/cyan variant) */
+.status-badge.presign-set {
+  background: rgba(6, 182, 212, 0.12);
+  color: #22d3ee;
+  border-color: rgba(6, 182, 212, 0.35);
+}
+
+/* 097 — collapsible presign section inside edit modal */
+.presign-toggle {
+  font-size: var(--fs-sm);
+  letter-spacing: 0.04em;
+  margin-bottom: 0.35rem;
+}
+.presign-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px dashed rgba(6, 182, 212, 0.3);
+  border-radius: 4px;
+  background: rgba(6, 182, 212, 0.04);
+  margin-top: 0.3rem;
+}
+.field-hint-inline {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  font-weight: normal;
 }
 </style>

@@ -48,6 +48,8 @@ CREATE TABLE IF NOT EXISTS storage_sources (
   username TEXT,
   password TEXT,
   password_encrypted TEXT,                           -- 023: AES-256-GCM blob (`v1:<base64url>`) — unused after crypto removal, column kept for compat
+  presign_username TEXT,                             -- 097: optional read-only WebDAV account for presign URL (falls back to username if null)
+  presign_password TEXT,                             -- 097: paired with presign_username
   root_path TEXT NOT NULL DEFAULT '',                -- 003: path inside the remote; effective URL = base_url + root_path
   region TEXT NOT NULL DEFAULT 'us-east-1',          -- 096: SigV4 region (MinIO: any value; R2: 'auto'; AWS: real region)
   last_sync INTEGER,
