@@ -269,7 +269,17 @@ export function createQueries(db: D1Database) {
     // Song Instances
     async getSongInstances(masterId: string): Promise<SongInstance[]> {
       const result = await db.prepare(
-        "SELECT * FROM song_instances WHERE master_id = ? AND missing = 0 ORDER BY bit_rate DESC"
+        // 093 — Order R2 first so the media.ts selector's `selected =
+        // instances[0]` default already lands on the R2 copy when present
+        // (Worker binding fast path + R2 presign eligible). Within the same
+        // source tier, higher bit_rate wins to preserve pre-093 quality
+        // preference. media.ts still runs the full selector loop for
+        // format/maxBitRate overrides.
+        `SELECT * FROM song_instances
+         WHERE master_id = ? AND missing = 0
+         ORDER BY
+           CASE WHEN storage_uri LIKE 'r2://%' THEN 0 ELSE 1 END ASC,
+           bit_rate DESC`
       ).bind(masterId).all<SongInstance>();
       return result.results;
     },
