@@ -649,8 +649,17 @@
     "updated": "Source updated",
     "updateFailed": "Failed to update source",
     "deleted": "Source deleted",
-    "deleteFailed": "Failed to delete",
+    "deleteFailed": "Delete failed",
     "deleteConfirm": "Delete this source?",
+    "mirror": {
+      "btn": "Mirror to R2",
+      "stop": "Stop",
+      "confirm": "Copy all unmirrored files from \"{name}\" to R2? The client copies one at a time so the Worker never times out.",
+      "progress": "Copied {done}/{total} (failed {failed})",
+      "done": "Mirror complete: {done} succeeded, {failed} failed",
+      "failed": "Mirror error: {error}",
+      "none": "Nothing to mirror (everything is already on R2)"
+    },
     "passwordEncrypted": "ENCRYPTED",
     "passwordPlaintext": "PLAINTEXT",
     "passwordEncryptedHint": "Password stored as AES-256-GCM ciphertext.",

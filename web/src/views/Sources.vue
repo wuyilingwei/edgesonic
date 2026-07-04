@@ -19,7 +19,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 
 const { t } = useI18n();
-const { isAdmin, isSuperAdmin, storageFetch, storagePost } = useAuth();
+const { isAdmin, isSuperAdmin, storageFetch, storagePost, crossCopy } = useAuth();
 
 type ScanState = "idle" | "running" | "completed" | "failed";
 
@@ -263,6 +263,77 @@ async function deleteSource(id: string) {
   catch { showToast(t("sources.deleteFailed"), "error"); }
 }
 
+// 093f — Client-driven mirror WebDAV → R2. The client pages through
+// /storage/scan/listForMirror and calls /storage/files/crossCopy per item.
+// Each crossCopy is a separate Worker request so a large library never
+// holds a single long-running connection that could hit the Worker CPU
+// time limit. Progress is shown inline on the source row.
+interface MirrorState {
+  running: boolean;
+  total: number;
+  done: number;
+  failed: number;
+  currentTitle: string;
+  error: string | null;
+}
+const mirrorState = ref<Record<string, MirrorState>>({});
+
+function mirrorFor(s: Source): MirrorState | null {
+  return mirrorState.value[s.id] || null;
+}
+
+async function startMirror(s: Source) {
+  if (!confirm(t("sources.mirror.confirm", { name: s.name || s.base_url }))) return;
+  const st: MirrorState = { running: true, total: 0, done: 0, failed: 0, currentTitle: "", error: null };
+  mirrorState.value[s.id] = st;
+  try {
+    let offset = 0;
+    const limit = 50;
+    // First fetch to get total
+    let text = await storageFetch(`scan/listForMirror?source=${encodeURIComponent(s.id)}&limit=${limit}&offset=0`);
+    let data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "listForMirror failed");
+    st.total = data.total || 0;
+    if (st.total === 0) { showToast(t("sources.mirror.none")); st.running = false; return; }
+    // Iterate pages
+    while (st.running) {
+      for (const item of data.items || []) {
+        st.currentTitle = item.title || item.storageUri.split("/").pop() || item.instanceId;
+        try {
+          // Destination path mirrors the WebDAV path under music/
+          // Strip the webdav://sourceId/ prefix to get the remote path.
+          const remotePath = item.storageUri.replace(/^webdav:\/\/[^/]+\//, "");
+          const destPath = "music/" + remotePath;
+          await crossCopy(item.storageUri, "r2", destPath);
+          st.done++;
+        } catch (e) {
+          st.failed++;
+          st.error = e instanceof Error ? e.message : String(e);
+          // Continue to next item — one failure shouldn't abort the whole mirror.
+        }
+      }
+      offset += data.items?.length || 0;
+      if (offset >= st.total || (data.items?.length || 0) < limit) break;
+      // Fetch next page
+      text = await storageFetch(`scan/listForMirror?source=${encodeURIComponent(s.id)}&limit=${limit}&offset=${offset}`);
+      data = JSON.parse(text);
+      if (!data.ok) throw new Error(data.error || "listForMirror pagination failed");
+    }
+    showToast(t("sources.mirror.done", { done: st.done, failed: st.failed }));
+  } catch (e) {
+    st.error = e instanceof Error ? e.message : String(e);
+    showToast(t("sources.mirror.failed", { error: st.error }), "error");
+  } finally {
+    st.running = false;
+    st.currentTitle = "";
+  }
+}
+
+function stopMirror(sId: string) {
+  const st = mirrorState.value[sId];
+  if (st) st.running = false;
+}
+
 async function scanSource(s: Source, force = false) {
   // 060 — flip to a launching placeholder so the row immediately shows a
   // spinner instead of staying on "Scan". The 1st pollScanStatus() will
@@ -496,8 +567,32 @@ onUnmounted(() => {
                   {{ s.scanStatus === 'completed' ? t('sources.scanStatus.rescan') : s.scanStatus === 'failed' ? t('sources.scanStatus.retry') : t('sources.scanStatus.idle') }}
                 </button>
               </template>
+              <!-- 093f — Mirror to R2 button (webdav only) -->
+              <button
+                v-if="s.type === 'webdav' && !(mirrorFor(s)?.running)"
+                class="btn-secondary btn-sm"
+                @click="startMirror(s)"
+              >{{ t("sources.mirror.btn") }}</button>
+              <button
+                v-if="mirrorFor(s)?.running"
+                class="btn-danger btn-sm"
+                @click="stopMirror(s.id)"
+              >{{ t("sources.mirror.stop") }}</button>
               <button class="btn-secondary btn-sm" @click="openEdit(s)">{{ t("common.edit") }}</button>
               <button class="btn-danger btn-sm" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
+            </div>
+            <!-- 093f — Mirror progress -->
+            <div v-if="mirrorFor(s)" class="mirror-progress">
+              <div class="mirror-progress-meta">
+                {{ t("sources.mirror.progress", { done: mirrorFor(s)!.done, total: mirrorFor(s)!.total, failed: mirrorFor(s)!.failed }) }}
+              </div>
+              <div class="mirror-progress-bar">
+                <div class="mirror-progress-fill" :style="{ width: (mirrorFor(s)!.total > 0 ? (mirrorFor(s)!.done / mirrorFor(s)!.total * 100) : 0) + '%' }"></div>
+              </div>
+              <div v-if="mirrorFor(s)?.currentTitle" class="mirror-current">
+                {{ mirrorFor(s)!.currentTitle }}
+              </div>
+              <div v-if="mirrorFor(s)?.error" class="mirror-error">{{ mirrorFor(s)!.error }}</div>
             </div>
           </div>
         </div>
@@ -678,6 +773,48 @@ onUnmounted(() => {
   gap: 0.35rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+/* 093f — Mirror to R2 progress */
+.mirror-progress {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border-left: 3px solid var(--color-accent-primary);
+  background: var(--color-surface-2, rgba(255,255,255,0.03));
+  border-radius: 4px;
+}
+.mirror-progress-meta {
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+}
+.mirror-progress-bar {
+  margin-top: 0.3rem;
+  height: 4px;
+  background: var(--color-border-subtle);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mirror-progress-fill {
+  height: 100%;
+  background: var(--color-accent-primary);
+  transition: width 0.3s;
+}
+.mirror-current {
+  margin-top: 0.3rem;
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mirror-error {
+  margin-top: 0.2rem;
+  font-size: var(--fs-sm);
+  color: var(--color-accent-warning, #b45309);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .source-name {
