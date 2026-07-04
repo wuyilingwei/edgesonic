@@ -15,6 +15,7 @@ import { workUploadRoutes } from "./work_upload";
 import { cfRoutes } from "./cf";
 import { maintenanceRoutes } from "./maintenance";
 import { versionRoutes } from "./version";
+import { r2presignRoutes } from "./r2presign";
 
 export const edgesonicRoutes = new Hono();
 
@@ -33,3 +34,5 @@ edgesonicRoutes.route("/", cfRoutes);
 edgesonicRoutes.route("/", maintenanceRoutes);
 // 081 — public version endpoint (no auth, SPA freshness detection)
 edgesonicRoutes.route("/", versionRoutes);
+// 091 — R2 presigned URL status (super-admin Dashboard hint)
+edgesonicRoutes.route("/", r2presignRoutes);

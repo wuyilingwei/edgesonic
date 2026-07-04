@@ -5,7 +5,6 @@ import { md5 } from "../../utils/md5";
 import { createQueries } from "../../db/queries";
 import { getFeatureString } from "../../utils/features";
 import { dispatchWorkBatch } from "../edgesonic/work";
-import { getDecryptedPassword } from "../../adapters/index";
 
 export const scanRoutes = new Hono();
 
@@ -31,11 +30,7 @@ interface SourceRow {
   id: string;
   base_url: string;
   username: string | null;
-  // 068 — Legacy plaintext + new encrypted column. listWebdav() resolves the
-  // effective password via getDecryptedPassword(src, env) before signing the
-  // Basic-Auth header so it doesn't matter which one is populated.
   password: string | null;
-  password_encrypted: string | null;
   root_path: string | null;
   // 089 S2 — 'library' (default) | 'sync_only' (scan but skip DB inserts)
   mode?: string | null;
@@ -60,7 +55,7 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
   const onlyId = c.req.query("id");
 
   const sources = (await db.prepare(
-    `SELECT id, base_url, username, password, password_encrypted, root_path, mode FROM storage_sources
+    `SELECT id, base_url, username, password, root_path, mode FROM storage_sources
      WHERE type = 'webdav' AND enabled = 1 ${onlyId ? "AND id = ?" : ""}`
   ).bind(...(onlyId ? [onlyId] : [])).all<SourceRow>()).results;
 
@@ -102,7 +97,7 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const src = sources[i];
-    exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled, env }));
+    exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled }));
   }
 
   return c.text(
@@ -218,9 +213,7 @@ export async function asyncScanSource(
   db: D1Database,
   src: SourceRow,
   jobId: string,
-  // 068 — `env` is optional so legacy callers still compile; when supplied
-  // listWebdav() will decrypt password_encrypted via getDecryptedPassword.
-  opts: { etagCheck?: boolean; dispatchToWorkerPool?: boolean; env?: { STORAGE_KEY?: string } } = {},
+  opts: { etagCheck?: boolean; dispatchToWorkerPool?: boolean } = {},
 ): Promise<void> {
   const queries = createQueries(db);
   const now = Math.floor(Date.now() / 1000);
@@ -234,7 +227,7 @@ export async function asyncScanSource(
   // INSERTs don't compete with the scan's UPDATE/INSERT batches.
   const dispatchTargets: Array<{ instanceId: string; uri: string; suffix: string; size: number }> = [];
   try {
-    const { entries, complete } = await listWebdav(src, opts.env);
+    const { entries, complete } = await listWebdav(src);
     const audio = entries.filter((e) => !e.isDir && AUDIO_EXT.has(extOf(e.path)));
 
     // 051 — pull the prior snapshot (etag/lm/size/tag_scanned) for each
@@ -477,14 +470,11 @@ function guessFromPath(relPath: string): { artist: string; album: string; title:
 
 async function listWebdav(
   src: SourceRow,
-  env?: { STORAGE_KEY?: string },
 ): Promise<{ entries: DavEntry[]; complete: boolean }> {
   const root = (src.root_path || "").replace(/^\/+|\/+$/g, "");
   const baseUrl = src.base_url.replace(/\/+$/, "") + (root ? `/${root}` : "");
   const basePath = stripTrailingSlash(new URL(baseUrl).pathname);
-  // 068 — Resolve the password through getDecryptedPassword so v1:<base64url>
-  // blobs decrypt under env.STORAGE_KEY and legacy plaintext rows pass through.
-  const password = await getDecryptedPassword(src, env);
+  const password = src.password || "";
   const auth = `Basic ${btoa(`${src.username || ""}:${password}`)}`;
   let requests = 0;
 

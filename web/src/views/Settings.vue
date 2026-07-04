@@ -102,6 +102,9 @@ async function loadFeatures() {
     hydrateScanFromFeatures();
     // 065: hydrate cross-origin isolation toggle.
     hydrateCioFromFeatures();
+    // 091/092: hydrate presign toggles + probe R2 secrets presence.
+    hydratePresignFromFeatures();
+    loadR2PresignStatus();
   } catch (e: unknown) {
     // 后端契约可能尚未部署 —— 优雅降级显示错误（非 JSON 响应一律视为 API 不可用）
     error.value = e instanceof SyntaxError || !(e instanceof Error)
@@ -291,6 +294,61 @@ async function saveCio() {
     showToast(`${t("settings.common.crossOriginIsolation.saveFailed")}: ${msg}`, "error");
   }
   cioBusy.value = false;
+}
+
+// === 091/092 — R2 + WebDAV presigned URL direct stream ===
+// Two feature flags + the R2 S3 secrets presence. The Dashboard surfaces a
+// "stream speed may be limited" hint when presign is inactive; this sub-block
+// is the admin-facing toggle + status readout.
+const r2PresignEnabled = ref<boolean>(false);
+const webdavPresignEnabled = ref<boolean>(true);
+const r2SecretsConfigured = ref<boolean>(false);
+const r2PresignBusy = ref(false);
+const webdavPresignBusy = ref(false);
+
+function hydratePresignFromFeatures() {
+  r2PresignEnabled.value = findFeatureString("enable_r2_presign", "0") === "1";
+  webdavPresignEnabled.value = findFeatureString("enable_webdav_presign", "1") === "1";
+}
+
+async function loadR2PresignStatus() {
+  if (!isSuperAdmin.value) return;
+  try {
+    const data = JSON.parse(await edgesonicFetch("r2presign/status"));
+    if (data?.ok) r2SecretsConfigured.value = !!data.secretsConfigured;
+  } catch { /* status endpoint may be absent on older deploys — silent */ }
+}
+
+async function saveR2Presign() {
+  r2PresignBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "enable_r2_presign",
+      value: r2PresignEnabled.value ? "1" : "0",
+    }));
+    if (!data.ok) throw new Error(data.error || "enable_r2_presign");
+    showToast(t("settings.common.presign.r2Saved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.presign.saveFailed")}: ${msg}`, "error");
+  }
+  r2PresignBusy.value = false;
+}
+
+async function saveWebdavPresign() {
+  webdavPresignBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "enable_webdav_presign",
+      value: webdavPresignEnabled.value ? "1" : "0",
+    }));
+    if (!data.ok) throw new Error(data.error || "enable_webdav_presign");
+    showToast(t("settings.common.presign.webdavSaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.presign.saveFailed")}: ${msg}`, "error");
+  }
+  webdavPresignBusy.value = false;
 }
 
 function hydrateScanFromFeatures() {
@@ -773,7 +831,7 @@ async function revokeSession(id: string) {
 }
 
 // === Subsonic client credentials ===
-interface Credential { id: string; label: string; lastUsed: number; createdAt: number; }
+interface Credential { id: string; label: string; lastUsed: number; createdAt: number; streamProxyStrategy: string; }
 const credentials = ref<Credential[]>([]);
 const credLoading = ref(true);
 const credError = ref("");
@@ -793,6 +851,7 @@ async function loadCredentials() {
       label: r.label || "",
       lastUsed: parseInt(r.lastUsed || "0"),
       createdAt: parseInt(r.createdAt || "0"),
+      streamProxyStrategy: r.streamProxyStrategy || "always",
     }));
   } catch {
     credentials.value = [];
@@ -860,6 +919,28 @@ async function deleteCredential(id: string) {
     if (issued.value) issued.value = null;
     await loadCredentials();
   } catch { showToast(t("settings.clients.loadFailed"), "error"); }
+}
+
+// 092 — Update a credential's stream proxy strategy. Triggered by the
+// per-row <select>. Commits immediately; on failure reloads the list so
+// the dropdown snaps back to the persisted value.
+const STRATEGY_OPTIONS: Array<{ value: string; key: string }> = [
+  { value: "always", key: "settings.clients.strategyAlways" },
+  { value: "never", key: "settings.clients.strategyNever" },
+  { value: "r2_only", key: "settings.clients.strategyR2Only" },
+  { value: "webdav_only", key: "settings.clients.strategyWebdavOnly" },
+];
+async function updateCredentialStrategy(cr: { id: string; label: string; streamProxyStrategy: string }, newStrategy: string) {
+  if (newStrategy === cr.streamProxyStrategy) return;
+  try {
+    const xml = await edgesonicPost("auth/credentials/update", { id: cr.id, label: cr.label, streamProxyStrategy: newStrategy });
+    if (/status="failed"/.test(xml)) throw new Error("rejected");
+    cr.streamProxyStrategy = newStrategy;
+    showToast(t("settings.clients.strategySaved"));
+  } catch {
+    showToast(t("settings.clients.loadFailed"), "error");
+    await loadCredentials();
+  }
 }
 
 async function copyText(text: string) {
@@ -1340,9 +1421,77 @@ onMounted(() => {
             <span class="worker-count">{{ t("settings.common.cf.cpuP99Ms") }}: {{ cfAnalytics.cpuP99Ms }}</span>
           </div>
           <div v-else-if="cfAnalytics && !cfAnalytics.available" class="error-panel">
-            <code class="error-text">
-              {{ t("settings.common.cf.analyticsUnavailable", { error: cfAnalytics.error || "—" }) }}
-            </code>
+             <code class="error-text">
+               {{ t("settings.common.cf.analyticsUnavailable", { error: cfAnalytics.error || "—" }) }}
+             </code>
+           </div>
+         </div>
+
+        <!-- 091/092 — R2 + WebDAV presigned URL direct stream -->
+        <div v-if="isSuperAdmin" class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.presign.title") }}</span>
+            <span class="status-badge" :class="r2SecretsConfigured ? 'success' : 'warning'">
+              {{ r2SecretsConfigured
+                ? t("settings.common.presign.secretsConfigured")
+                : t("settings.common.presign.secretsMissing") }}
+            </span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.presign.hint") }}
+          </p>
+
+          <!-- R2 secrets missing banner — the most important hint -->
+          <div v-if="!r2SecretsConfigured" class="presign-warning">
+            <p class="feature-desc" style="margin:0;color:var(--color-accent-warning,#b45309)">
+              {{ t("settings.common.presign.r2SecretsMissingHint") }}
+            </p>
+            <ul class="presign-env-list">
+              <li><code>R2_ACCESS_KEY_ID</code></li>
+              <li><code>R2_SECRET_ACCESS_KEY</code></li>
+              <li><code>R2_ACCOUNT_ID</code></li>
+            </ul>
+            <p class="feature-desc" style="margin:0.4rem 0 0;color:var(--color-text-muted)">
+              {{ t("settings.common.presign.secretPushHint") }}
+            </p>
+          </div>
+
+          <div class="transcode-grid">
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.presign.r2Toggle") }}</span>
+              <span class="scan-toggle">
+                <input type="checkbox" v-model="r2PresignEnabled" :disabled="!isSuperAdmin" />
+                <span>{{ r2PresignEnabled ? t("common.on") : t("common.off") }}</span>
+              </span>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.presign.r2ToggleDesc") }}</p>
+            <div class="tc-actions">
+              <button
+                class="btn-primary"
+                :disabled="!isSuperAdmin || r2PresignBusy"
+                @click="saveR2Presign"
+              >
+                {{ t("settings.common.presign.save") }}
+              </button>
+            </div>
+
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.presign.webdavToggle") }}</span>
+              <span class="scan-toggle">
+                <input type="checkbox" v-model="webdavPresignEnabled" :disabled="!isSuperAdmin" />
+                <span>{{ webdavPresignEnabled ? t("common.on") : t("common.off") }}</span>
+              </span>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.presign.webdavToggleDesc") }}</p>
+            <div class="tc-actions">
+              <button
+                class="btn-primary"
+                :disabled="!isSuperAdmin || webdavPresignBusy"
+                @click="saveWebdavPresign"
+              >
+                {{ t("settings.common.presign.save") }}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1726,12 +1875,13 @@ onMounted(() => {
           <div>{{ t("settings.clients.empty") }}</div>
         </div>
 
-        <div v-else class="table-wrap session-table" style="--grid-cols: 1fr 1.4fr 1fr 1fr auto">
+        <div v-else class="table-wrap session-table" style="--grid-cols: 1fr 1.4fr 1fr 1fr 1.2fr auto">
           <div class="table-header">
             <span>ID</span>
             <span>{{ t("settings.clients.colLabel") }}</span>
             <span>{{ t("settings.clients.colCreated") }}</span>
             <span>{{ t("settings.clients.colLastUsed") }}</span>
+            <span>{{ t("settings.clients.colStrategy") }}</span>
             <span></span>
           </div>
           <div v-for="cr in credentials" :key="cr.id" class="table-row">
@@ -1752,6 +1902,17 @@ onMounted(() => {
             </span>
             <span class="session-time">{{ formatTs(cr.createdAt) }}</span>
             <span class="session-time">{{ cr.lastUsed ? formatTs(cr.lastUsed) : t("settings.clients.never") }}</span>
+            <!-- 092 — per-credential stream proxy strategy. 302 direct-stream
+                 can be toggled per client for backward compatibility. -->
+            <span class="session-strategy">
+              <select
+                class="form-input cred-strategy-select"
+                :value="cr.streamProxyStrategy"
+                @change="updateCredentialStrategy(cr, ($event.target as HTMLSelectElement).value)"
+              >
+                <option v-for="opt in STRATEGY_OPTIONS" :key="opt.value" :value="opt.value">{{ t(opt.key) }}</option>
+              </select>
+            </span>
             <span><button class="btn-danger btn-sm" @click="deleteCredential(cr.id)">{{ t("common.delete") }}</button></span>
           </div>
         </div>
@@ -1934,6 +2095,25 @@ onMounted(() => {
 }
 .tc-profile-pill input { margin: 0; }
 .tc-actions { margin-top: 0.4rem; display: flex; justify-content: flex-end; }
+
+/* --- 091/092 presign warning banner --- */
+.presign-warning {
+  margin: 0.6rem 0 0.8rem;
+  padding: 0.6rem 0.8rem;
+  border-left: 3px solid var(--color-accent-warning, #b45309);
+  background: var(--color-surface-2, rgba(255,255,255,0.03));
+  border-radius: 4px;
+}
+.presign-env-list {
+  margin: 0.4rem 0 0.4rem 1.2rem;
+  padding: 0;
+  list-style: disc;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+}
+.presign-env-list li { margin: 0.15rem 0; }
+.presign-env-list code { background: none; padding: 0; color: inherit; }
 
 /* --- 051 Scan toggle pill --- */
 .scan-toggle {

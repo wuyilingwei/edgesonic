@@ -15,7 +15,6 @@ export const webLoginRoutes = new Hono<{ Bindings: Env }>();
 
 webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
   const db = c.env.DB;
-  const kv = c.env.KV;
 
   let body: { username?: string; password?: string };
   try {
@@ -47,14 +46,13 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
   const expiresAt = Math.floor(Date.now() / 1000) + 86400; // 24 hours
   const userAgent = c.req.header("User-Agent") || "";
 
+  // 090 — Session stored only in D1 `sessions` table (KV session: cache removed).
   await db
     .prepare(
       "INSERT INTO sessions (id, username, token, user_agent, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
     )
     .bind(sessionId, username, sessionToken, userAgent, expiresAt, Math.floor(Date.now() / 1000))
     .run();
-
-  await kv.put(`session:${username}`, sessionToken, { expirationTtl: 86400 });
 
   return c.json({
     ok: true,
@@ -67,7 +65,6 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
 
 webLoginRoutes.post("/edgesonic/auth/logout", async (c) => {
   const db = c.env.DB;
-  const kv = c.env.KV;
 
   let body: { sessionToken?: string; username?: string };
   try {
@@ -76,11 +73,9 @@ webLoginRoutes.post("/edgesonic/auth/logout", async (c) => {
     return c.json({ ok: false, error: "Invalid JSON" }, 400);
   }
 
+  // 090 — Logout only touches D1; KV session: cache removed.
   if (body.sessionToken) {
     await db.prepare("DELETE FROM sessions WHERE token = ?").bind(body.sessionToken).run();
-  }
-  if (body.username) {
-    await kv.delete(`session:${body.username}`);
   }
 
   return c.json({ ok: true });
@@ -121,16 +116,14 @@ edgesonicAuthRoutes.post("/auth/sessions/revoke", async (c) => {
     return c.text(subsonicError(0, "Missing id"), 400, XML);
   }
   const db = c.env.DB;
-  const kv = c.env.KV;
   const user = c.get("user");
   const row = await db.prepare("SELECT token FROM sessions WHERE id = ? AND username = ?")
     .bind(body.id, user.username).first<{ token: string }>();
   if (!row) {
     return c.text(subsonicError(70, "Session not found"), 404, XML);
   }
+  // 090 — D1 is the sole authority; no KV session: cache to delete.
   await db.prepare("DELETE FROM sessions WHERE id = ?").bind(body.id).run();
-  const cached = await kv.get(`session:${user.username}`);
-  if (cached === row.token) await kv.delete(`session:${user.username}`);
   return c.text(subsonicOK({}), 200, XML);
 });
 
@@ -139,8 +132,8 @@ edgesonicAuthRoutes.get("/auth/credentials/list", permissionMiddleware("manage_c
   const db = c.env.DB;
   const user = c.get("user");
   const rows = await db.prepare(
-    "SELECT id, label, last_used, created_at FROM subsonic_credentials WHERE username = ? ORDER BY created_at ASC"
-  ).bind(user.username).all<{ id: string; label: string | null; last_used: number | null; created_at: number }>();
+    "SELECT id, label, last_used, created_at, stream_proxy_strategy FROM subsonic_credentials WHERE username = ? ORDER BY created_at ASC"
+  ).bind(user.username).all<{ id: string; label: string | null; last_used: number | null; created_at: number; stream_proxy_strategy: string | null }>();
 
   return c.text(
     subsonicOK({
@@ -151,6 +144,7 @@ edgesonicAuthRoutes.get("/auth/credentials/list", permissionMiddleware("manage_c
             label: r.label || "",
             lastUsed: r.last_used ? String(r.last_used) : "0",
             createdAt: String(r.created_at),
+            streamProxyStrategy: r.stream_proxy_strategy || "always",
           },
         })),
       },
@@ -170,20 +164,26 @@ edgesonicAuthRoutes.post("/auth/credentials/create", permissionMiddleware("manag
     return c.text(subsonicError(0, "Maximum 64 Subsonic credentials per user"), 400, XML);
   }
 
-  const body = await c.req.json<{ password: string; label?: string }>();
+  const body = await c.req.json<{ password: string; label?: string; streamProxyStrategy?: string }>();
   if (!body.password) {
     return c.text(subsonicError(0, "Missing password"), 400, XML);
+  }
+
+  // 092 — validate optional stream_proxy_strategy. Default 'always'.
+  const strategy = body.streamProxyStrategy || "always";
+  if (!["always", "never", "r2_only", "webdav_only"].includes(strategy)) {
+    return c.text(subsonicError(0, "Invalid streamProxyStrategy (always|never|r2_only|webdav_only)"), 400, XML);
   }
 
   const id = crypto.randomUUID().substring(0, 12);
   const now = Math.floor(Date.now() / 1000);
   await db.prepare(
-    "INSERT INTO subsonic_credentials (id, username, password, label, created_at) VALUES (?, ?, ?, ?, ?)"
-  ).bind(id, user.username, body.password, body.label || "", now).run();
+    "INSERT INTO subsonic_credentials (id, username, password, label, stream_proxy_strategy, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+  ).bind(id, user.username, body.password, body.label || "", strategy, now).run();
 
   return c.text(
     subsonicOK({
-      credential: { _attributes: { id, label: body.label || "" } },
+      credential: { _attributes: { id, label: body.label || "", streamProxyStrategy: strategy } },
     }),
     200, XML,
   );
@@ -204,9 +204,9 @@ edgesonicAuthRoutes.post("/auth/credentials/update", permissionMiddleware("manag
   const db = c.env.DB;
   const user = c.get("user");
 
-  let body: { id?: string; label?: string };
+  let body: { id?: string; label?: string; streamProxyStrategy?: string };
   try {
-    body = await c.req.json<{ id?: string; label?: string }>();
+    body = await c.req.json<{ id?: string; label?: string; streamProxyStrategy?: string }>();
   } catch {
     return c.text(subsonicError(0, "Invalid JSON body"), 400, XML);
   }
@@ -221,9 +221,20 @@ edgesonicAuthRoutes.post("/auth/credentials/update", permissionMiddleware("manag
     return c.text(subsonicError(0, "Label too long (max 200 chars)"), 400, XML);
   }
 
-  const result = await db.prepare(
-    "UPDATE subsonic_credentials SET label = ? WHERE id = ? AND username = ?",
-  ).bind(body.label, body.id, user.username).run();
+  // 092 — optional stream_proxy_strategy update. When absent we leave it
+  // unchanged (so the label-only rename path stays a single-column UPDATE).
+  const strategy = body.streamProxyStrategy;
+  if (strategy !== undefined && !["always", "never", "r2_only", "webdav_only"].includes(strategy)) {
+    return c.text(subsonicError(0, "Invalid streamProxyStrategy (always|never|r2_only|webdav_only)"), 400, XML);
+  }
+
+  const result = strategy === undefined
+    ? await db.prepare(
+        "UPDATE subsonic_credentials SET label = ? WHERE id = ? AND username = ?",
+      ).bind(body.label, body.id, user.username).run()
+    : await db.prepare(
+        "UPDATE subsonic_credentials SET label = ?, stream_proxy_strategy = ? WHERE id = ? AND username = ?",
+      ).bind(body.label, strategy, body.id, user.username).run();
 
   if (!result.meta.changes) {
     return c.text(subsonicError(70, "Credential not found"), 404, XML);
@@ -231,7 +242,7 @@ edgesonicAuthRoutes.post("/auth/credentials/update", permissionMiddleware("manag
 
   return c.text(
     subsonicOK({
-      credential: { _attributes: { id: body.id, label: body.label } },
+      credential: { _attributes: { id: body.id, label: body.label, streamProxyStrategy: strategy ?? undefined } },
     }),
     200, XML,
   );
