@@ -282,7 +282,7 @@ mediaRoutes.get("/stream", async (c) => {
       const presignOn = await getFeatureString(env, "enable_r2_presign", "0");
       const accessKeyId = env.R2_ACCESS_KEY_ID;
       const secretKey = env.R2_SECRET_ACCESS_KEY;
-      const accountId = env.R2_ACCOUNT_ID;
+      const accountId = env.CF_ACCOUNT_ID;
       const schemeAllowed = strategy === "always" || strategy === "r2_only";
       if (presignOn === "1" && schemeAllowed && accessKeyId && secretKey && accountId) {
         try {

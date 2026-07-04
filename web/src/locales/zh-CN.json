@@ -417,7 +417,7 @@
         "hint": "把 /rest/stream 302 重定向到短期签名的 R2 S3 / WebDAV UserInfo URL，让浏览器直接取字节，绕过 Worker 子请求带宽池。R2 出口免费；WebDAV 受益最大（没有 Worker 绑定快路径）。",
         "secretsConfigured": "R2 密钥已配置",
         "secretsMissing": "R2 密钥缺失",
-        "r2SecretsMissingHint": "R2 预签名为 OFF，因为以下三个 Workers Secrets 未设置。缺密钥时即使开关打开，stream 端点也会回退到 Worker 内代理。",
+        "r2SecretsMissingHint": "R2 预签名为 OFF，因为两个 R2 S3 密钥（或 Cloudflare 集成块里的 CF_ACCOUNT_ID）未设置。缺密钥时即使开关打开，stream 端点也会回退到 Worker 内代理。",
         "secretPushHint": "用 `wrangler secret put <NAME>` 推送——见 worker/SECRETS.md §3 步骤说明。",
         "r2Toggle": "启用 R2 预签名",
         "r2ToggleDesc": "关闭则走 Worker 内流路径。开了但缺密钥会静默回退到 Worker 内路径。",

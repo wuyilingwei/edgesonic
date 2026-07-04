@@ -1464,7 +1464,7 @@ onMounted(() => {
             <ul class="presign-env-list">
               <li><code>R2_ACCESS_KEY_ID</code></li>
               <li><code>R2_SECRET_ACCESS_KEY</code></li>
-              <li><code>R2_ACCOUNT_ID</code></li>
+              <li><code>CF_ACCOUNT_ID</code> <span style="opacity:0.7">— from Cloudflare integration block above</span></li>
             </ul>
             <p class="feature-desc" style="margin:0.4rem 0 0;color:var(--color-text-muted)">
               {{ t("settings.common.presign.secretPushHint") }}

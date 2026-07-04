@@ -119,10 +119,10 @@ const STRING_FEATURE_KEYS = new Set([
     // multi-thread in the work pool. '0' restores pre-065 behaviour.
     "enable_cross_origin_isolation",
     // 091 — R2 presigned URL short-circuit for /rest/stream raw+r2. When '1'
-    // AND R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_ACCOUNT_ID secrets are set,
-    // the stream endpoint 302-redirects the browser to a short-lived SigV4
-    // R2 S3 URL so bytes bypass the Worker sub-request bandwidth pool. '0'
-    // keeps the existing in-Worker stream path.
+    // AND R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY secrets are set (plus
+    // CF_ACCOUNT_ID reused from 054), the stream endpoint 302-redirects the
+    // browser to a short-lived SigV4 R2 S3 URL so bytes bypass the Worker
+    // sub-request bandwidth pool. '0' keeps the existing in-Worker stream path.
     "enable_r2_presign",
     // 092 — WebDAV presigned URL short-circuit. When '1' AND the chosen
     // credential's stream_proxy_strategy allows WebDAV 302, the stream

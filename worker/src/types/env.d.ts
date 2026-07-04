@@ -40,15 +40,16 @@ interface Env {
   // push secrets into this same Worker. Defaults to "edgesonic" when unset so
   // existing deployments keep working without a redeploy.
   WORKER_NAME?: string;
-  // 091 — R2 S3 presigned URL credentials. When all three are set AND
+  // 091 — R2 S3 presigned URL credentials. When both are set AND
   // feature `enable_r2_presign` is '1', the /rest/stream raw+r2 branch
   // 302-redirects the browser to a short-lived presigned R2 S3 URL,
-  // bypassing the Worker sub-request bandwidth pool. Push via:
+  // bypassing the Worker sub-request bandwidth pool. The R2 account id
+  // is read from `CF_ACCOUNT_ID` (already pushed as a Workers Secret by
+  // the Settings → Cloudflare integration sub-block, task 054) — no
+  // separate R2_ACCOUNT_ID secret is needed. Push via:
   //   wrangler secret put R2_ACCESS_KEY_ID
   //   wrangler secret put R2_SECRET_ACCESS_KEY
-  //   wrangler secret put R2_ACCOUNT_ID   (optional; defaults to wrangler.toml account_id)
   // See worker/SECRETS.md §3.
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
-  R2_ACCOUNT_ID?: string;
 }

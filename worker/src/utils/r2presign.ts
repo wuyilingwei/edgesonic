@@ -25,8 +25,9 @@
 // Required env (Workers Secrets, NOT in wrangler.toml vars):
 //   R2_ACCESS_KEY_ID     — S3 access key (R2 → Manage R2 API Tokens → Create)
 //   R2_SECRET_ACCESS_KEY — S3 secret key
-//   R2_ACCOUNT_ID        — Cloudflare account ID (defaults to env value if
-//                           absent; wrangler.toml already has account_id)
+//   CF_ACCOUNT_ID        — Cloudflare account id (reused from 054 Cloudflare
+//                           integration; pushed via Settings UI or
+//                           `wrangler secret put CF_ACCOUNT_ID`)
 //
 // Region is hardcoded to "auto" — R2 ignores the region but SigV4 requires one.
 
