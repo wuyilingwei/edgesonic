@@ -101,10 +101,13 @@ export interface PresignOpts {
  */
 export async function presignR2Get(opts: PresignOpts): Promise<string> {
   const ttl = Math.min(Math.max(opts.ttlSec ?? 300, 1), 604800);
-  const host = `${opts.accountId}.r2.cloudflarestorage.com`;
+  // 093 — Use virtual-hosted style (https://{bucket}.{accountId}.r2.cloudflarestorage.com/{key})
+  // per R2 docs. Path style (https://{accountId}.r2.cloudflarestorage.com/{bucket}/{key})
+  // generates signatures whose host header doesn't match what R2 verifies → 403.
+  const host = `${opts.bucket}.${opts.accountId}.r2.cloudflarestorage.com`;
   // S3 canonical URI is the path with `/` not double-encoded (encodeSlash=false
   // for canonical URI per S3 spec, since R2 keys use `/` as separator).
-  const objectPath = `/${opts.bucket}/${opts.key}`;
+  const objectPath = `/${opts.key}`;
   const canonicalUri = uriEncode(objectPath, false);
 
   const now = new Date();
