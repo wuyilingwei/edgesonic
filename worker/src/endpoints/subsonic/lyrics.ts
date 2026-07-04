@@ -18,6 +18,7 @@
 import { Hono } from "hono";
 import { createQueries } from "../../db/queries";
 import { fetchExternalLyric } from "../../utils/lyricfetch";
+import { fetchLrcSidecar } from "../../utils/lrcSidecar";
 import { subsonicOK } from "../../utils/xml";
 import { subsonicError } from "../../auth";
 
@@ -25,14 +26,54 @@ export const lyricsRoutes = new Hono();
 
 // Reused by both endpoints: given a master row, return existing lyrics or
 // fetch externally + persist. Never throws — fetch failures return null.
+//
+// 094 — Resolution order is now:
+//   1. song_masters.lyrics (D1) — populated by writeTags / prior fetch /
+//      scan-time .lrc sidecar import.
+//   2. Sibling .lrc sidecar (R2 / WebDAV only). Local-first beats a round-trip
+//      to NetEase and avoids needing the title/artist match heuristic for
+//      files that already live next to the audio.
+//   3. External fetcher (NetEase). On hit, write back to song_masters.lyrics
+//      so the next call is free.
+//   4. Otherwise return the empty shell.
 async function resolveLyrics(
   env: Env,
+  db: D1Database,
   masterId: string,
   artist: string | null,
   title: string | null,
   existing: string | null | undefined,
 ): Promise<string | null> {
   if (existing && existing.trim().length > 0) return existing;
+
+  // 094 — Try a sibling .lrc sidecar next, before hitting NetEase. The
+  // sidecar lookup needs a song_instances.storage_uri; pick the first
+  // eligible instance (R2 preferred by getSongInstances' ordering). Only
+  // r2:// and webdav:// URIs are eligible — url/subsonic short-circuit
+  // inside fetchLrcSidecar.
+  try {
+    const queries = createQueries(db);
+    const instances = await queries.getSongInstances(masterId);
+    for (const inst of instances) {
+      const lrc = await fetchLrcSidecar(env, inst.storage_uri);
+      if (lrc) {
+        // Persist for cache locality so the next call skips the R2/WebDAV
+        // round-trip entirely. Best-effort — a transient D1 failure is
+        // logged but never blocks the response.
+        try {
+          await db.prepare(
+            "UPDATE song_masters SET lyrics = ?, updated_at = ? WHERE id = ?",
+          ).bind(lrc, Math.floor(Date.now() / 1000), masterId).run();
+        } catch {
+          // intentionally silent.
+        }
+        return lrc;
+      }
+    }
+  } catch {
+    // Sidecar lookup must never break getLyrics.
+  }
+
   const fetched = await fetchExternalLyric(artist, title);
   if (!fetched) return null;
 
@@ -40,7 +81,7 @@ async function resolveLyrics(
   // but never blocks the response — the caller still gets the freshly fetched
   // text.
   try {
-    await env.DB.prepare(
+    await db.prepare(
       "UPDATE song_masters SET lyrics = ?, updated_at = ? WHERE id = ?",
     )
       .bind(fetched, Math.floor(Date.now() / 1000), masterId)
@@ -105,7 +146,7 @@ lyricsRoutes.get("/getLyrics", async (c) => {
 
   let lyrics: string | null = null;
   if (row) {
-    lyrics = await resolveLyrics(env, row.id, row.artist_name || artist, row.title || title, row.lyrics);
+    lyrics = await resolveLyrics(env, db, row.id, row.artist_name || artist, row.title || title, row.lyrics);
   } else if (title.trim()) {
     // No match in D1 — still try external, but we have no row to write back to.
     lyrics = await fetchExternalLyric(artist, title);
@@ -158,7 +199,7 @@ lyricsRoutes.get("/getLyricsBySongId", async (c) => {
     .first<{ name: string }>();
   const artistName = artistRow?.name || "";
 
-  const lyrics = await resolveLyrics(env, master.id, artistName, master.title, master.lyrics);
+  const lyrics = await resolveLyrics(env, env.DB, master.id, artistName, master.title, master.lyrics);
 
   // OpenSubsonic `songLyrics` shape:
   //   <lyricsList>

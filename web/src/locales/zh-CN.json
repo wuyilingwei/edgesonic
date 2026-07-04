@@ -183,13 +183,17 @@
     "hintBatch": "仅勾选的字段会被写入所选歌曲，未勾选字段保持原值。",
     "batchHint": "勾选左侧 ☐ 后该字段会应用到所有选中歌曲。",
     "coverPlaceholder": "封面写回将在后续版本支持",
+    "lyricsKeywords": "关键词：<code>{null}</code> 清空 · <code>{write}</code> 把库内歌词写回文件 · <code>{export}</code> 导出为同名 .lrc",
+    "coverKeywords": "封面关键词：<code>{write}</code> 把专辑封面写回文件 · <code>{export}</code> 导出 cover.jpg",
     "cover": {
       "dropHint": "拖拽或点击选择封面（JPEG / PNG，自动压缩到 500KB 以内）",
       "compressing": "正在压缩封面…",
       "clear": "移除封面",
       "info": "{kb} KB · {w}×{h}",
       "errInvalidType": "请使用图片文件",
-      "errTooLarge": "封面压缩后仍超过 500KB（{kb} KB）"
+      "errTooLarge": "封面压缩后仍超过 500KB（{kb} KB）",
+      "writeHint": "把专辑封面（D1 album.cover_r2_key）写回文件内嵌 APIC/PICTURE",
+      "exportHint": "把专辑封面导出到歌曲同目录 cover.jpg"
     },
     "batchSaved": "批量保存：{succeeded} 成功 / {failed} 失败",
     "batchFailed": "批量保存失败"
@@ -526,6 +530,41 @@
         "resetFailedFailed": "失败：{error}",
         "resetFailedHint": "建议先确认浏览器为最新版本（看顶部更新提示）后再重启失败任务，避免立即又失败。",
         "resetFailedConfirm": "确认重启所有失败的工作任务？请先确保浏览器节点已升级到最新版本。"
+      },
+      "clone": {
+        "title": "克隆 Subsonic 服务器",
+        "desc": "将上游 Subsonic 服务器的歌曲库镜像到本 EdgeSonic 实例。克隆由浏览器驱动 —— 前端直接向上游请求元数据与字节再回写本地，避免大库克隆导致 Worker 超时。",
+        "url": "上游地址",
+        "urlPlaceholder": "https://upstream.example.com",
+        "urlDesc": "上游 Subsonic 服务器基础 URL（无需 /rest 后缀）。",
+        "username": "上游用户名",
+        "usernamePlaceholder": "admin",
+        "password": "上游密码",
+        "passwordPlaceholder": "Subsonic 密码（明文，token 认证要求）",
+        "audioToggle": "克隆音频字节",
+        "audioToggleDesc": "开启后，浏览器会逐首下载上游 /stream 字节并上传到本地 R2 的 music/{artist}/{album}/{filename}。关闭则仅克隆元数据。",
+        "usersToggle": "克隆用户账号",
+        "usersToggleDesc": "开启后，同时克隆上游用户列表（需要上游管理员权限）。每个上游用户会在本地重建同名账号 + 同密码 + 一条 'cloned' Subsonic 凭据。",
+        "start": "开始克隆",
+        "cancel": "取消",
+        "missingFields": "需要填写上游地址、用户名和密码",
+        "done": "克隆完成",
+        "failed": "克隆失败",
+        "log": "实时日志",
+        "stages": {
+          "metadata": "元数据",
+          "audio": "音频字节",
+          "playlists": "播放列表",
+          "starred": "收藏",
+          "users": "用户账号"
+        },
+        "status": {
+          "idle": "待处理",
+          "running": "进行中",
+          "done": "完成",
+          "error": "错误",
+          "skipped": "已跳过"
+        }
       },
       "transcode": {
         "title": "转码",

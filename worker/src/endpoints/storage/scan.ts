@@ -5,6 +5,7 @@ import { md5 } from "../../utils/md5";
 import { createQueries } from "../../db/queries";
 import { getFeatureString } from "../../utils/features";
 import { dispatchWorkBatch } from "../edgesonic/work";
+import { importLrcOnScan } from "../../utils/lrcSidecar";
 
 export const scanRoutes = new Hono();
 
@@ -97,7 +98,7 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
     const src = sources[i];
-    exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled }));
+    exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled, env }));
   }
 
   return c.text(
@@ -277,8 +278,9 @@ export async function asyncScanSource(
   db: D1Database,
   src: SourceRow,
   jobId: string,
-  opts: { etagCheck?: boolean; dispatchToWorkerPool?: boolean } = {},
+  opts: { etagCheck?: boolean; dispatchToWorkerPool?: boolean; env?: Env } = {},
 ): Promise<void> {
+  const env = opts.env as Env | undefined;
   const queries = createQueries(db);
   const now = Math.floor(Date.now() / 1000);
   const etagCheck = opts.etagCheck !== false;            // default true
@@ -290,6 +292,11 @@ export async function asyncScanSource(
   // UPDATEs). We dispatch in one batch after the scan loop so the work_queue
   // INSERTs don't compete with the scan's UPDATE/INSERT batches.
   const dispatchTargets: Array<{ instanceId: string; uri: string; suffix: string; size: number }> = [];
+  // 094 — Track brand-new INSERTs (instance uri + master_id) so we can pull
+  // sibling .lrc sidecars after the row flush. We deliberately scope sidecar
+  // import to new rows only: a re-scan of an unchanged file implies the
+  // lyrics are already in D1 (or were absent the first time and still are).
+  const newInserts: Array<{ uri: string; masterId: string }> = [];
   try {
     const { entries, complete } = await listWebdav(src);
     const audio = entries.filter((e) => !e.isDir && AUDIO_EXT.has(extOf(e.path)));
@@ -443,6 +450,7 @@ export async function asyncScanSource(
         ),
       );
       added++;
+      newInserts.push({ uri, masterId });
       if (dispatchToWorkerPool) {
         dispatchTargets.push({ instanceId, uri, suffix: extOf(file.path), size: file.size });
       }
@@ -495,6 +503,22 @@ export async function asyncScanSource(
         })));
       } catch (e) {
         console.error(`[scan ${jobId}] dispatchWorkBatch failed:`, e);
+      }
+    }
+
+    // 094 — Import sibling .lrc sidecars for every newly-inserted instance.
+    // Best-effort: a per-file fetch failure is logged and skipped; we never
+    // flip the scan_job to 'failed' because of a missing/oversized .lrc.
+    // We only run when env is available (callers that don't pass env — e.g.
+    // legacy test scaffolds — simply skip this pass). The flush above
+    // guarantees the song_masters row exists by the time we write lyrics.
+    if (env && newInserts.length > 0) {
+      for (const ins of newInserts) {
+        try {
+          await importLrcOnScan(db, env, ins.uri, ins.masterId);
+        } catch (e) {
+          console.error(`[scan ${jobId}] importLrcOnScan failed for ${ins.uri}:`, e);
+        }
       }
     }
 
