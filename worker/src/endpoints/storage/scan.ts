@@ -219,14 +219,9 @@ scanRoutes.get("/scan/listForMirror", permissionMiddleware("manage_sources"), as
   // Instances on the given source whose master has NO r2:// sibling.
   // We check via NOT EXISTS so the query stays indexed on source_id.
   const rows = (await db.prepare(
-    `SELECT si.id, si.master_id, si.storage_uri, si.suffix, si.size,
-            sm.title, sm.album_id,
-            al.name AS album_name,
-            ar.name AS artist_name
+    `SELECT si.id, si.master_id, si.storage_uri, si.suffix, si.size, sm.title
      FROM song_instances si
      JOIN song_masters sm ON sm.id = si.master_id
-     LEFT JOIN albums al ON al.id = sm.album_id
-     LEFT JOIN artists ar ON ar.id = sm.artist_id
      WHERE si.source_id = ? AND si.missing = 0
        AND NOT EXISTS (
          SELECT 1 FROM song_instances r2
@@ -238,8 +233,7 @@ scanRoutes.get("/scan/listForMirror", permissionMiddleware("manage_sources"), as
      LIMIT ? OFFSET ?`,
   ).bind(source, limit, offset).all<{
     id: string; master_id: string; storage_uri: string; suffix: string | null;
-    size: number | null; title: string | null; album_id: string;
-    album_name: string | null; artist_name: string | null;
+    size: number | null; title: string | null;
   }>()).results;
 
   const totalRow = await db.prepare(
@@ -266,9 +260,6 @@ scanRoutes.get("/scan/listForMirror", permissionMiddleware("manage_sources"), as
       suffix: r.suffix || "",
       size: r.size ?? 0,
       title: r.title || "",
-      albumId: r.album_id,
-      albumName: r.album_name || "",
-      artistName: r.artist_name || "",
     })),
   });
 });
