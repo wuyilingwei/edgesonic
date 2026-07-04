@@ -102,7 +102,7 @@ export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Pr
     // ctx.waitUntil so per-source progress can finish past the immediate
     // return value of scheduled().
     ctx.waitUntil(
-      asyncScanSource(db, src, jobId, { etagCheck }).catch((e) => {
+      asyncScanSource(db, src, jobId, { etagCheck, env }).catch((e) => {
         console.error(`scheduled scan source=${src.id} failed:`, e);
       }),
     );

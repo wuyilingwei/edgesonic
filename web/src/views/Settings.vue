@@ -24,7 +24,7 @@ import { useWorkerPool } from "../stores/workerPool";
 
 const router = useRouter();
 const { t, locale } = useI18n();
-const { isSuperAdmin, isAdmin, edgesonicFetch, edgesonicPost, logout, username } = useAuth();
+const { isSuperAdmin, isAdmin, edgesonicFetch, edgesonicPost, logout, username, md5, signedParams } = useAuth();
 // 052 — worker pool store. The Settings sub-block toggles participation and
 // surfaces live stats; admin sees a queue overview pulled from /work/status.
 const workerPool = useWorkerPool();
@@ -963,6 +963,576 @@ async function copyText(text: string) {
   catch { showToast(t("settings.common.copyFailed"), "error"); }
 }
 
+// === 094 — Subsonic server clone ===
+// Browser-driven clone: the SPA fetches metadata + bytes directly from the
+// upstream Subsonic server (using Subsonic MD5 token auth: t = md5(password
+// + salt), s = salt) and POSTs each item to /edgesonic/clone/* to persist
+// locally. Keeping the loop client-side avoids Worker CPU-time timeouts
+// when the upstream library is large.
+//
+// Stages run sequentially:
+//   1. metadata  — getAlbumList2 → getAlbum → upsertMaster per song
+//   2. audio     — (optional) stream → ingestAudio per song
+//   3. playlists — getPlaylists → getPlaylist → upsertPlaylist
+//   4. starred   — getStarred2 → upsertStarred
+//   5. users     — (admin upstream only) getUsers → upsertUser
+//
+// Each stage exposes a reactive progress object so the UI can render
+// "X / Y" counters and a per-stage status pill.
+interface CloneForm { url: string; username: string; password: string; }
+const cloneForm = ref<CloneForm>({ url: "", username: "", password: "" });
+const cloneAudioEnabled = ref(false);
+const cloneUsersEnabled = ref(false);
+const cloneRunning = ref(false);
+const cloneCancelRequested = ref(false);
+
+interface CloneProgress {
+  total: number;
+  done: number;
+  failed: number;
+  status: "idle" | "running" | "done" | "error" | "skipped";
+  message: string;
+}
+function newCloneProgress(): CloneProgress {
+  return { total: 0, done: 0, failed: 0, status: "idle", message: "" };
+}
+const cloneStages = ref({
+  metadata: newCloneProgress(),
+  audio: newCloneProgress(),
+  playlists: newCloneProgress(),
+  starred: newCloneProgress(),
+  users: newCloneProgress(),
+});
+const cloneLog = ref<string[]>([]);
+function cloneLogPush(line: string) {
+  cloneLog.value.push(line);
+  if (cloneLog.value.length > 500) cloneLog.value.splice(0, cloneLog.value.length - 500);
+}
+
+// Build the upstream Subsonic auth query string for a single call.
+// t = md5(password + salt), s = salt — the same scheme EdgeSonic uses
+// in api.ts:signedParams, but signed with the *upstream* password.
+function cloneSignedParams(extra?: Record<string, string>): URLSearchParams {
+  const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
+  return new URLSearchParams({
+    u: cloneForm.value.username,
+    t: md5(cloneForm.value.password + s),
+    s,
+    v: "1.16.1",
+    c: "EdgeSonicClone",
+    f: "json",
+    ...extra,
+  });
+}
+
+function cloneUpstreamUrl(path: string, params?: Record<string, string>): string {
+  const base = cloneForm.value.url.replace(/\/+$/, "");
+  return `${base}/rest/${path}?${cloneSignedParams(params).toString()}`;
+}
+
+// Subsonic JSON responses come back as { "subsonic-response": { ... } }.
+// We tolerate either JSON or XML for getAlbumList2/getAlbum/getSong etc;
+// when the server only speaks XML (older Navidrome / supysonic), we parse
+// the attributes out of the XML.
+async function cloneFetchJson(path: string, params?: Record<string, string>): Promise<any> {
+  const resp = await fetch(cloneUpstreamUrl(path, params));
+  const text = await resp.text();
+  try {
+    const json = JSON.parse(text);
+    return json?.["subsonic-response"] ?? json;
+  } catch {
+    return { _xml: text };
+  }
+}
+
+// Generic attribute parser for XML-fallback responses.
+function parseXmlChildren(xml: string, tag: string): Record<string, string>[] {
+  const items: Record<string, string>[] = [];
+  const re = new RegExp(`<${tag}\\s+([^>]+?)\\s*/?>`, "g");
+  let m;
+  while ((m = re.exec(xml))) {
+    const attrs: Record<string, string> = {};
+    const attrRe = /(\w+)="([^"]*)"/g;
+    let am;
+    while ((am = attrRe.exec(m[1]))) attrs[am[1]] = am[2];
+    items.push(attrs);
+  }
+  return items;
+}
+
+// Pull a value from a Subsonic JSON node OR fall back to the XML parse.
+function jget(node: any, key: string): string | undefined {
+  if (node && typeof node === "object") {
+    const v = node[key];
+    if (typeof v === "string" || typeof v === "number") return String(v);
+    // Some Subsonic servers wrap scalars in { _value: ... } — handle both.
+    if (v && typeof v === "object" && "_value" in v) return String((v as any)._value);
+  }
+  return undefined;
+}
+
+// Normalize a Subsonic song node (from getAlbum.songs / getStarred2.song /
+// getPlaylist.entries) into the shape upsertMaster expects.
+function normalizeSongNode(song: any, album: any, artist: any): {
+  artist: { id: string; name: string; sortName?: string | null };
+  album: { id: string; name: string; sortName?: string | null; year?: number | null; genre?: string | null };
+  song: {
+    id: string; albumId: string; artistId: string; albumArtistId?: string | null;
+    title: string; sortTitle?: string | null;
+    track?: number | null; disc?: number | null;
+    duration?: number | null; genre?: string | null;
+    compilation?: number | null;
+  };
+  albumArtist?: { id: string; name: string; sortName?: string | null };
+} {
+  const artistName = jget(song, "artist") || jget(album, "artist") || jget(artist, "name") || "Unknown Artist";
+  const albumArtistName = jget(song, "albumArtist") || jget(album, "artist") || artistName;
+  const artistId = jget(song, "artistId") || jget(artist, "id") || "ar-" + simpleHash(artistName);
+  const albumId = jget(song, "albumId") || jget(album, "id") || "al-" + simpleHash(albumArtistName + " " + (jget(album, "name") || "Unknown Album"));
+  const albumArtistId = (jget(song, "albumArtistId") || "ar-" + simpleHash(albumArtistName)) ?? null;
+
+  return {
+    artist: {
+      id: artistId,
+      name: artistName,
+      sortName: artistName.toLowerCase(),
+    },
+    album: {
+      id: albumId,
+      name: jget(album, "name") || jget(song, "album") || "Unknown Album",
+      sortName: (jget(album, "name") || jget(song, "album") || "Unknown Album").toLowerCase(),
+      year: numOr(jget(album, "year") || jget(song, "year"), null),
+      genre: jget(album, "genre") || jget(song, "genre") || null,
+    },
+    song: {
+      id: jget(song, "id") || "sm-clone-" + simpleHash(artistName + (jget(song, "title") || "") + albumId),
+      albumId,
+      artistId,
+      albumArtistId: albumArtistId === artistId ? null : albumArtistId,
+      title: jget(song, "title") || "Unknown Title",
+      sortTitle: (jget(song, "title") || "Unknown Title").toLowerCase(),
+      track: numOr(jget(song, "track"), null),
+      disc: numOr(jget(song, "discNumber"), null),
+      duration: numOr(jget(song, "duration"), null),
+      genre: jget(song, "genre") || null,
+      compilation: jget(album, "isCompilation") === "true" ? 1 : 0,
+    },
+    albumArtist: albumArtistId && albumArtistId !== artistId
+      ? { id: albumArtistId, name: albumArtistName, sortName: albumArtistName.toLowerCase() }
+      : undefined,
+  };
+}
+
+function numOr(v: string | undefined, fallback: number | null): number | null {
+  if (v === undefined || v === null || v === "") return fallback;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// Tiny non-crypto hash for synthesising Subsonic-style ids when the upstream
+// server omits them. Subsonic ids are opaque strings so a stable 10-char
+// hash matches the EdgeSonic convention (ar-/al-/sm- prefixes use md5[:10]).
+function simpleHash(input: string): string {
+  // Reuse the project's md5 from api.ts for stable ids.
+  return md5(input).substring(0, 10);
+}
+
+// Sanitise a path component for R2 keys — replaces path separators and trims.
+function sanitizePathPart(s: string, fallback: string): string {
+  const cleaned = (s || "").replace(/[\/\\]+/g, "_").replace(/^\.+/, "").trim();
+  return cleaned || fallback;
+}
+
+// Format bytes for the log.
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+// Stage 1 — metadata. Walk getAlbumList2 (alphabeticalByName, large size),
+// then getAlbum per album, then POST /clone/upsertMaster per song.
+async function cloneMetadataStage() {
+  const stage = cloneStages.value.metadata;
+  stage.status = "running";
+  stage.message = "";
+  const PAGE = 500;
+  let offset = 0;
+  const albumIds: { id: string; name: string; artist: string }[] = [];
+  // Page through album list until we get fewer than requested.
+  while (!cloneCancelRequested.value) {
+    const resp = await cloneFetchJson("getAlbumList2", { type: "alphabeticalByName", size: String(PAGE), offset: String(offset) });
+    if (resp?._xml) {
+      const items = parseXmlChildren(resp._xml, "album");
+      for (const a of items) {
+        albumIds.push({ id: a.id || "", name: a.name || "Unknown Album", artist: a.artist || a.artistId || "" });
+      }
+      if (items.length < PAGE) break;
+    } else {
+      const albums = resp?.albumList2?.album || resp?.albums?.album || [];
+      const arr = Array.isArray(albums) ? albums : (albums ? [albums] : []);
+      if (arr.length === 0) break;
+      for (const a of arr) {
+        albumIds.push({ id: jget(a, "id") || "", name: jget(a, "name") || "Unknown Album", artist: jget(a, "artist") || "" });
+      }
+      if (arr.length < PAGE) break;
+    }
+    offset += PAGE;
+  }
+  stage.total = albumIds.length;
+  cloneLogPush(`metadata: ${albumIds.length} album(s) discovered`);
+
+  for (const meta of albumIds) {
+    if (cloneCancelRequested.value) break;
+    try {
+      const albumResp = await cloneFetchJson("getAlbum", { id: meta.id });
+      let albumNode: any = meta;
+      let songs: any[] = [];
+      if (albumResp?._xml) {
+        // XML fallback — parse <album .../> and <song .../> siblings.
+        const albumMatch = /<album\s+([^>]+?)\s*\/?>/.exec(albumResp._xml);
+        if (albumMatch) {
+          const attrs: Record<string, string> = {};
+          const attrRe = /(\w+)="([^"]*)"/g;
+          let am;
+          while ((am = attrRe.exec(albumMatch[1]))) attrs[am[1]] = am[2];
+          albumNode = attrs;
+        }
+        songs = parseXmlChildren(albumResp._xml, "song");
+      } else {
+        albumNode = albumResp?.album || albumNode;
+        const raw = albumResp?.album?.song || albumResp?.songs?.song || [];
+        songs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+      }
+      for (const s of songs) {
+        if (cloneCancelRequested.value) break;
+        const payload = normalizeSongNode(s, albumNode, { id: "", name: meta.artist });
+        try {
+          const data = JSON.parse(await edgesonicPost("clone/upsertMaster", payload));
+          if (!data.ok) throw new Error(data.error || "upsertMaster rejected");
+          stage.done++;
+        } catch (e: unknown) {
+          stage.failed++;
+          cloneLogPush(`metadata: ✗ ${payload.song.title} — ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
+    } catch (e: unknown) {
+      stage.failed++;
+      cloneLogPush(`metadata: ✗ album ${meta.name} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  stage.status = cloneCancelRequested.value ? "skipped" : "done";
+  stage.message = cloneCancelRequested.value ? "cancelled" : "";
+}
+
+// Stage 2 — audio. For every song_master already cloned, fetch the upstream
+// /rest/stream bytes and POST them to /clone/ingestAudio.
+async function cloneAudioStage() {
+  const stage = cloneStages.value.audio;
+  if (!cloneAudioEnabled.value) {
+    stage.status = "skipped";
+    stage.message = "disabled";
+    return;
+  }
+  stage.status = "running";
+  // We re-walk getAlbumList2 / getAlbum to get song ids + paths so the
+  // browser doesn't need a separate "list of cloned masters" round-trip.
+  // The upsertMaster stage already inserted the rows, so ingestAudio's
+  // masterId lookup will succeed.
+  const PAGE = 500;
+  let offset = 0;
+  const allSongs: { id: string; title: string; album: string; albumId: string; artist: string; suffix: string; contentType: string; size: number }[] = [];
+  while (!cloneCancelRequested.value) {
+    const resp = await cloneFetchJson("getAlbumList2", { type: "alphabeticalByName", size: String(PAGE), offset: String(offset) });
+    let albums: any[] = [];
+    if (resp?._xml) {
+      albums = parseXmlChildren(resp._xml, "album");
+    } else {
+      const raw = resp?.albumList2?.album || resp?.albums?.album || [];
+      albums = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    }
+    if (albums.length === 0) break;
+    for (const a of albums) {
+      const albumId = jget(a, "id") || "";
+      const albumName = jget(a, "name") || "Unknown Album";
+      const albumArtist = jget(a, "artist") || "Unknown Artist";
+      const detail = await cloneFetchJson("getAlbum", { id: albumId });
+      let songs: any[] = [];
+      if (detail?._xml) {
+        songs = parseXmlChildren(detail._xml, "song");
+      } else {
+        const raw = detail?.album?.song || detail?.songs?.song || [];
+        songs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+      }
+      for (const s of songs) {
+        allSongs.push({
+          id: jget(s, "id") || "",
+          title: jget(s, "title") || "Unknown Title",
+          album: albumName,
+          albumId,
+          artist: jget(s, "artist") || albumArtist,
+          suffix: (jget(s, "suffix") || jget(s, "format") || "mp3").toLowerCase(),
+          contentType: jget(s, "contentType") || suffixToMime((jget(s, "suffix") || "mp3").toLowerCase()),
+          size: numOr(jget(s, "size"), 0) || 0,
+        });
+      }
+    }
+    if (albums.length < PAGE) break;
+    offset += PAGE;
+  }
+  stage.total = allSongs.length;
+  cloneLogPush(`audio: ${allSongs.length} song(s) to fetch`);
+
+  for (const s of allSongs) {
+    if (cloneCancelRequested.value) break;
+    try {
+      const streamUrl = cloneUpstreamUrl("stream", { id: s.id });
+      const resp = await fetch(streamUrl);
+      if (!resp.ok) throw new Error(`stream ${resp.status}`);
+      const buf = await resp.arrayBuffer();
+      if (buf.byteLength === 0) throw new Error("empty body");
+      const filename = `${sanitizePathPart(s.title, "track")}.${s.suffix}`;
+      const artistDir = sanitizePathPart(s.artist, "Unknown Artist");
+      const albumDir = sanitizePathPart(s.album, "Unknown Album");
+      // Derive the masterId consistently with normalizeSongNode so the
+      // backend's FK lookup matches the row inserted in stage 1. We use
+      // the upstream album id directly when present — upsertMaster stored
+      // under that same albumId.
+      const realAlbumId = s.albumId || ("al-" + simpleHash(s.artist + " " + s.album));
+      const realMasterId = s.id || ("sm-clone-" + simpleHash(s.artist + s.title + realAlbumId));
+      const qs = new URLSearchParams({
+        masterId: realMasterId,
+        suffix: s.suffix,
+        contentType: s.contentType,
+        artist: artistDir,
+        album: albumDir,
+        filename,
+        size: String(s.size || buf.byteLength),
+      });
+      // Reuse the session-signed edgesonicPost path but with a binary body.
+      // edgesonicPost builds JSON; we need a raw PUT here, so sign manually.
+      const sp = signedParamsCloneEdge();
+      const uploadResp = await fetch(`${EDGESONIC_CLONE_BASE}/clone/ingestAudio?${sp.toString()}&${qs.toString()}`, {
+        method: "POST",
+        headers: { "Content-Type": s.contentType },
+        body: buf,
+      });
+      const data = await uploadResp.json().catch(() => ({ ok: false, error: "non-json" }));
+      if (!data.ok) throw new Error(data.error || "ingestAudio rejected");
+      stage.done++;
+      cloneLogPush(`audio: ✓ ${s.artist} — ${s.title} (${fmtBytes(buf.byteLength)})`);
+    } catch (e: unknown) {
+      stage.failed++;
+      cloneLogPush(`audio: ✗ ${s.artist} — ${s.title} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  stage.status = cloneCancelRequested.value ? "skipped" : "done";
+}
+
+// The clone endpoints live under /edgesonic/*, so they need the same
+// session-signed query string as edgesonicPost. We can't call the closure
+// inside useAuth from here, but useAuth() already returns signedParams().
+// To keep this self-contained, sign against the same auth singleton.
+function signedParamsCloneEdge(): URLSearchParams {
+  // useAuth() exposes signedParams; we just re-import it here.
+  return signedParams();
+}
+
+const EDGESONIC_CLONE_BASE = "/edgesonic";
+
+function suffixToMime(suffix: string): string {
+  switch (suffix.toLowerCase()) {
+    case "mp3":  return "audio/mpeg";
+    case "m4a":  return "audio/mp4";
+    case "aac":  return "audio/aac";
+    case "opus": return "audio/opus";
+    case "ogg":  return "audio/ogg";
+    case "flac": return "audio/flac";
+    case "wav":  return "audio/wav";
+    default:     return "application/octet-stream";
+  }
+}
+
+// Stage 3 — playlists.
+async function clonePlaylistsStage() {
+  const stage = cloneStages.value.playlists;
+  stage.status = "running";
+  const resp = await cloneFetchJson("getPlaylists");
+  let playlists: any[] = [];
+  if (resp?._xml) {
+    playlists = parseXmlChildren(resp._xml, "playlist");
+  } else {
+    const raw = resp?.playlists?.playlist || [];
+    playlists = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+  }
+  stage.total = playlists.length;
+  cloneLogPush(`playlists: ${playlists.length} playlist(s)`);
+
+  for (const p of playlists) {
+    if (cloneCancelRequested.value) break;
+    try {
+      const id = jget(p, "id") || "";
+      const name = jget(p, "name") || "Untitled";
+      const owner = jget(p, "owner") || cloneForm.value.username;
+      const isPublic = jget(p, "public") === "true";
+      const comment = jget(p, "comment") || null;
+      // Fetch the full playlist to get entry ids.
+      const detail = await cloneFetchJson("getPlaylist", { id });
+      let entries: string[] = [];
+      if (detail?._xml) {
+        const songs = parseXmlChildren(detail._xml, "entry");
+        entries = songs.map((s) => s.id).filter(Boolean);
+      } else {
+        const raw = detail?.playlist?.entry || detail?.entries?.entry || [];
+        const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+        entries = arr.map((s) => jget(s, "id") || "").filter(Boolean);
+      }
+      const data = JSON.parse(await edgesonicPost("clone/upsertPlaylist", {
+        playlist: { id, name, owner, public: isPublic, comment },
+        entries,
+      }));
+      if (!data.ok) throw new Error(data.error || "upsertPlaylist rejected");
+      stage.done++;
+      cloneLogPush(`playlists: ✓ ${name} (${entries.length} entries)`);
+    } catch (e: unknown) {
+      stage.failed++;
+      cloneLogPush(`playlists: ✗ ${jget(p, "name") || "?"} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  stage.status = cloneCancelRequested.value ? "skipped" : "done";
+}
+
+// Stage 4 — starred.
+async function cloneStarredStage() {
+  const stage = cloneStages.value.starred;
+  stage.status = "running";
+  const resp = await cloneFetchJson("getStarred2");
+  const items: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }> = [];
+  if (resp?._xml) {
+    for (const s of parseXmlChildren(resp._xml, "song")) items.push({ id: s.id, type: "song" });
+    for (const a of parseXmlChildren(resp._xml, "album")) items.push({ id: a.id, type: "album" });
+    for (const ar of parseXmlChildren(resp._xml, "artist")) items.push({ id: ar.id, type: "artist" });
+  } else {
+    const sr = resp?.starred2 || resp?.starred || {};
+    for (const bucket of ["song", "album", "artist"] as const) {
+      const raw = sr[bucket] || [];
+      const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+      for (const n of arr) {
+        const id = jget(n, "id");
+        if (id) items.push({ id, type: bucket });
+      }
+    }
+  }
+  stage.total = items.length;
+  cloneLogPush(`starred: ${items.length} item(s)`);
+
+  if (items.length > 0) {
+    try {
+      const data = JSON.parse(await edgesonicPost("clone/upsertStarred", {
+        userId: cloneForm.value.username,
+        items,
+      }));
+      if (!data.ok) throw new Error(data.error || "upsertStarred rejected");
+      stage.done = items.length;
+      cloneLogPush(`starred: ✓ ${items.length} applied`);
+    } catch (e: unknown) {
+      stage.failed = items.length;
+      stage.status = "error";
+      stage.message = e instanceof Error ? e.message : String(e);
+      cloneLogPush(`starred: ✗ ${stage.message}`);
+      return;
+    }
+  }
+  stage.status = cloneCancelRequested.value ? "skipped" : "done";
+}
+
+// Stage 5 — users (requires upstream admin).
+async function cloneUsersStage() {
+  const stage = cloneStages.value.users;
+  if (!cloneUsersEnabled.value) {
+    stage.status = "skipped";
+    stage.message = "disabled";
+    return;
+  }
+  stage.status = "running";
+  const resp = await cloneFetchJson("getUsers");
+  let users: any[] = [];
+  if (resp?._xml) {
+    users = parseXmlChildren(resp._xml, "user");
+  } else {
+    const raw = resp?.users?.user || [];
+    users = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+  }
+  stage.total = users.length;
+  cloneLogPush(`users: ${users.length} user(s)`);
+
+  for (const u of users) {
+    if (cloneCancelRequested.value) break;
+    try {
+      const username = jget(u, "username") || "";
+      const password = jget(u, "password") || "";
+      const level = (jget(u, "adminRole") === "true" || jget(u, "isAdmin") === "true") ? 3 : 1;
+      const enabled = jget(u, "disabled") !== "true";
+      if (!username || !password) {
+        stage.failed++;
+        cloneLogPush(`users: ✗ ${username || "?"} — missing username/password (upstream must expose password)`);
+        continue;
+      }
+      const data = JSON.parse(await edgesonicPost("clone/upsertUser", {
+        user: { username, password, level, enabled },
+        credentials: [{ password, label: "cloned" }],
+      }));
+      if (!data.ok) throw new Error(data.error || "upsertUser rejected");
+      stage.done++;
+      cloneLogPush(`users: ✓ ${username}`);
+    } catch (e: unknown) {
+      stage.failed++;
+      cloneLogPush(`users: ✗ ${jget(u, "username") || "?"} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  stage.status = cloneCancelRequested.value ? "skipped" : "done";
+}
+
+async function runClone() {
+  if (!isSuperAdmin.value || cloneRunning.value) return;
+  if (!cloneForm.value.url || !cloneForm.value.username || !cloneForm.value.password) {
+    showToast(t("settings.common.clone.missingFields"), "error");
+    return;
+  }
+  cloneRunning.value = true;
+  cloneCancelRequested.value = false;
+  cloneLog.value = [];
+  for (const k of Object.keys(cloneStages.value) as Array<keyof typeof cloneStages.value>) {
+    cloneStages.value[k] = newCloneProgress();
+  }
+  try {
+    await cloneMetadataStage();
+    await cloneAudioStage();
+    await clonePlaylistsStage();
+    await cloneStarredStage();
+    await cloneUsersStage();
+    showToast(t("settings.common.clone.done"));
+  } catch (e: unknown) {
+    showToast(`${t("settings.common.clone.failed")}: ${e instanceof Error ? e.message : String(e)}`, "error");
+  }
+  cloneRunning.value = false;
+}
+
+function cancelClone() {
+  cloneCancelRequested.value = true;
+}
+
+function cloneStatusClass(status: CloneProgress["status"]): string {
+  switch (status) {
+    case "running": return "info";
+    case "done":    return "success";
+    case "error":   return "error";
+    case "skipped": return "muted";
+    default:        return "muted";
+  }
+}
+
 onMounted(() => {
   loadFeatures();
   loadSessions();
@@ -1750,6 +2320,148 @@ onMounted(() => {
           </p>
         </div>
 
+        <!-- 094 — Clone an upstream Subsonic server (super-admin only, -->
+        <!--      browser-driven). Mirrors the 093f mirror flow but the -->
+        <!--      source is any Subsonic server, not a local source. -->
+        <div v-if="isSuperAdmin" class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">🪞 {{ t("settings.common.clone.title") }}</span>
+          </div>
+          <p class="feature-desc" style="margin: 0 0 0.6rem 0">
+            {{ t("settings.common.clone.desc") }}
+          </p>
+
+          <div class="transcode-grid">
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.clone.url") }}</span>
+              <input
+                v-model="cloneForm.url"
+                class="form-input"
+                :placeholder="t('settings.common.clone.urlPlaceholder')"
+                :disabled="cloneRunning"
+                autocomplete="off"
+              />
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.clone.urlDesc") }}</p>
+
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.clone.username") }}</span>
+              <input
+                v-model="cloneForm.username"
+                class="form-input"
+                :placeholder="t('settings.common.clone.usernamePlaceholder')"
+                :disabled="cloneRunning"
+                autocomplete="off"
+              />
+            </label>
+
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.clone.password") }}</span>
+              <input
+                v-model="cloneForm.password"
+                type="password"
+                class="form-input"
+                :placeholder="t('settings.common.clone.passwordPlaceholder')"
+                :disabled="cloneRunning"
+                autocomplete="off"
+              />
+            </label>
+
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.clone.audioToggle") }}</span>
+              <span class="scan-toggle">
+                <input
+                  type="checkbox"
+                  v-model="cloneAudioEnabled"
+                  :disabled="cloneRunning"
+                />
+                <span>{{ cloneAudioEnabled ? t("common.on") : t("common.off") }}</span>
+              </span>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.clone.audioToggleDesc") }}</p>
+
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.clone.usersToggle") }}</span>
+              <span class="scan-toggle">
+                <input
+                  type="checkbox"
+                  v-model="cloneUsersEnabled"
+                  :disabled="cloneRunning"
+                />
+                <span>{{ cloneUsersEnabled ? t("common.on") : t("common.off") }}</span>
+              </span>
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.clone.usersToggleDesc") }}</p>
+
+            <div class="tc-actions">
+              <button
+                v-if="!cloneRunning"
+                class="btn-primary"
+                @click="runClone"
+              >
+                {{ t("settings.common.clone.start") }}
+              </button>
+              <button
+                v-else
+                class="btn-danger"
+                @click="cancelClone"
+              >
+                {{ t("settings.common.clone.cancel") }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Per-stage progress -->
+          <div v-if="cloneRunning || cloneStages.metadata.status !== 'idle'" class="clone-progress">
+            <div class="clone-stage-row">
+              <span class="clone-stage-label">{{ t("settings.common.clone.stages.metadata") }}</span>
+              <span class="clone-stage-count">{{ cloneStages.metadata.done }} / {{ cloneStages.metadata.total }}</span>
+              <span v-if="cloneStages.metadata.failed" class="clone-stage-failed">✗ {{ cloneStages.metadata.failed }}</span>
+              <span class="status-badge" :class="cloneStatusClass(cloneStages.metadata.status)">
+                {{ t(`settings.common.clone.status.${cloneStages.metadata.status}`) }}
+              </span>
+            </div>
+            <div class="clone-stage-row">
+              <span class="clone-stage-label">{{ t("settings.common.clone.stages.audio") }}</span>
+              <span class="clone-stage-count">{{ cloneStages.audio.done }} / {{ cloneStages.audio.total }}</span>
+              <span v-if="cloneStages.audio.failed" class="clone-stage-failed">✗ {{ cloneStages.audio.failed }}</span>
+              <span class="status-badge" :class="cloneStatusClass(cloneStages.audio.status)">
+                {{ t(`settings.common.clone.status.${cloneStages.audio.status}`) }}
+              </span>
+            </div>
+            <div class="clone-stage-row">
+              <span class="clone-stage-label">{{ t("settings.common.clone.stages.playlists") }}</span>
+              <span class="clone-stage-count">{{ cloneStages.playlists.done }} / {{ cloneStages.playlists.total }}</span>
+              <span v-if="cloneStages.playlists.failed" class="clone-stage-failed">✗ {{ cloneStages.playlists.failed }}</span>
+              <span class="status-badge" :class="cloneStatusClass(cloneStages.playlists.status)">
+                {{ t(`settings.common.clone.status.${cloneStages.playlists.status}`) }}
+              </span>
+            </div>
+            <div class="clone-stage-row">
+              <span class="clone-stage-label">{{ t("settings.common.clone.stages.starred") }}</span>
+              <span class="clone-stage-count">{{ cloneStages.starred.done }} / {{ cloneStages.starred.total }}</span>
+              <span v-if="cloneStages.starred.failed" class="clone-stage-failed">✗ {{ cloneStages.starred.failed }}</span>
+              <span class="status-badge" :class="cloneStatusClass(cloneStages.starred.status)">
+                {{ t(`settings.common.clone.status.${cloneStages.starred.status}`) }}
+              </span>
+            </div>
+            <div class="clone-stage-row">
+              <span class="clone-stage-label">{{ t("settings.common.clone.stages.users") }}</span>
+              <span class="clone-stage-count">{{ cloneStages.users.done }} / {{ cloneStages.users.total }}</span>
+              <span v-if="cloneStages.users.failed" class="clone-stage-failed">✗ {{ cloneStages.users.failed }}</span>
+              <span class="status-badge" :class="cloneStatusClass(cloneStages.users.status)">
+                {{ t(`settings.common.clone.status.${cloneStages.users.status}`) }}
+              </span>
+            </div>
+          </div>
+
+          <!-- Live log -->
+          <details v-if="cloneLog.length" class="clone-log">
+            <summary class="mono-label">{{ t("settings.common.clone.log") }}</summary>
+            <pre class="clone-log-pre">{{ cloneLog.join("\n") }}</pre>
+          </details>
+        </div>
+
         <!-- Feature flags -->
         <div class="sub-block">
           <div class="sub-header"><span class="mono-label">{{ t("settings.common.featureFlags") }}</span></div>
@@ -2202,4 +2914,52 @@ onMounted(() => {
 }
 .rank-btn:hover:not(:disabled) { color: var(--color-accent-primary); background: var(--color-bg-primary); }
 .rank-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* --- 094 Subsonic clone --- */
+.clone-progress {
+  margin-top: 0.8rem;
+  border-top: 1px dashed var(--color-border-subtle);
+  padding-top: 0.6rem;
+  display: flex; flex-direction: column; gap: 0.4rem;
+}
+.clone-stage-row {
+  display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+}
+.clone-stage-label {
+  color: var(--color-text-primary);
+  letter-spacing: 0.05em;
+  min-width: 110px;
+}
+.clone-stage-count {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.clone-stage-failed {
+  color: var(--color-accent-primary);
+}
+.clone-log {
+  margin-top: 0.8rem;
+  border-top: 1px dashed var(--color-border-subtle);
+  padding-top: 0.6rem;
+}
+.clone-log > summary {
+  cursor: pointer;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+}
+.clone-log-pre {
+  margin: 0.4rem 0 0;
+  padding: 0.6rem 0.8rem;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-text-secondary);
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 </style>

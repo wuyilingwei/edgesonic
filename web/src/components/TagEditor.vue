@@ -71,7 +71,9 @@ const props = withDefaults(
 
 const emit = defineEmits<{
   // 042 — `cover` is the optional new front-cover, base64-encoded JPEG/PNG ≤500KB.
-  // Callers that don't care about cover writeback can ignore the second arg.
+  // 095 — `cover.data` may also carry a keyword literal (`{write}` / `{export}`)
+  // instead of base64 bytes; the worker detects and routes accordingly. Callers
+  // that don't care about cover writeback can ignore the second arg.
   (e: "submit", patch: Record<string, string | number>, cover?: { data: string; mime: string }): void;
   (e: "close"): void;
 }>();
@@ -105,6 +107,11 @@ const coverError = ref<string>("");
 const coverBusy = ref(false);
 const coverInputEl = ref<HTMLInputElement | null>(null);
 
+// 095 — cover keyword (`{write}` / `{export}`). Mutually exclusive with a
+// picked image: choosing a keyword clears any picked cover, and picking an
+// image clears the keyword. Empty string means "no cover op".
+const coverKeyword = ref<"" | typeof KW_WRITE | typeof KW_EXPORT>("");
+
 function resetFromProps() {
   const i = props.initialTags || {};
   form.title = String(i.title ?? "");
@@ -126,16 +133,31 @@ function resetFromProps() {
   coverPreviewUrl.value = "";
   coverInfo.value = "";
   coverError.value = "";
+  coverKeyword.value = "";
 }
 
 watch(() => props.open, (v) => { if (v) resetFromProps(); }, { immediate: true });
 
 const isBatch = computed(() => props.mode === "batch");
 
+// 095 — batch tag keyword semantics. These literal strings are forwarded
+// verbatim to the worker, which interprets them. The UI just passes them
+// through like any other string value (subject to the apply checkbox in
+// batch mode).
+const KW_NULL = "{null}";
+const KW_WRITE = "{write}";
+const KW_EXPORT = "{export}";
+const KEYWORDS = new Set([KW_NULL, KW_WRITE, KW_EXPORT]);
+function isKeyword(v: string): boolean {
+  return KEYWORDS.has(v);
+}
+
 function buildPatch(): Record<string, string | number> {
   const patch: Record<string, string | number> = {};
   const wantField = (k: keyof typeof apply, value: string): boolean => {
-    if (!value.trim()) return false;
+    // 095 — keyword literals always pass through (even when "empty" by trim).
+    const kw = isKeyword(value.trim());
+    if (!kw && !value.trim()) return false;
     if (isBatch.value) return apply[k];
     // single mode: only include changed values (vs. initial). This keeps the
     // worker's COALESCE semantics intact for fields the user left untouched.
@@ -148,30 +170,46 @@ function buildPatch(): Record<string, string | number> {
   if (wantField("album", form.album)) patch.album = form.album.trim();
   if (wantField("albumArtist", form.albumArtist)) patch.albumArtist = form.albumArtist.trim();
   if (wantField("genre", form.genre)) patch.genre = form.genre.trim();
-  if (wantField("year", form.year)) {
-    const n = parseInt(form.year, 10);
-    if (Number.isInteger(n) && n > 0) patch.year = n;
+  if (wantField("lyrics", form.lyrics)) patch.lyrics = form.lyrics.trim();
+  if (!isKeyword(form.year.trim())) {
+    if (wantField("year", form.year)) {
+      const n = parseInt(form.year, 10);
+      if (Number.isInteger(n) && n > 0) patch.year = n;
+    }
+  } else if (isBatch.value ? apply.year : true) {
+    // 095 — `{null}` on year clears it (worker maps to NULL via the lyrics
+    // keyword path? no — year is numeric, worker cleanInput only keyword-enables
+    // lyrics + string fields). We forward the literal only for lyrics; for
+    // numeric fields we skip (UI doesn't advertise {null} on year/track).
   }
-  if (wantField("track", form.track)) {
-    const n = parseInt(form.track, 10);
-    if (Number.isInteger(n) && n > 0) patch.track = n;
+  if (!isKeyword(form.track.trim())) {
+    if (wantField("track", form.track)) {
+      const n = parseInt(form.track, 10);
+      if (Number.isInteger(n) && n > 0) patch.track = n;
+    }
   }
-  // disc / comment / lyrics intentionally stripped — backend doesn't accept
-  // them yet (042 / 036 will widen SongTags). UI keeps the inputs so the
-  // form layout is final.
+  // disc / comment intentionally stripped — backend doesn't accept them yet.
+  // lyrics is forwarded above (keyword-aware).
 
   return patch;
 }
 
 const patchPreview = computed(() => Object.keys(buildPatch()));
-const hasCover = computed(() => coverData.value.length > 0);
+const hasCover = computed(() => coverData.value.length > 0 || coverKeyword.value.length > 0);
 
 function onSubmit() {
   const patch = buildPatch();
   // 042 — cover-only submissions are valid (the worker accepts an empty patch
-  // when a cover is supplied). Block the click only when nothing is pending.
+  // when a cover is supplied). 095 — cover keyword (`{write}`/`{export}`)
+  // rides on the cover arg's `data` field as a literal string. Block the click
+  // only when nothing is pending.
   if (Object.keys(patch).length === 0 && !hasCover.value) return;
-  const cover = hasCover.value ? { data: coverData.value, mime: coverMime.value } : undefined;
+  let cover: { data: string; mime: string } | undefined;
+  if (coverKeyword.value) {
+    cover = { data: coverKeyword.value, mime: "image/jpeg" };
+  } else if (coverData.value) {
+    cover = { data: coverData.value, mime: coverMime.value };
+  }
   emit("submit", patch, cover);
 }
 
@@ -192,7 +230,19 @@ function onCoverPick(e: Event) {
 function triggerCoverPick() {
   coverInputEl.value?.click();
 }
+// 095 — picking an image clears any active cover keyword (mutual exclusivity).
 function clearCover() {
+  if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value);
+  coverData.value = "";
+  coverPreviewUrl.value = "";
+  coverInfo.value = "";
+  coverError.value = "";
+  coverKeyword.value = "";
+  if (coverInputEl.value) coverInputEl.value.value = "";
+}
+// 095 — clear only the picked image, preserving any active keyword (used when
+// a keyword button is toggled on).
+function clearCoverImageOnly() {
   if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value);
   coverData.value = "";
   coverPreviewUrl.value = "";
@@ -207,6 +257,8 @@ async function handleCoverFile(file: File) {
     coverError.value = t("tagEditor.cover.errInvalidType");
     return;
   }
+  // 095 — picking an image clears any active cover keyword.
+  coverKeyword.value = "";
   coverBusy.value = true;
   try {
     const img = await loadImage(file);
@@ -336,6 +388,25 @@ function blobToBase64(blob: Blob): Promise<string> {
           </div>
         </div>
         <p v-if="coverError" class="cover-error mono-label">{{ coverError }}</p>
+        <!-- 095 — cover keyword picker: {write} embeds the album's R2 cover into
+             the file; {export} writes cover.jpg sidecar. Mutually exclusive with
+             a picked image (choosing one clears the other). -->
+        <div class="cover-keyword-row">
+          <button
+            type="button"
+            class="cover-kw-btn"
+            :class="{ active: coverKeyword === KW_WRITE }"
+            :title="t('tagEditor.cover.writeHint')"
+            @click.stop="coverKeyword = (coverKeyword === KW_WRITE ? '' : KW_WRITE); clearCoverImageOnly()"
+          >{{ KW_WRITE }}</button>
+          <button
+            type="button"
+            class="cover-kw-btn"
+            :class="{ active: coverKeyword === KW_EXPORT }"
+            :title="t('tagEditor.cover.exportHint')"
+            @click.stop="coverKeyword = (coverKeyword === KW_EXPORT ? '' : KW_EXPORT); clearCoverImageOnly()"
+          >{{ KW_EXPORT }}</button>
+        </div>
       </slot>
 
       <div v-if="isBatch" class="batch-hint mono-label">{{ t("tagEditor.batchHint") }}</div>
@@ -399,7 +470,7 @@ function blobToBase64(blob: Blob): Promise<string> {
           </div>
         </div>
 
-        <!-- Comment / Lyrics (UI-only for now) -->
+        <!-- Comment / Lyrics (lyrics supports {null}/{write}/{export} keywords — 095) -->
         <div class="te-row">
           <input v-if="isBatch" type="checkbox" v-model="apply.comment" class="apply-check" :title="t('tagEditor.applyField')" />
           <div class="form-group" style="flex:1">
@@ -410,8 +481,9 @@ function blobToBase64(blob: Blob): Promise<string> {
         <div class="te-row">
           <input v-if="isBatch" type="checkbox" v-model="apply.lyrics" class="apply-check" :title="t('tagEditor.applyField')" />
           <div class="form-group" style="flex:1">
-            <label class="form-label">{{ t("tagEditor.fieldLyrics") }} <span class="future-tag">{{ t("tagEditor.uiOnly") }}</span></label>
+            <label class="form-label">{{ t("tagEditor.fieldLyrics") }}</label>
             <textarea v-model="form.lyrics" class="form-textarea lyrics-input" rows="3" :disabled="isBatch && !apply.lyrics"></textarea>
+            <p class="keyword-hint mono-label" v-html="t('tagEditor.lyricsKeywords')"></p>
           </div>
         </div>
       </div>
@@ -524,4 +596,40 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 .te-msg.error { color: var(--color-status-error); }
 .form-input:disabled, .form-textarea:disabled { opacity: 0.45; cursor: not-allowed; }
+/* 095 — cover keyword buttons + lyrics keyword hint */
+.cover-keyword-row {
+  display: flex; gap: 0.4rem;
+  margin: 0.4rem 0 0;
+}
+.cover-kw-btn {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-secondary);
+  color: var(--color-text-secondary);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s, color 0.1s;
+}
+.cover-kw-btn:hover { border-color: var(--color-accent-primary); color: var(--color-text-primary); }
+.cover-kw-btn.active {
+  border-color: var(--color-accent-primary);
+  background: var(--color-accent-primary);
+  color: #fff;
+}
+.keyword-hint {
+  display: block;
+  margin: 0.35rem 0 0;
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+.keyword-hint :deep(code) {
+  font-family: var(--font-mono);
+  padding: 0 0.2rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 2px;
+  color: var(--color-text-secondary);
+}
 </style>

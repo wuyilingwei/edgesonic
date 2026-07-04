@@ -26,6 +26,23 @@ import type { SongTags } from "../../utils/tags";
 
 export const tagEditRoutes = new Hono();
 
+// 095 — batch tag keyword semantics. The frontend forwards these literal
+// strings verbatim; the worker interprets them. They are matched exactly
+// (case-sensitive, no surrounding whitespace) so real tag values that happen
+// to contain these tokens are unaffected.
+const KW_NULL = "{null}";
+const KW_WRITE = "{write}";
+const KW_EXPORT = "{export}";
+const KEYWORDS = new Set([KW_NULL, KW_WRITE, KW_EXPORT]);
+function isKeyword(v: unknown): boolean {
+  return typeof v === "string" && KEYWORDS.has(v);
+}
+// Fields that support keyword semantics. lyrics + a dedicated cover keyword
+// channel (coverData carries the literal — see parseCoverKeyword below).
+function isLyricsKeyword(v: unknown): boolean {
+  return isKeyword(v) && (v === KW_NULL || v === KW_WRITE || v === KW_EXPORT);
+}
+
 const HEAD_FETCH = 512 * 1024;
 const MAX_REWRITE_BYTES = 80 * 1024 * 1024; // whole file is buffered for the rewrite
 const MAX_COVER_BYTES = 500 * 1024;          // 042 — front cover ceiling; the web canvas compressor honours this
@@ -68,14 +85,18 @@ tagEditRoutes.post("/write", permissionMiddleware("edit_tags"), async (c) => {
   if (!body?.id || !body.tags) return c.json({ ok: false, error: "Missing id or tags" }, 400);
 
   const tags = cleanInput(body.tags);
-  const parsed = parseCover(body.coverData, body.coverMime);
+  // 095 — cover keyword (`{write}` / `{export}`) is a literal string carried in
+  // `coverData` instead of base64 image bytes. Detected here so parseCover never
+  // sees it (it would fail base64 decoding and 400 the request).
+  const coverKeyword = (body.coverData === KW_WRITE || body.coverData === KW_EXPORT) ? body.coverData : undefined;
+  const parsed = coverKeyword ? null : parseCover(body.coverData, body.coverMime);
   if (parsed && "error" in parsed) return c.json({ ok: false, error: parsed.error }, 400);
   const cover = parsed ?? undefined;
   // tag fields are optional when a cover is provided — cover-only edits still legitimately update the file
-  if (!Object.keys(tags).length && !cover) return c.json({ ok: false, error: "No tag fields provided" }, 400);
+  if (!Object.keys(tags).length && !cover && !coverKeyword) return c.json({ ok: false, error: "No tag fields provided" }, 400);
 
   const sources = await loadSources(db);
-  const res = await applyTagsToSong(env, db, queries, sources, body.id, tags, cover);
+  const res = await applyTagsToSong(env, db, queries, sources, body.id, tags, cover, coverKeyword);
   if (!res.ok) {
     const status = res.error === "Song not found" ? 404 : 500;
     return c.json({ ok: false, error: res.error || "Write failed" }, status);
@@ -108,10 +129,11 @@ tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) =
   }
 
   const patch = cleanInput(body.patch);
-  const parsed = parseCover(body.coverData, body.coverMime);
+  const coverKeyword = (body.coverData === KW_WRITE || body.coverData === KW_EXPORT) ? body.coverData : undefined;
+  const parsed = coverKeyword ? null : parseCover(body.coverData, body.coverMime);
   if (parsed && "error" in parsed) return c.json({ ok: false, error: parsed.error }, 400);
   const cover = parsed ?? undefined;
-  if (!Object.keys(patch).length && !cover) {
+  if (!Object.keys(patch).length && !cover && !coverKeyword) {
     return c.json({ ok: false, error: "Patch contains no recognised fields" }, 400);
   }
 
@@ -131,7 +153,7 @@ tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) =
   // the others; per-row error string lands on the failed result.
   for (const id of body.ids) {
     try {
-      const res = await applyTagsToSong(env, db, queries, sources, id, patch, cover);
+      const res = await applyTagsToSong(env, db, queries, sources, id, patch, cover, coverKeyword);
       if (res.ok) {
         succeeded++;
         results.push({ id, ok: true, masterId: res.masterId, files: res.files });
@@ -151,6 +173,11 @@ tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) =
 // ============================================================================
 // Core: apply a tag patch to a single song (D1 relink + per-instance file write).
 // Used by both writeTags (single) and batchWriteTags (loop).
+//
+// 095 — `coverKeyword` carries a literal `{write}` / `{export}` that targets
+// the cover field; `tags.lyrics` may carry the same keywords for the lyrics
+// field. The keyword detection happens here (worker-side), the frontend just
+// forwards whatever string the user typed.
 // ============================================================================
 async function applyTagsToSong(
   env: Env,
@@ -160,6 +187,7 @@ async function applyTagsToSong(
   idOrInstanceId: string,
   tags: SongTags,
   cover?: TagWriteCover,
+  coverKeyword?: string,
 ): Promise<ApplyResult> {
   let master = await queries.getSongMaster(idOrInstanceId);
   if (!master) {
@@ -167,6 +195,76 @@ async function applyTagsToSong(
     if (inst) master = await queries.getSongMaster(inst.master_id);
   }
   if (!master) return { ok: false, error: "Song not found" };
+
+  // 095 — lyrics keyword extraction. cleanInput preserved the literal token in
+  // tags.lyrics; we pull it out here so the downstream D1 UPDATE / file write
+  // branches can distinguish "write the D1 value back into the file" from a
+  // normal lyric string edit.
+  const lyricsKeyword = isLyricsKeyword(tags.lyrics) ? tags.lyrics : undefined;
+  if (lyricsKeyword) delete tags.lyrics;
+
+  // 095 — lyrics `{write}`: the file write-back path needs the current D1
+  // lyrics string so buildUSLTFrame / buildVorbisComment emit it. We re-inject
+  // it into `tags.lyrics` (a real string, not a keyword) right before the
+  // rewriteInstance loop. The D1 row is already current (no UPDATE needed for
+  // a `{write}` since the value is unchanged), so we skip the COALESCE path
+  // for lyrics by leaving tags.lyrics set only when the keyword is `{write}`.
+  if (lyricsKeyword === KW_WRITE && master.lyrics) {
+    tags.lyrics = master.lyrics;
+  }
+
+  // 095 — lyrics `{export}` and cover `{export}`: write a sidecar file to the
+  // same directory as each instance. These are best-effort; read-only sources
+  // (url://, subsonic://) are silently skipped. D1 is untouched by export.
+  if (lyricsKeyword === KW_EXPORT || coverKeyword === KW_EXPORT) {
+    const instances = await queries.getSongInstances(master.id);
+    for (const inst of instances) {
+      if (lyricsKeyword === KW_EXPORT && master.lyrics) {
+        await exportLrcSidecar(env, sources, inst.storage_uri, master.lyrics).catch(() => {});
+      }
+      if (coverKeyword === KW_EXPORT) {
+        const album = await db.prepare("SELECT cover_r2_key FROM albums WHERE id = ?")
+          .bind(master.album_id).first<{ cover_r2_key: string | null }>();
+        if (album?.cover_r2_key) {
+          const obj = await env.MUSIC_BUCKET.get(album.cover_r2_key);
+          if (obj) {
+            const bytes = new Uint8Array(await obj.arrayBuffer());
+            await exportCoverSidecar(env, sources, inst.storage_uri, bytes).catch(() => {});
+          }
+        }
+      }
+    }
+    // export is a pure sidecar op — no D1 mutation, no embedded rewrite.
+    // If only export was requested (no other tag fields, no embedded cover
+    // write), return now; otherwise fall through to handle the rest.
+    const onlyExport = !Object.keys(tags).length && !cover &&
+      (!coverKeyword || coverKeyword === KW_EXPORT) &&
+      (!lyricsKeyword || lyricsKeyword === KW_EXPORT);
+    if (onlyExport) {
+      return { ok: true, masterId: master.id, albumId: master.album_id, artistId: master.artist_id, files: [] };
+    }
+  }
+
+  // 095 — cover `{write}`: pull the album's R2 cover bytes and feed them into
+  // rewriteInstance as a TagWriteCover so buildAPICFrame / buildFLACPictureBlock
+  // embed them into each instance.
+  if (coverKeyword === KW_WRITE && !cover) {
+    const album = await db.prepare("SELECT cover_r2_key FROM albums WHERE id = ?")
+      .bind(master.album_id).first<{ cover_r2_key: string | null }>();
+    if (album?.cover_r2_key) {
+      const obj = await env.MUSIC_BUCKET.get(album.cover_r2_key);
+      if (obj) {
+        const bytes = new Uint8Array(await obj.arrayBuffer());
+        if (bytes.length > 0 && bytes.length <= MAX_COVER_BYTES) {
+          const mime = (obj.httpMetadata?.contentType || "image/jpeg").toLowerCase();
+          const normalized = (mime === "image/png") ? "image/png" : "image/jpeg";
+          cover = { mime: normalized, data: bytes };
+        }
+      }
+    }
+    // If the album has no cover or R2 fetch failed, fall through with no cover
+    // — the tag patch (if any) still applies.
+  }
 
   // --- D1 relink (same id derivation as scanTags so edits and scans converge) ---
   // Cover-only edits skip D1 mutation entirely — there is no field to relink.
@@ -191,33 +289,56 @@ async function applyTagsToSong(
   const curAlbum = await db.prepare("SELECT name FROM albums WHERE id = ?")
     .bind(master.album_id).first<{ name: string }>();
 
-  const title = tags.title || master.title;
-  const artistName = tags.artist || curArtist?.name || "Unknown Artist";
-  const linkArtistName = tags.albumArtist || artistName;
-  const albumName = tags.album || curAlbum?.name || "Unknown Album";
+  // 095 — `{null}` keyword: clear the field. For string fields (title/artist/
+  // album/albumArtist/genre) the keyword has already been preserved by
+  // cleanInput as the literal token; we translate it to an empty string here
+  // so the relink + UPDATE path writes '' into D1. For lyrics, `{null}` means
+  // UPDATE lyrics = NULL (handled below via a dedicated branch). For numeric
+  // fields (year/track) we don't accept `{null}` — cleanInput never passes
+  // them through as keywords (only lyrics is keyword-enabled in cleanInput).
+  const title = tags.title === KW_NULL ? "" : (tags.title || master.title);
+  const artistName = tags.artist === KW_NULL ? "Unknown Artist" : (tags.artist || curArtist?.name || "Unknown Artist");
+  const linkArtistName = tags.albumArtist === KW_NULL ? artistName : (tags.albumArtist || artistName);
+  const albumName = tags.album === KW_NULL ? "Unknown Album" : (tags.album || curAlbum?.name || "Unknown Album");
+  const genreValue = tags.genre === KW_NULL ? "" : tags.genre;
   const artistId = "ar-" + md5(linkArtistName).substring(0, 10);
   const albumId = "al-" + md5(linkArtistName + " " + albumName).substring(0, 10);
   const now = Math.floor(Date.now() / 1000);
   const oldAlbumId = master.album_id;
 
+  // 095 — lyrics keyword → D1 mapping:
+  //   `{null}` → explicit UPDATE lyrics = NULL (separate stmt below)
+  //   `{write}` → D1 unchanged; tags.lyrics now holds master.lyrics so the
+  //               COALESCE path writes the same value back (no-op effectively)
+  //   `{export}` → D1 unchanged (handled above, sidecar only)
+  //   normal string → COALESCE path (existing behaviour)
+  const lyricsNull = lyricsKeyword === KW_NULL;
+
   await db.batch([
     db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
       .bind(artistId, linkArtistName, linkArtistName.toLowerCase(), now, now),
     db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name, year, genre, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .bind(albumId, albumName, albumName.toLowerCase(), tags.year ?? null, tags.genre ?? null, now, now),
+      .bind(albumId, albumName, albumName.toLowerCase(), tags.year ?? null, genreValue ?? null, now, now),
     db.prepare(
       `UPDATE song_masters SET
          album_id = ?, artist_id = ?, title = ?, sort_title = ?,
          track = COALESCE(?, track), genre = COALESCE(?, genre),
          lyrics = COALESCE(?, lyrics), updated_at = ?
        WHERE id = ?`
-    ).bind(albumId, artistId, title, title.toLowerCase(), tags.track ?? null, tags.genre ?? null, tags.lyrics ?? null, now, master.id),
+    ).bind(albumId, artistId, title, title.toLowerCase(), tags.track ?? null, genreValue ?? null, tags.lyrics ?? null, now, master.id),
     // manual edits win over future scans
     db.prepare("UPDATE song_instances SET tag_scanned = 1 WHERE master_id = ?").bind(master.id),
   ]);
-  if (tags.year || tags.genre) {
-    await db.prepare("UPDATE albums SET year = COALESCE(?, year), genre = COALESCE(?, genre), updated_at = ? WHERE id = ?")
-      .bind(tags.year ?? null, tags.genre ?? null, now, albumId).run();
+  if (lyricsNull) {
+    // 095 — `{null}` on lyrics: COALESCE can't write NULL, so issue an
+    // explicit UPDATE. This is the only field whose "clear" semantics map
+    // to SQL NULL (string fields use '' via the relink path above).
+    await db.prepare("UPDATE song_masters SET lyrics = NULL, updated_at = ? WHERE id = ?")
+      .bind(now, master.id).run();
+  }
+  if (tags.year || genreValue) {
+    await db.prepare("UPDATE albums SET year = COALESCE(?, year), genre = ?, updated_at = ? WHERE id = ?")
+      .bind(tags.year ?? null, genreValue ?? null, now, albumId).run();
   }
 
   // refresh aggregates for both the new and the vacated album, then sweep empties
@@ -300,21 +421,35 @@ const MAX_LYRICS_BYTES = 50 * 1024;
 
 function cleanInput(t: SongTags): SongTags {
   const out: SongTags = {};
-  if (t.title?.trim()) out.title = t.title.trim();
-  if (t.artist?.trim()) out.artist = t.artist.trim();
-  if (t.album?.trim()) out.album = t.album.trim();
-  if (t.albumArtist?.trim()) out.albumArtist = t.albumArtist.trim();
-  if (t.genre?.trim()) out.genre = t.genre.trim();
+  // 095 — keyword literals (`{null}`) are preserved verbatim so applyTagsToSong
+  // can detect them. Only lyrics supports `{write}` / `{export}`; other fields
+  // accept just `{null}` (clear). Normal non-keyword values go through the
+  // existing trim-non-empty path.
+  if (t.title === KW_NULL) out.title = KW_NULL;
+  else if (t.title?.trim()) out.title = t.title.trim();
+  if (t.artist === KW_NULL) out.artist = KW_NULL;
+  else if (t.artist?.trim()) out.artist = t.artist.trim();
+  if (t.album === KW_NULL) out.album = KW_NULL;
+  else if (t.album?.trim()) out.album = t.album.trim();
+  if (t.albumArtist === KW_NULL) out.albumArtist = KW_NULL;
+  else if (t.albumArtist?.trim()) out.albumArtist = t.albumArtist.trim();
+  if (t.genre === KW_NULL) out.genre = KW_NULL;
+  else if (t.genre?.trim()) out.genre = t.genre.trim();
   const track = Number(t.track), year = Number(t.year);
   if (Number.isInteger(track) && track > 0) out.track = track;
   if (Number.isInteger(year) && year > 0) out.year = year;
   // 036/089 — lyrics: trim, cap, drop silently if oversized. File-level write-back
   // (USLT / VORBIS LYRICS) is handled via rewriteInstance when the instance is
   // mp3/flac and the source is writable (r2/webdav). D1 sync is always kept.
+  // 095 — lyrics keywords are preserved verbatim (no trim/cap).
   if (typeof t.lyrics === "string") {
-    const trimmed = t.lyrics.trim();
-    if (trimmed.length > 0 && trimmed.length <= MAX_LYRICS_BYTES) {
-      out.lyrics = trimmed;
+    if (isLyricsKeyword(t.lyrics)) {
+      out.lyrics = t.lyrics;
+    } else {
+      const trimmed = t.lyrics.trim();
+      if (trimmed.length > 0 && trimmed.length <= MAX_LYRICS_BYTES) {
+        out.lyrics = trimmed;
+      }
     }
   }
   return out;
@@ -403,4 +538,86 @@ async function rewriteInstance(
   }
 
   return { written: false, reason: "read-only source" };
+}
+
+// 095 — sidecar export helpers. Best-effort: read-only sources (url://,
+// subsonic://) are silently skipped. Errors are swallowed by the caller.
+
+/** Derive the sidecar path for a given song instance: same directory, same
+ *  base name, with `newExt` substituted. Returns null for unsupported schemes. */
+function deriveSidecarPath(storageUri: string, newExt: string): string | null {
+  const lastSlash = storageUri.lastIndexOf("/");
+  if (lastSlash < 0) return null;
+  const file = storageUri.substring(lastSlash + 1);
+  const dot = file.lastIndexOf(".");
+  const base = dot > 0 ? file.substring(0, dot) : file;
+  return storageUri.substring(0, lastSlash + 1) + base + "." + newExt;
+}
+
+/** Write D1 lyrics to `<songDir>/<songBase>.lrc` next to the instance. */
+async function exportLrcSidecar(
+  env: Env,
+  sources: Map<string, SourceRow>,
+  storageUri: string,
+  lyrics: string,
+): Promise<void> {
+  const lrcUri = deriveSidecarPath(storageUri, "lrc");
+  if (!lrcUri) return;
+  const data = new TextEncoder().encode(lyrics);
+  if (lrcUri.startsWith("r2://")) {
+    await env.MUSIC_BUCKET.put(lrcUri.substring(5), data, {
+      httpMetadata: { contentType: "text/plain; charset=utf-8" },
+    });
+    return;
+  }
+  if (lrcUri.startsWith("webdav://")) {
+    const rest = lrcUri.substring(9);
+    const slash = rest.indexOf("/");
+    const src = sources.get(rest.substring(0, slash));
+    if (!src) return;
+    const root = (src.root_path || "").replace(/^\/+|\/+$/g, "");
+    const url = src.base_url.replace(/\/+$/, "") + (root ? `/${root}` : "") + "/" + encodePath(rest.substring(slash + 1));
+    const auth = `Basic ${btoa(`${src.username || ""}:${src.password || ""}`)}`;
+    await fetch(url, {
+      method: "PUT",
+      headers: { Authorization: auth, "Content-Type": "text/plain; charset=utf-8" },
+      body: data,
+    });
+    return;
+  }
+  // url://, subsonic:// — read-only, skip silently.
+}
+
+/** Write R2 cover bytes to `<songDir>/cover.jpg` next to the instance. */
+async function exportCoverSidecar(
+  env: Env,
+  sources: Map<string, SourceRow>,
+  storageUri: string,
+  coverBytes: Uint8Array,
+): Promise<void> {
+  const lastSlash = storageUri.lastIndexOf("/");
+  if (lastSlash < 0) return;
+  const coverUri = storageUri.substring(0, lastSlash + 1) + "cover.jpg";
+  if (coverUri.startsWith("r2://")) {
+    await env.MUSIC_BUCKET.put(coverUri.substring(5), coverBytes, {
+      httpMetadata: { contentType: "image/jpeg" },
+    });
+    return;
+  }
+  if (coverUri.startsWith("webdav://")) {
+    const rest = coverUri.substring(9);
+    const slash = rest.indexOf("/");
+    const src = sources.get(rest.substring(0, slash));
+    if (!src) return;
+    const root = (src.root_path || "").replace(/^\/+|\/+$/g, "");
+    const url = src.base_url.replace(/\/+$/, "") + (root ? `/${root}` : "") + "/" + encodePath(rest.substring(slash + 1));
+    const auth = `Basic ${btoa(`${src.username || ""}:${src.password || ""}`)}`;
+    await fetch(url, {
+      method: "PUT",
+      headers: { Authorization: auth, "Content-Type": "image/jpeg" },
+      body: coverBytes,
+    });
+    return;
+  }
+  // url://, subsonic:// — read-only, skip silently.
 }

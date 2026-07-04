@@ -31,6 +31,7 @@ import { cfRoutes } from "./cf";
 import { maintenanceRoutes } from "./maintenance";
 import { versionRoutes } from "./version";
 import { r2presignRoutes } from "./r2presign";
+import { cloneRoutes } from "./clone";
 
 export const edgesonicRoutes = new Hono();
 
@@ -51,3 +52,5 @@ edgesonicRoutes.route("/", maintenanceRoutes);
 edgesonicRoutes.route("/", versionRoutes);
 // 091 — R2 presigned URL status (super-admin Dashboard hint)
 edgesonicRoutes.route("/", r2presignRoutes);
+// 094 — Subsonic server clone write endpoints (super-admin only, browser-driven)
+edgesonicRoutes.route("/", cloneRoutes);

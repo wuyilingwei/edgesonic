@@ -25,6 +25,16 @@ export const filesRoutes = new Hono();
 
 // ── Upload (raw body stream — studio-style) ──────────────────────────────
 // POST /rest/files/upload?name=file.mp3&source=r2|webdav&path=music
+//
+// 093h — Upload goes directly to music/{path}/{name} on R2 (no more _uploads/
+// placeholder album). We create a song_instance row with tag_scanned=0 and
+// dispatch a metadata task so the browser worker pool parses the file's tags
+// and relinks it to the right master/album/artist via applyMetadataResult.
+// Until the metadata task completes the file is invisible in the library
+// (no song_masters row) — the user can see it in the Files tree browser.
+import { dispatchWork } from "../edgesonic/work";
+import { getFeatureString } from "../../utils/features";
+
 filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
   const name = c.req.query("name");
@@ -44,6 +54,7 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const db = env.DB;
   const now = Math.floor(Date.now() / 1000);
   const suffix = name.split(".").pop() || "bin";
+  const sizeHeader = parseInt(c.req.header("Content-Length") || "0", 10);
 
   if (source === "webdav") {
     const creds = await getSourceCredentials(db, "webdav", env);
@@ -59,27 +70,58 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
     await env.MUSIC_BUCKET.put(r2Key, rawBody, { httpMetadata: { contentType } });
   }
 
-  // DB record chain
+  // DB record: create a song_instance pointing at the uploaded file. We need
+  // a master_id FK, so create a placeholder master that applyMetadataResult
+  // will relink (delete + recreate under the right album/artist) once the
+  // metadata worker parses the file. tag_scanned=0 so the work queue picks
+  // it up and applyMetadataResult runs on submit.
   const sourceId = source === "webdav"
     ? (await db.prepare("SELECT id FROM storage_sources WHERE type = 'webdav' AND enabled = 1 LIMIT 1").first<{ id: string }>())?.id || "webdav"
     : "r2-local";
   const storageUri = source === "webdav" ? `webdav://${sourceId}/${r2Key}` : `r2://${r2Key}`;
-  const instanceId = crypto.randomUUID().substring(0, 12);
+  const instanceId = `si-upload-${crypto.randomUUID().substring(0, 12)}`;
+  const masterId = `sm-upload-${crypto.randomUUID().substring(0, 12)}`;
   const title = name.replace(/\.[^.]+$/, "");
-  const masterId = crypto.randomUUID().substring(0, 12);
 
   try {
     await db.batch([
+      // Placeholder master under a transient "Pending Uploads" album. The
+      // metadata worker's applyMetadataResult will move this master's
+      // title/album_id/artist_id to the correct values once tags are parsed.
       db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name) VALUES ('unknown-artist', 'Unknown Artist', 'unknown artist')"),
-      db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name) VALUES ('uploads', 'Uploads', 'uploads')"),
-      db.prepare("INSERT OR IGNORE INTO song_masters (id, album_id, artist_id, title, created_at, updated_at) VALUES (?, 'uploads', 'unknown-artist', ?, ?, ?)")
+      db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name) VALUES ('pending-uploads', 'Pending Uploads', 'pending uploads')"),
+      db.prepare("INSERT INTO song_masters (id, album_id, artist_id, title, created_at, updated_at) VALUES (?, 'pending-uploads', 'unknown-artist', ?, ?, ?)")
         .bind(masterId, title, now, now),
-      db.prepare("INSERT INTO song_instances (id, master_id, source_id, storage_uri, suffix, content_type, size, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(instanceId, masterId, sourceId, storageUri, suffix, contentType, 0, now, now),
+      db.prepare("INSERT INTO song_instances (id, master_id, source_id, source_type, storage_uri, suffix, content_type, size, tag_scanned, created_at, updated_at) VALUES (?, ?, ?, 'original', ?, ?, ?, ?, 0, ?, ?)")
+        .bind(instanceId, masterId, sourceId, storageUri, suffix, contentType, sizeHeader || 0, now, now),
     ]);
   } catch (e) {
     if (source !== "webdav") await env.MUSIC_BUCKET.delete(r2Key);
     return c.json({ ok: false, error: `DB insert failed: ${e instanceof Error ? e.message : String(e)}` }, 500);
+  }
+
+  // 093h — dispatch a metadata task so the browser worker pool parses the
+  // uploaded file's tags and relinks the master to the right album/artist.
+  // Best-effort: if the pool is disabled or dispatch fails, the file still
+  // lives in R2 + D1; a manual scan will pick it up later.
+  try {
+    const poolEnabled = await getFeatureString(env, "worker_pool_enabled", "1");
+    if (poolEnabled === "1") {
+      await dispatchWork(db, {
+        taskType: "metadata",
+        payload: {
+          instanceId,
+          sourceUri: storageUri,
+          suffix,
+          size: sizeHeader || 0,
+        },
+        requiredCaps: ["music-metadata"],
+        priority: 3, // higher than scan-dispatched tasks (5) so uploads parse fast
+        dedupKey: instanceId,
+      });
+    }
+  } catch (e) {
+    console.error(`[upload] dispatchWork failed for ${instanceId}:`, e);
   }
 
   return c.json({ ok: true, key: r2Key, id: instanceId, storageUri });
