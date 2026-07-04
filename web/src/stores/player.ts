@@ -51,7 +51,14 @@ export const usePlayerStore = defineStore("player", () => {
 
   function makeAudio(): HTMLAudioElement {
     const el = new Audio();
-    el.preload = "auto";
+    // 093c — metadata: only fetch the header (duration + first frames) on
+    // element creation. The browser fetches subsequent byte ranges on demand
+    // as playback progresses, so a 64 MB FLAC doesn't get pulled into memory
+    // in one shot. Combined with the R2 presign 302 cache, only the first
+    // request hits the Worker; the rest go direct to R2 in seek-sized chunks.
+    // Pre-buffering the next track (preloadNext) overrides this to "auto" so
+    // the cross-fade swap stays instant.
+    el.preload = "metadata";
     el.volume = volume.value;
     el.addEventListener("timeupdate", () => { if (el === active) currentTime.value = el.currentTime; });
     el.addEventListener("durationchange", () => {
@@ -80,6 +87,8 @@ export const usePlayerStore = defineStore("player", () => {
   function invalidatePreload() {
     if (preloaded) {
       preloaded.el.removeAttribute("src");
+      // Reset to metadata so the next reuse doesn't keep the auto preload.
+      preloaded.el.preload = "metadata";
       preloaded.el.load();
       preloaded = null;
     }
@@ -94,6 +103,10 @@ export const usePlayerStore = defineStore("player", () => {
     invalidatePreload();
     const { streamUrl } = useAuth();
     const el = inactiveEl();
+    // Aggressive preload for the upcoming track so the cross-fade swap is
+    // instant. The active element keeps "metadata" so it doesn't pull the
+    // whole file when the user is just scrubbing.
+    el.preload = "auto";
     el.src = streamUrl(queue.value[ni].id);
     el.load();
     preloaded = { el, index: ni };
