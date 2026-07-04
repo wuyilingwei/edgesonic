@@ -200,6 +200,79 @@ scanRoutes.get("/scan/pending", permissionMiddleware("edit_tags"), async (c) => 
   });
 });
 
+// 093f — GET /storage/scan/listForMirror?source=<id>&offset=0&limit=100
+// Returns song_instances for a given source that are NOT yet mirrored to R2
+// (i.e. no sibling r2:// instance for the same master). The client iterates
+// page by page and calls /storage/files/crossCopy per item, so the Worker
+// never holds a long-running connection that could time out on large
+// libraries. Permission: manage_sources (same as scan/start).
+scanRoutes.get("/scan/listForMirror", permissionMiddleware("manage_sources"), async (c) => {
+  const env = c.env as Env;
+  const db = env.DB;
+  const source = c.req.query("source") || "";
+  if (!source) return c.json({ ok: false, error: "Missing source parameter" }, 400);
+  const rawLimit = parseInt(c.req.query("limit") || "100", 10);
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 100;
+  const rawOffset = parseInt(c.req.query("offset") || "0", 10);
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
+
+  // Instances on the given source whose master has NO r2:// sibling.
+  // We check via NOT EXISTS so the query stays indexed on source_id.
+  const rows = (await db.prepare(
+    `SELECT si.id, si.master_id, si.storage_uri, si.suffix, si.size,
+            sm.title, sm.album_id,
+            al.name AS album_name,
+            ar.name AS artist_name
+     FROM song_instances si
+     JOIN song_masters sm ON sm.id = si.master_id
+     LEFT JOIN albums al ON al.id = sm.album_id
+     LEFT JOIN artists ar ON ar.id = sm.artist_id
+     WHERE si.source_id = ? AND si.missing = 0
+       AND NOT EXISTS (
+         SELECT 1 FROM song_instances r2
+         WHERE r2.master_id = si.master_id
+           AND r2.storage_uri LIKE 'r2://%'
+           AND r2.missing = 0
+       )
+     ORDER BY si.created_at ASC
+     LIMIT ? OFFSET ?`,
+  ).bind(source, limit, offset).all<{
+    id: string; master_id: string; storage_uri: string; suffix: string | null;
+    size: number | null; title: string | null; album_id: string;
+    album_name: string | null; artist_name: string | null;
+  }>()).results;
+
+  const totalRow = await db.prepare(
+    `SELECT COUNT(*) AS n
+     FROM song_instances si
+     WHERE si.source_id = ? AND si.missing = 0
+       AND NOT EXISTS (
+         SELECT 1 FROM song_instances r2
+         WHERE r2.master_id = si.master_id
+           AND r2.storage_uri LIKE 'r2://%'
+           AND r2.missing = 0
+       )`,
+  ).bind(source).first<{ n: number }>();
+
+  return c.json({
+    ok: true,
+    total: totalRow?.n ?? 0,
+    offset,
+    limit,
+    items: rows.map((r) => ({
+      instanceId: r.id,
+      masterId: r.master_id,
+      storageUri: r.storage_uri,
+      suffix: r.suffix || "",
+      size: r.size ?? 0,
+      title: r.title || "",
+      albumId: r.album_id,
+      albumName: r.album_name || "",
+      artistName: r.artist_name || "",
+    })),
+  });
+});
+
 // Run the actual WebDAV scan for a single source. Updates scan_jobs progress
 // every SCAN_PROGRESS_CHUNK files; sets status=completed | failed on exit.
 //

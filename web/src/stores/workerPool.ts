@@ -40,6 +40,11 @@ interface PolledTask {
 
 const STORAGE_KEY = "participate_work";
 const DEFAULT_POLL_MS = 5 * 60 * 1000;
+// 093g — Adaptive poll cadence. When the queue has work, poll aggressively
+// (every 30s) so a 1000-task scan backlog drains in minutes instead of
+// hours. When the queue is empty, fall back to the configured interval
+// (default 5 min) so idle browsers don't hammer D1.
+const FAST_POLL_MS = 30 * 1000;
 
 // 078 — error message ceiling matches the worker-side clamp in
 // taskExecutor.ts AND the server-side clamp in /work/submit. Three layers of
@@ -178,7 +183,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
   const eligible = computed(() => level.value >= 2);
 
   // --- internal state ---
-  let intervalId: number | null = null;
   let draining = false;
   // 056 — `draining` is module-local, not reactive; mirror it into a ref so
   // `isWorking` updates when poll-and-drain starts/stops without a task.
@@ -215,20 +219,38 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
-  function start(): void {
-    if (intervalId !== null) return;
+  // 093g — Self-scheduling timeout replaces fixed setInterval. After each
+  // poll, next delay is chosen based on whether the queue had work:
+  //   - got tasks → FAST_POLL_MS (30s) for aggressive drain
+  //   - empty     → pollIntervalMs (configured, default 5min) for idle
+  // This lets a 1000-task scan backlog drain in ~10 min instead of ~16 h,
+  // without changing the idle behaviour that protects D1 from over-polling.
+  let timeoutId: number | null = null;
+  let hadTasksLastPoll = false;
+
+  function scheduleNext(): void {
+    if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
     if (!enabled.value || !eligible.value) return;
-    intervalId = window.setInterval(pollAndDrain, pollIntervalMs.value);
+    const delay = hadTasksLastPoll ? FAST_POLL_MS : pollIntervalMs.value;
+    timeoutId = window.setTimeout(async () => {
+      await pollAndDrain();
+      scheduleNext();
+    }, delay);
+  }
+
+  function start(): void {
+    if (timeoutId !== null) return;
+    if (!enabled.value || !eligible.value) return;
     // Kick off one drain immediately so the user sees the first task move
     // through the UI without waiting a full interval. Errors are swallowed
     // and surfaced via lastError.
-    void pollAndDrain();
+    void pollAndDrain().then(() => scheduleNext());
   }
 
   function stop(): void {
-    if (intervalId !== null) {
-      clearInterval(intervalId);
-      intervalId = null;
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
     }
   }
 
@@ -286,6 +308,9 @@ export const useWorkerPool = defineStore("workerPool", () => {
       });
       const data: PollResponse = JSON.parse(text);
       if (!data.ok) throw new Error(data.error || "poll rejected");
+      // 093g — track whether the queue had work so scheduleNext can pick
+      // the fast or idle cadence.
+      hadTasksLastPoll = (data.tasks || []).length > 0;
       // 088 — concurrent drain. `Promise.all` doesn't short-circuit on first
       // rejection here because executeOne catches its own errors (recording
       // failed stats + pushRecent) and resolves anyway, so a single bad task
@@ -425,8 +450,8 @@ export const useWorkerPool = defineStore("workerPool", () => {
       const ms = Number.isFinite(seconds) && seconds >= 30 ? seconds * 1000 : DEFAULT_POLL_MS;
       if (ms !== pollIntervalMs.value) {
         pollIntervalMs.value = ms;
-        // Rotate the interval if it's running so the new cadence applies.
-        if (intervalId !== null) { stop(); start(); }
+        // Reschedule so the new cadence applies on the next tick.
+        if (timeoutId !== null) { stop(); start(); }
       }
       // 088 — pull worker_max_concurrent. Clamp client-side to 1..8 as a
       // belt-and-braces guard; the server validator already rejects anything

@@ -110,13 +110,38 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
     throw new Error(`stream fetch failed: HTTP ${headResp.status}`);
   }
   const buf = new Uint8Array(await headResp.arrayBuffer());
+  // 093e — parse WITH covers so we can extract the embedded album art and
+  // ship it back to the worker for R2 storage + album.cover_r2_key update.
+  // skipCovers was previously true, which left every album with cover_r2_key
+  // NULL → getCoverArt 404 for the whole library.
   const meta = await parseBuffer(buf, {
     mimeType: headResp.headers.get("content-type") || undefined,
-  }, { duration: true, skipCovers: true });
+  }, { duration: true, skipCovers: false });
+
+  // Extract first embedded picture (APIC for ID3, PICTURE for FLAC, etc).
+  // Cap at 200KB so result_json stays under the column cap. If the picture is
+  // bigger than 200KB we skip it — the album just stays coverless until an
+  // admin curates one via the TagEditor cover slot.
+  let coverData: string | null = null;
+  let coverMime: string | null = null;
+  const pic: { data?: Uint8Array; format?: string } | undefined =
+    meta.common.picture?.[0] as { data?: Uint8Array; format?: string } | undefined;
+  if (pic && pic.data) {
+    const bytes = pic.data instanceof Uint8Array ? pic.data : new Uint8Array(pic.data as ArrayBuffer);
+    if (bytes.byteLength > 0 && bytes.byteLength <= 200_000) {
+      // Base64-encode without chunking (Node's Buffer is not in Worker scope;
+      // use btoa on a binary string).
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      coverData = btoa(bin);
+      coverMime = (pic.format || "image/jpeg").replace(/^image\//, "image/");
+    }
+  }
 
   // Flatten the compact wire shape that endpoints/tag/submit.ts (041) expects.
   // We strip the giant common.picture / native.* fields — they'd inflate the
-  // result_json column past the 100KB cap in /work/submit.
+  // result_json column past the 100KB cap in /work/submit. The cover goes in
+  // a separate `cover` field (base64) so the worker can write it to R2.
   return {
     instanceId,
     tags: {
@@ -135,6 +160,10 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
       container:   meta.format.container || "",
       codec:       meta.format.codec || "",
     },
+    // 093e — embedded cover art. Worker decodes base64, writes to
+    // covers/al-{albumId}, and updates albums.cover_r2_key. null when
+    // the file has no embedded picture or the picture exceeds 200KB.
+    cover: coverData ? { data: coverData, mime: coverMime } : null,
   };
 }
 

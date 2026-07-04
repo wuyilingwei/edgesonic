@@ -651,6 +651,15 @@
     "deleted": "存储源已删除",
     "deleteFailed": "删除失败",
     "deleteConfirm": "删除此存储源？",
+    "mirror": {
+      "btn": "镜像到 R2",
+      "stop": "停止",
+      "confirm": "把「{name}」的所有未镜像文件复制到 R2？客户端逐个复制，不会阻塞 Worker。",
+      "progress": "已复制 {done}/{total}（失败 {failed}）",
+      "done": "镜像完成：成功 {done}，失败 {failed}",
+      "failed": "镜像出错：{error}",
+      "none": "没有需要镜像的文件（全部已在 R2）"
+    },
     "passwordEncrypted": "已加密",
     "passwordPlaintext": "明文",
     "passwordEncryptedHint": "密码以 AES-256-GCM 密文形式存储。",
