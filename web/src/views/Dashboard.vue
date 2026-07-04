@@ -37,6 +37,16 @@ const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year:
 type CronStatus = "checking" | "ok" | "empty" | "unconfigured" | "error";
 const cronStatus = ref<CronStatus>("checking");
 
+// 091 — R2 presign status. Drives a Dashboard hint card when presign is
+// inactive (flag off or secrets missing), explaining that R2 streams go
+// through the Worker and may be speed-limited. Three modes:
+//   "active"        — flag on + secrets set (no banner; presign is working)
+//   "inactive"      — flag off OR secrets missing (show "may be slow" hint)
+//   "checking"      — initial state before the request resolves
+//   "error"         — fetch failed (stay quiet; Settings is the debug surface)
+type R2PresignStatus = "checking" | "active" | "inactive" | "error";
+const r2presignStatus = ref<R2PresignStatus>("checking");
+
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 
 // 083 — Super-admin "System Activity" panel: work-pool card + scan status row.
@@ -299,6 +309,24 @@ onMounted(async () => {
     cronStatus.value = "ok";
   }
 
+  // 091 — super-admin only: check R2 presign status. Done after cron so it
+  // can't block the main stats. Quiet on error (Settings is the debug surface).
+  if (isSuperAdmin.value) {
+    try {
+      const text = await edgesonicFetch("r2presign/status");
+      const parsed = JSON.parse(text) as { ok?: boolean; active?: boolean };
+      if (parsed.ok) {
+        r2presignStatus.value = parsed.active ? "active" : "inactive";
+      } else {
+        r2presignStatus.value = "error";
+      }
+    } catch {
+      r2presignStatus.value = "error";
+    }
+  } else {
+    r2presignStatus.value = "active";
+  }
+
   // 083 — kick off the activity panel after cron status resolves so the
   // initial paint isn't blocked by two extra round-trips. Polling is
   // intentionally super-admin only (the endpoints also gate at level≥3) —
@@ -369,6 +397,25 @@ onUnmounted(() => {
           <div class="cron-warning-actions">
             <router-link to="/settings" class="btn-secondary">
               {{ t("dashboard.cronWarning.actionEnsure") }}
+            </router-link>
+          </div>
+        </div>
+      </div>
+
+      <!-- 091 — R2 presign inactive hint. Shown when presign is off or secrets
+           are missing, explaining that R2 streams go through the Worker and
+           may be speed-limited. Uses the same card chrome as the cron warning. -->
+      <div
+        v-if="r2presignStatus === 'inactive'"
+        class="cron-warning-card cron-warning-info"
+      >
+        <div class="cron-warning-icon">ⓘ</div>
+        <div class="cron-warning-body">
+          <div class="cron-warning-title">{{ t("dashboard.r2Presign.title") }}</div>
+          <p class="cron-warning-message">{{ t("dashboard.r2Presign.message") }}</p>
+          <div class="cron-warning-actions">
+            <router-link to="/settings" class="btn-secondary">
+              {{ t("dashboard.r2Presign.action") }}
             </router-link>
           </div>
         </div>

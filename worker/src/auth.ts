@@ -119,18 +119,20 @@ export async function sha256(input: string): Promise<string> {
 // ============================================================================
 // Subsonic Credential Lookup
 // ============================================================================
+// 090 — Removed the KV session cache lookup (step 3). D1 `sessions` table is
+// the sole authority; the KV "faster lookup" was a micro-optimisation that
+// burned KV quota. Sessions still live in D1 exclusively.
 async function findSubsonicCredential(
   db: D1Database,
-  kv: KVNamespace,
   username: string,
   token: string,
   salt: string,
-): Promise<{ credential: string; kind: "subsonic_cred" | "session" } | null> {
+): Promise<{ credential: string; kind: "subsonic_cred" | "session"; streamProxyStrategy: string } | null> {
   // 1. Check subsonic_credentials table
   const creds = await db
-    .prepare("SELECT password FROM subsonic_credentials WHERE username = ?")
+    .prepare("SELECT password, stream_proxy_strategy FROM subsonic_credentials WHERE username = ?")
     .bind(username)
-    .all<{ password: string }>();
+    .all<{ password: string; stream_proxy_strategy: string | null }>();
 
   for (const cred of creds.results) {
     if (md5(cred.password + salt) === token) {
@@ -139,7 +141,12 @@ async function findSubsonicCredential(
         .prepare("UPDATE subsonic_credentials SET last_used = ? WHERE username = ? AND password = ?")
         .bind(Math.floor(Date.now() / 1000), username, cred.password)
         .run();
-      return { credential: cred.password, kind: "subsonic_cred" };
+      // 092 — per-credential 302 strategy. NULL or invalid → 'always'.
+      const strat = cred.stream_proxy_strategy;
+      const strategy = (strat === "always" || strat === "never" || strat === "r2_only" || strat === "webdav_only")
+        ? strat
+        : "always";
+      return { credential: cred.password, kind: "subsonic_cred", streamProxyStrategy: strategy };
     }
   }
 
@@ -151,14 +158,9 @@ async function findSubsonicCredential(
 
   for (const sess of sessions.results) {
     if (md5(sess.token + salt) === token) {
-      return { credential: sess.token, kind: "session" };
+      // 092 — session credentials always use 'always' (no per-session tuning).
+      return { credential: sess.token, kind: "session", streamProxyStrategy: "always" };
     }
-  }
-
-  // 3. Also try KV cache for sessions (faster lookup)
-  const kvSessionToken = await kv.get(`session:${username}`);
-  if (kvSessionToken && md5(kvSessionToken + salt) === token) {
-    return { credential: kvSessionToken, kind: "session" };
   }
 
   return null;
@@ -183,7 +185,7 @@ async function lookupUser(db: D1Database, username: string): Promise<User | null
 // ============================================================================
 export const authMiddleware = createMiddleware<{
   Bindings: Env;
-  Variables: { user: User; authMethod: AuthMethod };
+  Variables: { user: User; authMethod: AuthMethod; streamProxyStrategy?: string };
 }>(async (c, next) => {
   const path = new URL(c.req.url).pathname;
 
@@ -215,7 +217,6 @@ export const authMiddleware = createMiddleware<{
   const apiKey = q.apiKey;
   const guestToken = q.guestToken;
   const db = c.env.DB;
-  const kv = c.env.KV;
 
   if (!username) {
     return c.text(subsonicError(40, "Missing username"), 401, {
@@ -234,17 +235,27 @@ export const authMiddleware = createMiddleware<{
   let authMethod: AuthMethod | null = null;
 
   if (apiKey) {
-    // API Key authentication (via KV)
-    const storedUser = await kv.get(`apikey:${apiKey}`);
-    if (storedUser === username) {
+    // 090 — API Key authentication via D1 `api_keys` table (was KV).
+    const row = await db
+      .prepare("SELECT username FROM api_keys WHERE api_key = ?")
+      .bind(apiKey)
+      .first<{ username: string }>();
+    if (row?.username === username) {
       authMethod = "apikey";
     }
   } else if (token && salt) {
     // Subsonic token auth: subsonic_credentials or web session token
-    const cred = await findSubsonicCredential(db, kv, username, token, salt);
+    const cred = await findSubsonicCredential(db, username, token, salt);
     if (cred) {
       authMethod = cred.kind;
+      // 092 — per-credential 302 strategy, surfaced to the stream endpoint.
+      c.set("streamProxyStrategy", cred.streamProxyStrategy);
     }
+  }
+
+  // 092 — API key path defaults to 'always' (no per-key tuning yet).
+  if (apiKey && authMethod === "apikey") {
+    c.set("streamProxyStrategy", "always");
   }
 
   if (!authMethod) {
@@ -309,7 +320,7 @@ export const authMiddleware = createMiddleware<{
 export const permissionMiddleware = (requiredPermission: string) =>
   createMiddleware<{
     Bindings: Env;
-    Variables: { user: User };
+    Variables: { user: User; authMethod: AuthMethod; streamProxyStrategy?: string };
   }>(async (c, next) => {
     const user = c.get("user");
     const db = c.env.DB;
@@ -326,15 +337,34 @@ export const permissionMiddleware = (requiredPermission: string) =>
     }
 
     if (perm.max_rph > 0) {
-      const kv = c.env.KV;
-      const rphKey = `rph:${user.username}:${requiredPermission}`;
-      const count = parseInt((await kv.get(rphKey)) || "0", 10);
-      if (count >= perm.max_rph) {
+      // 090 — Rate limiting via D1 `rate_limits` table (was KV rph:user:perm).
+      // Logic: read current row; if window_start is >3600s ago, reset window.
+      // Otherwise reject if count >= max_rph, else increment.
+      const nowSec = Math.floor(Date.now() / 1000);
+      const rl = await db
+        .prepare("SELECT window_start, count FROM rate_limits WHERE username = ? AND permission = ?")
+        .bind(user.username, requiredPermission)
+        .first<{ window_start: number; count: number }>();
+
+      const windowStart = rl ? rl.window_start : 0;
+      const currentCount = rl ? rl.count : 0;
+      const windowExpired = nowSec - windowStart >= 3600;
+
+      if (!windowExpired && currentCount >= perm.max_rph) {
         return c.text(subsonicError(50, "Rate limit exceeded"), 429, {
           "Content-Type": "application/xml; charset=UTF-8",
         });
       }
-      await kv.put(rphKey, String(count + 1), { expirationTtl: 3600 });
+
+      const newWindowStart = windowExpired ? nowSec : windowStart;
+      const newCount = windowExpired ? 1 : currentCount + 1;
+      await db
+        .prepare(
+          "INSERT INTO rate_limits (username, permission, window_start, count) VALUES (?, ?, ?, ?)" +
+          " ON CONFLICT(username, permission) DO UPDATE SET window_start = excluded.window_start, count = excluded.count"
+        )
+        .bind(user.username, requiredPermission, newWindowStart, newCount)
+        .run();
     }
 
     return next();

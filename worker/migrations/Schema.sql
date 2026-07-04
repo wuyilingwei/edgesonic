@@ -1,5 +1,5 @@
 -- ============================================================================
--- EdgeSonic Unified Schema v3
+-- EdgeSonic Unified Schema v3 (consolidated — single source of truth)
 -- ============================================================================
 -- Architecture:
 --   Auth:     master_password (web login) → sessions (web+Subsonic dual-use)
@@ -8,6 +8,12 @@
 --             song_instances tracks source origin + transcoded/cached variants
 --   Sources:  R2 (primary), WebDAV (external), Subsonic (proxied), URL (direct)
 --             R2 acts as transcode cache for WebDAV/Subsonic sources
+--
+-- This file is the complete, idempotent schema. All CREATE statements use
+-- IF NOT EXISTS and all seeds use INSERT OR IGNORE / INSERT OR REPLACE so
+-- re-running on an existing DB is safe. The individual migration files
+-- (0001_initial.sql … 0030_webdav_presign_flag.sql) have been removed; their
+-- content is folded into this file.
 -- ============================================================================
 
 -- ============================================================================
@@ -34,31 +40,32 @@
 -- ============================================================================
 -- 1. Storage Sources
 -- ============================================================================
-CREATE TABLE storage_sources (
+CREATE TABLE IF NOT EXISTS storage_sources (
   id TEXT PRIMARY KEY,
   type TEXT NOT NULL CHECK (type IN ('webdav', 'subsonic', 'r2', 'url')),
-  name TEXT NOT NULL DEFAULT '',         -- 005: human-readable label
+  name TEXT NOT NULL DEFAULT '',                     -- 005: human-readable label
   base_url TEXT NOT NULL,
   username TEXT,
   password TEXT,
-  password_encrypted TEXT,              -- 023: AES-256-GCM blob (`v1:<base64url>`)
-  root_path TEXT NOT NULL DEFAULT '',    -- path inside the remote; effective URL = base_url + root_path
+  password_encrypted TEXT,                           -- 023: AES-256-GCM blob (`v1:<base64url>`) — unused after crypto removal, column kept for compat
+  root_path TEXT NOT NULL DEFAULT '',                -- 003: path inside the remote; effective URL = base_url + root_path
   last_sync INTEGER,
   enabled INTEGER DEFAULT 1,
-  mode TEXT NOT NULL DEFAULT 'library', -- 026: 'library' | 'sync_only'
+  mode TEXT NOT NULL DEFAULT 'library',              -- 026: 'library' | 'sync_only'
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );
+CREATE INDEX IF NOT EXISTS idx_sources_enc ON storage_sources (id) WHERE password_encrypted IS NOT NULL;
 
 -- ============================================================================
 -- 2. Users (master_password for web login)
 -- ============================================================================
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   username TEXT PRIMARY KEY,
-  master_password TEXT NOT NULL,          -- SHA-256 hashed, for web login only
+  master_password TEXT NOT NULL,                     -- SHA-256 hashed, for web login only
   level INTEGER DEFAULT 1 CHECK (level BETWEEN 0 AND 3),
   enabled INTEGER DEFAULT 1,
-  avatar_r2_key TEXT,                     -- 035: R2 key for getAvatar (NULL → no avatar)
+  avatar_r2_key TEXT,                                -- 014/035: R2 key for getAvatar (NULL → no avatar)
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );
@@ -68,19 +75,19 @@ CREATE TABLE users (
 -- ============================================================================
 -- Created after master_password verification. Session token can also
 -- authenticate Subsonic API calls (for in-browser web player streaming).
-CREATE TABLE sessions (
+CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL,
-  token TEXT NOT NULL UNIQUE,             -- session token (also valid as Subsonic "password")
-  user_agent TEXT,                        -- browser/client info
-  ip_address TEXT,                        -- client IP at creation
-  expires_at INTEGER NOT NULL,            -- unix timestamp
+  token TEXT NOT NULL UNIQUE,                         -- session token (also valid as Subsonic "password")
+  user_agent TEXT,                                   -- browser/client info
+  ip_address TEXT,                                   -- client IP at creation
+  expires_at INTEGER NOT NULL,                       -- unix timestamp
   created_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
-CREATE INDEX idx_sessions_token ON sessions(token);
-CREATE INDEX idx_sessions_username ON sessions(username);
-CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token);
+CREATE INDEX IF NOT EXISTS idx_sessions_username ON sessions(username);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
 -- ============================================================================
 -- 4. Subsonic Credentials (per-user client passwords, max 64)
@@ -88,25 +95,26 @@ CREATE INDEX idx_sessions_expires ON sessions(expires_at);
 -- Non-guest users create subsonic passwords for native Subsonic clients.
 -- Stored as plaintext (required by Subsonic MD5 token auth protocol).
 -- Each user limited to 64 credentials (enforced at application layer).
-CREATE TABLE subsonic_credentials (
+CREATE TABLE IF NOT EXISTS subsonic_credentials (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL,
-  password TEXT NOT NULL,                 -- plaintext (Subsonic protocol requirement)
-  label TEXT DEFAULT '',                  -- user label e.g. "My Phone", "Desktop"
-  last_used INTEGER,                      -- unix timestamp of last auth
+  password TEXT NOT NULL,                            -- plaintext (Subsonic protocol requirement)
+  label TEXT DEFAULT '',                             -- user label e.g. "My Phone", "Desktop"
+  stream_proxy_strategy TEXT NOT NULL DEFAULT 'always', -- 092: 'always'|'never'|'r2_only'|'webdav_only'
+  last_used INTEGER,                                 -- unix timestamp of last auth
   created_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
 );
-CREATE INDEX idx_subsonic_cred_user ON subsonic_credentials(username);
+CREATE INDEX IF NOT EXISTS idx_subsonic_cred_user ON subsonic_credentials(username);
 
 -- ============================================================================
 -- 5. User Permissions (granular per-level control)
 -- ============================================================================
-CREATE TABLE user_permissions (
+CREATE TABLE IF NOT EXISTS user_permissions (
   level INTEGER NOT NULL CHECK (level BETWEEN 0 AND 3),
   permission TEXT NOT NULL,
   enabled INTEGER DEFAULT 0,
-  max_rph INTEGER DEFAULT 0,              -- max requests per hour (0 = unlimited)
+  max_rph INTEGER DEFAULT 0,                         -- max requests per hour (0 = unlimited)
   PRIMARY KEY (level, permission)
 );
 
@@ -166,54 +174,133 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
   (0, 'browse',              0, 0),
   (0, 'search',              0, 0);
 
+-- 006: edit_annotations (star / unstar / setRating / scrobble)
+INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (0, 'edit_annotations', 0, 0),
+  (1, 'edit_annotations', 1, 0),
+  (2, 'edit_annotations', 1, 0),
+  (3, 'edit_annotations', 1, 0);
+
+-- 007: manage_playlists (create/update/delete own playlists; admin can delete others)
+INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (3, 'manage_playlists', 1, 0),
+  (2, 'manage_playlists', 1, 0),
+  (1, 'manage_playlists', 1, 0),
+  (0, 'manage_playlists', 0, 0);
+
+-- 013: manage_files (tidyFolder — L2+ enabled)
+INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (3, 'manage_files', 1, 0),
+  (2, 'manage_files', 1, 0),
+  (1, 'manage_files', 0, 0),
+  (0, 'manage_files', 0, 0);
+
+-- 018: manage_radio
+INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (0, 'manage_radio', 0, 0),
+  (1, 'manage_radio', 0, 0),
+  (2, 'manage_radio', 1, 0),
+  (3, 'manage_radio', 1, 0);
+
+-- 019: manage_podcasts
+INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (0, 'manage_podcasts', 0, 0),
+  (1, 'manage_podcasts', 0, 0),
+  (2, 'manage_podcasts', 1, 0),
+  (3, 'manage_podcasts', 1, 0);
+
+-- 017/044: share
+INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (0, 'share', 0, 0),
+  (1, 'share', 1, 0),
+  (2, 'share', 1, 0),
+  (3, 'share', 1, 0);
+
+-- 0021: participate_work / dispatch_work (052 browser work pool)
+INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (3, 'participate_work', 1, 0),
+  (2, 'participate_work', 1, 0),
+  (1, 'participate_work', 0, 0),
+  (0, 'participate_work', 0, 0),
+  (3, 'dispatch_work',    1, 0),
+  (2, 'dispatch_work',    0, 0),
+  (1, 'dispatch_work',    0, 0),
+  (0, 'dispatch_work',    0, 0);
+
+-- 0024: 087 unified admin permissions
+INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  -- Cloudflare integration (054)
+  (3, 'manage_cloudflare',      1, NULL),
+  (2, 'manage_cloudflare',      0, NULL),
+  (1, 'manage_cloudflare',      0, NULL),
+  (0, 'manage_cloudflare',      0, NULL),
+  -- Maintenance tooling (078 / 080 / 082)
+  (3, 'maintenance_cleanup',    1, NULL),
+  (2, 'maintenance_cleanup',    0, NULL),
+  (1, 'maintenance_cleanup',    0, NULL),
+  (0, 'maintenance_cleanup',    0, NULL),
+  (3, 'maintenance_reclaim',    1, NULL),
+  (2, 'maintenance_reclaim',    0, NULL),
+  (1, 'maintenance_reclaim',    0, NULL),
+  (0, 'maintenance_reclaim',    0, NULL),
+  (3, 'maintenance_reset',      1, NULL),
+  (2, 'maintenance_reset',      0, NULL),
+  (1, 'maintenance_reset',      0, NULL),
+  (0, 'maintenance_reset',      0, NULL),
+  -- Cross-user data visibility (admin sees other users' items)
+  (3, 'view_all_users_items',   1, NULL),
+  (2, 'view_all_users_items',   0, NULL),
+  (1, 'view_all_users_items',   0, NULL),
+  (0, 'view_all_users_items',   0, NULL);
+
 -- ============================================================================
 -- 6. Guest Tokens (temporary browser access)
 -- ============================================================================
-CREATE TABLE guest_tokens (
+CREATE TABLE IF NOT EXISTS guest_tokens (
   token TEXT PRIMARY KEY,
   created_by TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   created_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (created_by) REFERENCES users(username)
 );
-CREATE INDEX idx_guest_tokens_expires ON guest_tokens(expires_at);
+CREATE INDEX IF NOT EXISTS idx_guest_tokens_expires ON guest_tokens(expires_at);
 
 -- ============================================================================
 -- 7. Artists
 -- ============================================================================
-CREATE TABLE artists (
+CREATE TABLE IF NOT EXISTS artists (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   sort_name TEXT,
-  image_r2_key TEXT,                      -- R2 key to artist image
+  image_r2_key TEXT,                                 -- R2 key to artist image
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );
-CREATE INDEX idx_artists_name ON artists(name);
+CREATE INDEX IF NOT EXISTS idx_artists_name ON artists(name);
 
 -- ============================================================================
 -- 8. Albums
 -- ============================================================================
-CREATE TABLE albums (
+CREATE TABLE IF NOT EXISTS albums (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   sort_name TEXT,
   year INTEGER,
   genre TEXT,
-  cover_r2_key TEXT,                      -- R2 key to cover art
+  cover_r2_key TEXT,                                 -- R2 key to cover art
   song_count INTEGER DEFAULT 0,
-  duration INTEGER DEFAULT 0,             -- total duration in seconds
-  size INTEGER DEFAULT 0,                 -- total size of all instances in bytes
+  duration INTEGER DEFAULT 0,                        -- total duration in seconds
+  size INTEGER DEFAULT 0,                            -- total size of all instances in bytes
   compilation INTEGER DEFAULT 0,
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );
-CREATE INDEX idx_albums_name ON albums(name);
+CREATE INDEX IF NOT EXISTS idx_albums_name ON albums(name);
 
 -- ============================================================================
 -- 9. Song Masters (logical songs — one per unique track)
 -- ============================================================================
-CREATE TABLE song_masters (
+CREATE TABLE IF NOT EXISTS song_masters (
   id TEXT PRIMARY KEY,
   album_id TEXT NOT NULL,
   artist_id TEXT NOT NULL,
@@ -222,20 +309,20 @@ CREATE TABLE song_masters (
   sort_title TEXT,
   track INTEGER,
   disc INTEGER,
-  duration INTEGER,                       -- canonical duration (from best source)
+  duration INTEGER,                                  -- canonical duration (from best source)
   genre TEXT,
   compilation INTEGER DEFAULT 0,
-  participants TEXT,                      -- JSON: [{role:"composer",name:"..."}]
-  lyrics TEXT,                            -- 036: full LRC / plain text; getLyrics reads here first
+  participants TEXT,                                 -- JSON: [{role:"composer",name:"..."}]
+  lyrics TEXT,                                       -- 015/036: full LRC / plain text; getLyrics reads here first
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (album_id) REFERENCES albums(id),
   FOREIGN KEY (artist_id) REFERENCES artists(id),
   FOREIGN KEY (album_artist_id) REFERENCES artists(id)
 );
-CREATE INDEX idx_songmasters_album ON song_masters(album_id);
-CREATE INDEX idx_songmasters_artist ON song_masters(artist_id);
-CREATE INDEX idx_songmasters_title ON song_masters(title);
+CREATE INDEX IF NOT EXISTS idx_songmasters_album ON song_masters(album_id);
+CREATE INDEX IF NOT EXISTS idx_songmasters_artist ON song_masters(artist_id);
+CREATE INDEX IF NOT EXISTS idx_songmasters_title ON song_masters(title);
 
 -- ============================================================================
 -- 10. Song Instances (physical files — one per format/source/bitrate)
@@ -246,57 +333,65 @@ CREATE INDEX idx_songmasters_title ON song_masters(title);
 --   ├── transcode_320.mp3      (instance_type='transcoded')
 --   └── transcode_128.opus     (instance_type='transcoded')
 -- Deduplication: source_dedup_key groups identical audio across sources.
-CREATE TABLE song_instances (
+CREATE TABLE IF NOT EXISTS song_instances (
   id TEXT PRIMARY KEY,
   master_id TEXT NOT NULL,
-  source_id TEXT NOT NULL,                -- FK to storage_sources, or 'r2-local'
+  source_id TEXT NOT NULL,                           -- FK to storage_sources, or 'r2-local'
   source_type TEXT DEFAULT 'original'
     CHECK (source_type IN ('original', 'transcoded', 'cached', 'external')),
-  source_dedup_key TEXT,                  -- content hash for cross-source dedup
-  parent_instance_id TEXT,                -- FK to self: original instance for transcoded
-  storage_uri TEXT NOT NULL,              -- r2://key or webdav://source_id/path etc.
-  transcode_profile TEXT,                 -- e.g. 'mp3_320', 'opus_128' (null if original)
+  source_dedup_key TEXT,                             -- content hash for cross-source dedup
+  parent_instance_id TEXT,                           -- FK to self: original instance for transcoded
+  storage_uri TEXT NOT NULL,                         -- r2://key or webdav://source_id/path etc.
+  transcode_profile TEXT,                            -- e.g. 'mp3_320', 'opus_128' (null if original)
   suffix TEXT NOT NULL,
   content_type TEXT,
-  bit_rate INTEGER,                       -- kbps
-  sample_rate INTEGER,                    -- Hz
-  bit_depth INTEGER,                      -- bits per sample
-  channels INTEGER,                       -- 1=mono, 2=stereo
-  duration INTEGER,                       -- seconds
-  size INTEGER,                           -- bytes
-  missing INTEGER DEFAULT 0,              -- 1 if file not found at source
-  expires_at INTEGER,                     -- for cached transcodes (TTL)
+  bit_rate INTEGER,                                  -- kbps
+  sample_rate INTEGER,                               -- Hz
+  bit_depth INTEGER,                                 -- bits per sample
+  channels INTEGER,                                  -- 1=mono, 2=stereo
+  duration INTEGER,                                  -- seconds
+  size INTEGER,                                      -- bytes
+  missing INTEGER DEFAULT 0,                         -- 1 if file not found at source
+  tag_scanned INTEGER NOT NULL DEFAULT 0,            -- 004: 0=not scanned, 1=tags applied, 2=no usable tags
+  source_etag TEXT,                                  -- 020: remote ETag for incremental scan skip
+  source_last_modified INTEGER,                      -- 020: remote last_modified (unix seconds)
+  expires_at INTEGER,                                -- for cached transcodes (TTL)
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (master_id) REFERENCES song_masters(id) ON DELETE CASCADE,
   FOREIGN KEY (parent_instance_id) REFERENCES song_instances(id) ON DELETE SET NULL
 );
-CREATE INDEX idx_instances_master ON song_instances(master_id);
-CREATE INDEX idx_instances_source ON song_instances(source_id);
-CREATE INDEX idx_instances_dedup ON song_instances(source_dedup_key);
-CREATE INDEX idx_instances_parent ON song_instances(parent_instance_id);
-CREATE INDEX idx_instances_expires ON song_instances(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_instances_master ON song_instances(master_id);
+CREATE INDEX IF NOT EXISTS idx_instances_source ON song_instances(source_id);
+CREATE INDEX IF NOT EXISTS idx_instances_dedup ON song_instances(source_dedup_key);
+CREATE INDEX IF NOT EXISTS idx_instances_parent ON song_instances(parent_instance_id);
+CREATE INDEX IF NOT EXISTS idx_instances_expires ON song_instances(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_si_pending_scan
+  ON song_instances (source_id, tag_scanned) WHERE tag_scanned = 0;
 
 -- ============================================================================
 -- 11. Annotations (user-specific: play counts, ratings, stars)
 -- ============================================================================
-CREATE TABLE annotations (
+CREATE TABLE IF NOT EXISTS annotations (
   user_id TEXT NOT NULL,
   item_id TEXT NOT NULL,
   item_type TEXT NOT NULL CHECK (item_type IN ('song', 'album', 'artist')),
   play_count INTEGER DEFAULT 0,
-  play_date INTEGER,                      -- last played timestamp
+  play_date INTEGER,                                 -- last played timestamp
   rating INTEGER CHECK (rating BETWEEN 1 AND 5),
   starred INTEGER DEFAULT 0,
   starred_at INTEGER,
   PRIMARY KEY (user_id, item_id, item_type)
 );
-CREATE INDEX idx_annotations_user ON annotations(user_id);
+CREATE INDEX IF NOT EXISTS idx_annotations_user ON annotations(user_id);
+CREATE INDEX IF NOT EXISTS idx_annotations_starred ON annotations(user_id, item_type, starred);
+CREATE INDEX IF NOT EXISTS idx_annotations_rating ON annotations(user_id, item_type, rating);
+CREATE INDEX IF NOT EXISTS idx_annotations_played ON annotations(user_id, item_type, play_date);
 
 -- ============================================================================
 -- 12. Playlists
 -- ============================================================================
-CREATE TABLE playlists (
+CREATE TABLE IF NOT EXISTS playlists (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   owner TEXT NOT NULL,
@@ -304,13 +399,15 @@ CREATE TABLE playlists (
   song_count INTEGER DEFAULT 0,
   duration INTEGER DEFAULT 0,
   cover_r2_key TEXT,
+  comment TEXT,                                      -- 007: free-form description
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (owner) REFERENCES users(username) ON DELETE CASCADE
 );
-CREATE INDEX idx_playlists_owner ON playlists(owner);
+CREATE INDEX IF NOT EXISTS idx_playlists_owner ON playlists(owner);
+CREATE INDEX IF NOT EXISTS idx_playlists_owner_public ON playlists(owner, public);
 
-CREATE TABLE playlist_songs (
+CREATE TABLE IF NOT EXISTS playlist_songs (
   playlist_id TEXT NOT NULL,
   song_master_id TEXT NOT NULL,
   position INTEGER NOT NULL,
@@ -323,28 +420,29 @@ CREATE TABLE playlist_songs (
 -- ============================================================================
 -- 13. Transcode Queue (async transcode jobs)
 -- ============================================================================
-CREATE TABLE transcode_jobs (
+CREATE TABLE IF NOT EXISTS transcode_jobs (
   id TEXT PRIMARY KEY,
-  instance_id TEXT NOT NULL,              -- source instance to transcode
-  profile TEXT NOT NULL,                  -- target transcode profile
+  instance_id TEXT NOT NULL,                         -- source instance to transcode
+  profile TEXT NOT NULL,                             -- target transcode profile
   status TEXT DEFAULT 'pending'
     CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
-  output_instance_id TEXT,                -- resulting instance after completion
+  output_instance_id TEXT,                           -- resulting instance after completion
+  engine TEXT,                                       -- 010: which backend ran it (sandbox|external|browser_pool)
+  profile_id TEXT,                                   -- 010: catalogue id of the target profile
   error_message TEXT,
   created_at INTEGER DEFAULT (unixepoch()),
   completed_at INTEGER,
   FOREIGN KEY (instance_id) REFERENCES song_instances(id),
   FOREIGN KEY (output_instance_id) REFERENCES song_instances(id)
 );
-CREATE INDEX idx_transcode_jobs_status ON transcode_jobs(status);
+CREATE INDEX IF NOT EXISTS idx_transcode_jobs_status ON transcode_jobs(status);
 
 -- ============================================================================
 -- 14. Internet Radio Stations (045)
 -- ============================================================================
 -- Subsonic standard station directory; clients connect to stream_url directly
--- (no proxy on EdgeSonic). CUD is admin-gated via the `manage_radio` permission
--- declared in user_permissions seeds further down (migration 0018).
-CREATE TABLE internet_radio_stations (
+-- (no proxy on EdgeSonic). CUD is admin-gated via the `manage_radio` permission.
+CREATE TABLE IF NOT EXISTS internet_radio_stations (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   stream_url TEXT NOT NULL,
@@ -354,13 +452,6 @@ CREATE TABLE internet_radio_stations (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   FOREIGN KEY (created_by) REFERENCES users(username) ON DELETE SET NULL
 );
-
--- manage_radio permission seeds (mirrors 0018).
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (0, 'manage_radio', 0, 0),
-  (1, 'manage_radio', 0, 0),
-  (2, 'manage_radio', 1, 0),
-  (3, 'manage_radio', 1, 0);
 
 -- ============================================================================
 -- 15. Podcasts (046)
@@ -375,7 +466,7 @@ CREATE TABLE IF NOT EXISTS podcast_channels (
   description TEXT,
   image_url TEXT,
   language TEXT,
-  status TEXT NOT NULL DEFAULT 'new',       -- new / completed / error
+  status TEXT NOT NULL DEFAULT 'new',                -- new / completed / error
   error_message TEXT,
   last_refreshed_at INTEGER,
   created_at INTEGER NOT NULL DEFAULT (unixepoch())
@@ -392,7 +483,7 @@ CREATE TABLE IF NOT EXISTS podcast_episodes (
   duration INTEGER,
   size INTEGER,
   bit_rate INTEGER,
-  status TEXT NOT NULL DEFAULT 'new',       -- new / downloading / completed / error
+  status TEXT NOT NULL DEFAULT 'new',                 -- new / downloading / completed / error
   downloaded_r2_key TEXT,
   error_message TEXT,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
@@ -402,31 +493,24 @@ CREATE TABLE IF NOT EXISTS podcast_episodes (
 CREATE INDEX IF NOT EXISTS idx_podcast_episodes_channel_pub
   ON podcast_episodes (channel_id, published_at DESC);
 
--- 046 manage_podcasts permission seeds (mirrors migration 0019).
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (0, 'manage_podcasts', 0, 0),
-  (1, 'manage_podcasts', 0, 0),
-  (2, 'manage_podcasts', 1, 0),
-  (3, 'manage_podcasts', 1, 0);
-
 -- ============================================================================
--- Shares (044) — public share links targeting one or more song masters
+-- 16. Shares (044) — public share links targeting one or more song masters
 -- ============================================================================
-CREATE TABLE shares (
+CREATE TABLE IF NOT EXISTS shares (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   description TEXT,
-  expires_at INTEGER,                          -- unix seconds; NULL = never expires
+  expires_at INTEGER,                               -- unix seconds; NULL = never expires
   view_count INTEGER NOT NULL DEFAULT 0,
   last_visited_at INTEGER,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
   updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
   FOREIGN KEY (user_id) REFERENCES users(username) ON DELETE CASCADE
 );
-CREATE INDEX idx_shares_user ON shares(user_id);
-CREATE INDEX idx_shares_expires ON shares(expires_at);
+CREATE INDEX IF NOT EXISTS idx_shares_user ON shares(user_id);
+CREATE INDEX IF NOT EXISTS idx_shares_expires ON shares(expires_at);
 
-CREATE TABLE share_entries (
+CREATE TABLE IF NOT EXISTS share_entries (
   share_id TEXT NOT NULL,
   position INTEGER NOT NULL,
   song_master_id TEXT NOT NULL,
@@ -434,13 +518,258 @@ CREATE TABLE share_entries (
   FOREIGN KEY (share_id) REFERENCES shares(id) ON DELETE CASCADE,
   FOREIGN KEY (song_master_id) REFERENCES song_masters(id) ON DELETE CASCADE
 );
-CREATE INDEX idx_share_entries_song ON share_entries(song_master_id);
+CREATE INDEX IF NOT EXISTS idx_share_entries_song ON share_entries(song_master_id);
 
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (0, 'share', 0, 0),
-  (1, 'share', 1, 0),
-  (2, 'share', 1, 0),
-  (3, 'share', 1, 0);
+-- ============================================================================
+-- 17. Bookmarks + Play Queues (037)
+-- ============================================================================
+-- Per-user bookmarks (resume point per song) and a single saved play queue
+-- per user (Subsonic getBookmarks / createBookmark / deleteBookmark /
+-- getPlayQueue / savePlayQueue). Last-write-wins; no multi-device merge.
+CREATE TABLE IF NOT EXISTS bookmarks (
+  user_id TEXT NOT NULL,
+  song_master_id TEXT NOT NULL,
+  position_ms INTEGER NOT NULL,
+  comment TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (user_id, song_master_id),
+  FOREIGN KEY (user_id) REFERENCES users(username) ON DELETE CASCADE,
+  FOREIGN KEY (song_master_id) REFERENCES song_masters(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_user ON bookmarks (user_id);
+
+CREATE TABLE IF NOT EXISTS play_queues (
+  user_id TEXT PRIMARY KEY,
+  song_ids TEXT NOT NULL,                            -- JSON array of song_master_ids (preserves order)
+  current_id TEXT,                                   -- song_master_id of currently playing entry
+  position_ms INTEGER NOT NULL DEFAULT 0,
+  changed_by TEXT,                                   -- Subsonic client name / device
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (user_id) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- ============================================================================
+-- 18. Scan Jobs (0009) — persisted background scan tracking
+-- ============================================================================
+-- Each invocation of /rest/startScan inserts one row per source; the scan
+-- itself runs in ctx.waitUntil and updates scanned_items as it progresses.
+-- getScanStatus aggregates the most recent jobs across all sources.
+CREATE TABLE IF NOT EXISTS scan_jobs (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'running', 'completed', 'failed')),
+  total_items INTEGER NOT NULL DEFAULT 0,
+  scanned_items INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT,
+  started_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  ended_at INTEGER,
+  FOREIGN KEY (source_id) REFERENCES storage_sources(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_scan_jobs_source_started ON scan_jobs (source_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_jobs_status ON scan_jobs (status);
+
+-- ============================================================================
+-- 19. Scrape Jobs (040) — metadata scrape audit table
+-- ============================================================================
+-- write-only audit log: one row per /rest/scrapeMetadata proxy call
+-- (status='fetched'), /rest/submitScrapeResult write (status='applied'),
+-- or either above when it errors (status='failed', error_message set).
+CREATE TABLE IF NOT EXISTS scrape_jobs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  song_master_id TEXT,
+  source TEXT NOT NULL,                              -- 'netease' / 'qmusic' / 'kugou' ...
+  query TEXT,
+  remote_song_id TEXT,
+  result_json TEXT,                                  -- ScrapeResult JSON (subset of upstream payload)
+  status TEXT NOT NULL,                              -- 'fetched' / 'applied' / 'failed'
+  mode TEXT,                                         -- 'tags' / 'cover' / 'both' (applied rows only)
+  error_message TEXT,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (user_id) REFERENCES users(username) ON DELETE CASCADE,
+  FOREIGN KEY (song_master_id) REFERENCES song_masters(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scrape_jobs_user_created ON scrape_jobs (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scrape_jobs_master ON scrape_jobs (song_master_id);
+
+-- ============================================================================
+-- 20. Work Queue (052) — browser worker pool task queue
+-- ============================================================================
+-- Logged-in users (level ≥ 2) can opt in to becoming a worker node: their
+-- browser polls /edgesonic/work/poll every ~5 minutes and runs queued tasks
+-- (metadata parse, third-party scrape) inside a Web Worker, then POSTs the
+-- result back via /edgesonic/work/submit. The Worker only schedules
+-- non-realtime jobs here (user-facing /stream still runs inline).
+CREATE TABLE IF NOT EXISTS work_queue (
+  id              TEXT PRIMARY KEY,
+  task_type       TEXT NOT NULL,                     -- 'metadata' | 'scrape' (transcode removed in 089)
+  payload         TEXT NOT NULL,                     -- JSON blob (task-shaped)
+  required_caps   TEXT,                              -- JSON array of capability strings; NULL = any
+  priority        INTEGER NOT NULL DEFAULT 5,        -- 1..10, lower runs first
+  status          TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued', 'claimed', 'completed', 'failed', 'canceled')),
+  claimed_by      TEXT,                              -- username of the browser node
+  claimed_at      INTEGER,
+  heartbeat_at    INTEGER,
+  result_json     TEXT,                              -- successful payload (JSON)
+  error_message   TEXT,
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  max_attempts    INTEGER NOT NULL DEFAULT 3,
+  created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+  expires_at      INTEGER,
+  FOREIGN KEY (claimed_by) REFERENCES users(username) ON DELETE SET NULL
+);
+
+-- Pickup query: oldest queued row first, priority-respecting.
+CREATE INDEX IF NOT EXISTS idx_work_pickup
+  ON work_queue (priority, created_at) WHERE status = 'queued';
+
+-- Heartbeat sweep: scheduled handler scans claimed rows whose heartbeat aged
+-- past worker_claim_ttl_seconds.
+CREATE INDEX IF NOT EXISTS idx_work_claimed
+  ON work_queue (claimed_by, heartbeat_at) WHERE status = 'claimed';
+
+-- ============================================================================
+-- 21. Boolean Feature Flags (0002 — docs/DESIGN.md §3.3)
+-- ============================================================================
+-- Integer-typed feature flags. String/JSON-valued flags live in feature_strings
+-- (section 22 below).
+CREATE TABLE IF NOT EXISTS features (
+  key TEXT PRIMARY KEY,
+  value INTEGER NOT NULL DEFAULT 0,
+  description TEXT,
+  updated_at INTEGER DEFAULT (unixepoch())
+);
+
+INSERT OR IGNORE INTO features (key, value, description) VALUES
+  ('allow_being_proxied',     0, '允许本服务器被其他 EdgeSonic 作为上游二次代理'),
+  ('enable_subsonic_upstream', 1, '本服务器是否启用 Subsonic 类型存储源（出站代理）'),
+  ('guest_browse',            0, '允许 guest 级别浏览音乐库'),
+  ('open_registration',       0, '开放用户自助注册');
+
+-- 0011: scrape_enabled master switch
+INSERT OR IGNORE INTO features (key, value, description, updated_at) VALUES
+  ('scrape_enabled', 1, 'Master switch for metadata scraping', unixepoch());
+
+-- ============================================================================
+-- 22. String Feature Flags (0010 — feature_strings)
+-- ============================================================================
+-- String/JSON-valued feature flags. Used by 049 transcode engine, 051 scan,
+-- 052 work pool, 065 COOP/COEP, 088 concurrency, 091/092 presign.
+CREATE TABLE IF NOT EXISTS feature_strings (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL DEFAULT '',
+  description TEXT,
+  updated_at  INTEGER DEFAULT (unixepoch())
+);
+
+-- 0010: 049 transcode engine defaults
+INSERT OR IGNORE INTO feature_strings (key, value, description) VALUES
+  ('transcode_engine',           'disabled', '转码引擎 (sandbox|external|disabled)'),
+  ('transcode_mode',             'on_demand', '转码触发模式 (on_demand|pre_bake|both)'),
+  ('default_transcode_profiles', '[]',        '默认预生成档位 JSON 数组（profile id 列表）'),
+  ('external_transcoder_url',    '',          '外部转码器 URL（仅在 engine=external 时生效）');
+
+-- 0011: scrape source priority
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('scrape_enabled_sources', '["netease","qmusic","kugou"]', 'Enabled scrape sources in priority order (JSON array)', unixepoch());
+
+-- 0016: lastfm api key (empty = off)
+INSERT OR IGNORE INTO feature_strings (key, value, description) VALUES
+  ('lastfm_api_key', '', 'Last.fm API key for metadata proxy (empty = disabled)');
+
+-- 0020: 051 incremental scan tunables
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('scan_interval_hours', '6', 'WebDAV auto-scan interval in hours; 0 = disabled', unixepoch()),
+  ('scan_etag_check',     '1', '0|1 — use ETag/lastModified/size triple to skip unchanged files', unixepoch()),
+  ('scan_rescan_strategy','auto', 'auto|worker|browser — who re-reads tags on change', unixepoch()),
+  ('scan_browser_auto',   '1', '0|1 — Files.vue auto-drains pending metadata queue', unixepoch());
+
+-- 0021: 052 work pool tunables
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('worker_pool_enabled',          '1',   'Whether the browser work pool is active (0|1)', unixepoch()),
+  ('worker_poll_interval_seconds', '300', 'Client poll interval in seconds (default 5 min)', unixepoch()),
+  ('worker_batch_size',            '5',   'Max tasks returned per /work/poll call',          unixepoch()),
+  ('worker_claim_ttl_seconds',     '60',  'Heartbeat timeout before stale claim is re-queued', unixepoch());
+
+-- 0022: 065 cross-origin isolation (default ON)
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('enable_cross_origin_isolation',
+   '1',
+   'COOP/COEP response headers — required for SharedArrayBuffer + ffmpeg.wasm multi-thread. 0|1.',
+   unixepoch());
+
+-- 0025: 088 concurrent workers (1..8, default 3)
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('worker_max_concurrent', '3', 'Concurrent Web Workers per browser (1-8)', unixepoch());
+
+-- 0028: 091 R2 presign (default OFF — needs R2 S3 secrets; see SECRETS.md §3)
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('enable_r2_presign', '0', 'R2 presigned URL direct stream (0=off, 1=on; needs R2 S3 secrets)', unixepoch());
+
+-- 0030: 092 WebDAV presign (default ON — WebDAV benefits more than R2)
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('enable_webdav_presign', '1', 'WebDAV presigned URL direct stream (0=off, 1=on; per-credential strategy still applies)', unixepoch());
+
+-- ============================================================================
+-- 23. External Secrets (0010 — 049 external transcoder shared key)
+-- ============================================================================
+-- Stored as plain TEXT for now; admin-gated endpoints read/write only.
+CREATE TABLE IF NOT EXISTS external_secrets (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL DEFAULT '',
+  updated_at  INTEGER DEFAULT (unixepoch())
+);
+
+-- A single empty placeholder so admin UI can GET it without 404.
+INSERT OR IGNORE INTO external_secrets (key, value) VALUES
+  ('external_transcoder_key', '');
+
+-- ============================================================================
+-- 24. KV→D1 migration (090, migration 0027)
+-- ============================================================================
+-- api_keys — API key authentication (formerly KV `apikey:{key}`)
+CREATE TABLE IF NOT EXISTS api_keys (
+  api_key TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+);
+
+-- rate_limits — Per-user per-permission RPH counter (formerly KV `rph:user:perm`)
+CREATE TABLE IF NOT EXISTS rate_limits (
+  username TEXT NOT NULL,
+  permission TEXT NOT NULL,
+  window_start INTEGER NOT NULL DEFAULT 0,
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (username, permission)
+);
+
+-- kv_store — Generic KV (currently: cron:last_scan_ts)
+CREATE TABLE IF NOT EXISTS kv_store (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+-- now_playing — Active stream registry (formerly KV `now_playing:{username}`, 300s TTL)
+CREATE TABLE IF NOT EXISTS now_playing (
+  username TEXT PRIMARY KEY,
+  song_id TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  client_id TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+-- lastfm_cache — Last.fm 24h response cache (formerly KV `lastfm:{method}:{params}`)
+CREATE TABLE IF NOT EXISTS lastfm_cache (
+  cache_key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  expires_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lastfm_cache_expires ON lastfm_cache(expires_at);
 
 -- ============================================================================
 -- Auth Flow Summary
@@ -464,85 +793,4 @@ INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VA
 --   Web player uses session_token as the Subsonic "password":
 --   t = md5(session_token + s)
 --   → Server finds session by token → verifies → streams audio in browser
--- ============================================================================
-
--- ============================================================================
--- 051: Incremental scan (migration 0020)
--- ============================================================================
--- Two columns + an index on song_instances let the WebDAV scanner skip files
--- whose (etag, last_modified, size) triple is unchanged. When any of the three
--- differs the row is UPDATEd and `tag_scanned` reset to 0 so the BROWSER READ
--- queue (or Worker tag parser) re-reads the metadata.
---
--- ALTER TABLE song_instances ADD COLUMN source_etag TEXT;
--- ALTER TABLE song_instances ADD COLUMN source_last_modified INTEGER;
--- CREATE INDEX IF NOT EXISTS idx_si_pending_scan
---   ON song_instances (source_id, tag_scanned) WHERE tag_scanned = 0;
---
--- Feature flags (seeded by INSERT OR IGNORE so re-running the migration is safe):
---   scan_interval_hours    — WebDAV auto-scan interval in hours; 0 = disabled
---   scan_etag_check        — '0'|'1' for the ETag/lastModified/size skip
---   scan_rescan_strategy   — 'auto' | 'worker' | 'browser'
---   scan_browser_auto      — '0'|'1' decides Files.vue auto-drain behaviour
--- ============================================================================
-
--- ============================================================================
--- 052: Browser worker pool (migration 0021)
--- ============================================================================
--- Logged-in users (level ≥ 2) can opt in to becoming a worker node: their
--- browser polls /edgesonic/work/poll every ~5 minutes and runs queued tasks
--- (metadata parse, transcode, third-party scrape) inside a Web Worker, then
--- POSTs the result back via /edgesonic/work/submit. The Worker only schedules
--- non-realtime jobs here (user-facing /stream still runs inline).
---
--- CREATE TABLE work_queue (
---   id, task_type, payload, required_caps, priority, status,
---   claimed_by, claimed_at, heartbeat_at, result_json, error_message,
---   attempts, max_attempts, created_at, expires_at
--- );
--- CREATE INDEX idx_work_pickup  ON work_queue (priority, created_at) WHERE status='queued';
--- CREATE INDEX idx_work_claimed ON work_queue (claimed_by, heartbeat_at) WHERE status='claimed';
---
--- Feature flags (feature_strings):
---   worker_pool_enabled          — '0'|'1' kill-switch for the whole pool
---   worker_poll_interval_seconds — client poll interval (default 300)
---   worker_batch_size            — max tasks returned per /work/poll
---   worker_claim_ttl_seconds     — heartbeat timeout before re-queue (default 60)
---
--- Permissions:
---   participate_work — opt-in to BE a worker node (default L3+L2)
---   dispatch_work    — POST /work/dispatch (default super-admin only)
--- ============================================================================
-
--- ============================================================================
--- 17. Unified permission model (087, migration 0024)
--- ============================================================================
--- Background: EdgeSonic's design principle is "security policy lives on
--- permission rows in user_permissions, NOT on the level integer". Up through
--- 084 we had ~20 endpoints that violated this with hardcoded
--- `if (user.level < N) return 403` checks. 087 replaces every one of them
--- with permissionMiddleware("<perm>") (request guard) or hasPermission(...)
--- (visibility helper) so an operator can grant the capability to L2 admins
--- via the Permissions UI without a code change.
---
--- INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph)
--- VALUES (level × permission grid) — see 0024_admin_permissions.sql.
---
--- New permissions:
---   manage_cloudflare      — 054 cf.ts route-level middleware
---   maintenance_cleanup    — 078 cleanupDuplicateCovers
---   maintenance_reclaim    — 080 reclaimStaleWork
---   maintenance_reset      — 082 resetFailedWork
---   view_all_users_items   — cross-user playlist / share / now_playing
---                            visibility (hasPermission helper, not middleware,
---                            because the handler degrades to "self only" when
---                            the caller lacks the permission rather than 403)
---
--- Reused permissions (already on disk):
---   dispatch_work          052a — also gates /work/status and /work/cancel
---   manage_users           0001 — gates cross-user changePassword / setAvatar
---   manage_sources         0001 — gates /sources/migratePasswords
---
--- Concurrent change: auth.ts.minLevel() is deleted. It was unused but its
--- presence advertised the wrong pattern.
 -- ============================================================================

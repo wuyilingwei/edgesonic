@@ -16,14 +16,26 @@
 import type { StorageAdapter, StreamResult } from "./index";
 import { parseStorageUri, getSourceCredentials } from "./index";
 
-// 068 — `env` is optional so legacy call sites still compile while we migrate
-// them over. When provided, the password column may be a `v1:<base64url>` blob
-// that's transparently decrypted via env.STORAGE_KEY. Without env (or with
-// STORAGE_KEY unset) we fall back to the legacy plaintext path.
+// 092 — Optional presign capability for WebDAV. Returns a UserInfo-embedded
+// URL (`https://user:pass@host/path`) so the browser can fetch bytes
+// directly from the WebDAV server, bypassing the Worker sub-request
+// bandwidth pool. The browser's Range header is preserved across the 302.
+//
+// SECURITY: the credentials appear in the URL and will leak to browser
+// history / Referer / WebDAV server logs. Operators should configure a
+// dedicated read-only account on the WebDAV server for this path. EdgeSonic
+// does not manage the WebDAV server's user accounts.
+export interface WebDAVPresignResult {
+  url: string;
+}
+
 export function createWebDAVAdapter(
   db: D1Database,
-  env?: { STORAGE_KEY?: string },
-): StorageAdapter {
+  // env kept for call-site compat; no longer used for decryption
+  _env?: unknown,
+): StorageAdapter & {
+  presign(uri: string, rangeHeader?: string): Promise<WebDAVPresignResult | null>;
+} {
   return {
     // 089 S2 — Write a body to WebDAV via HTTP PUT. Uses the same credential
     // resolution and path encoding as stream(). The URI must be
@@ -34,7 +46,7 @@ export function createWebDAVAdapter(
       contentType?: string,
     ): Promise<void> {
       const { path } = parseStorageUri(uri);
-      const creds = await getSourceCredentials(db, "webdav", env);
+      const creds = await getSourceCredentials(db, "webdav");
       if (!creds) throw new Error("WebDAV source not configured or disabled");
       const encodedPath = path.split("/").map(encodeURIComponent).join("/");
       const fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${encodedPath}`;
@@ -53,7 +65,7 @@ export function createWebDAVAdapter(
 
     async stream(uri: string, range?: string): Promise<StreamResult> {
       const { path } = parseStorageUri(uri);
-      const creds = await getSourceCredentials(db, "webdav", env);
+      const creds = await getSourceCredentials(db, "webdav");
       if (!creds) {
         return { body: null, statusCode: 401, contentLength: null, contentType: "text/plain", acceptRanges: false };
       }
@@ -75,6 +87,33 @@ export function createWebDAVAdapter(
         acceptRanges: resp.headers.get("Accept-Ranges") === "bytes",
         contentRange: resp.headers.get("Content-Range"),
       };
+    },
+
+    // 092 — Build a UserInfo-embedded WebDAV URL for browser-direct 302.
+    // Returns null when the WebDAV source has no configured credentials
+    // (caller falls back to in-Worker stream). The Range header is NOT
+    // encoded into the URL — the browser carries it on the redirected
+    // request natively.
+    async presign(uri: string, _rangeHeader?: string): Promise<WebDAVPresignResult | null> {
+      const { path } = parseStorageUri(uri);
+      const creds = await getSourceCredentials(db, "webdav");
+      if (!creds) return null;
+
+      const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+      const base = creds.baseUrl.replace(/\/$/, "");
+      // RFC 3986: UserInfo credentials go between scheme and host.
+      // `btoa` is URL-safe for ASCII credentials; for non-ASCII we'd need
+      // encodeURIComponent on the raw bytes, but WebDAV accounts are
+      // conventionally ASCII. We percent-encode any reserved char in
+      // user/pass to be safe ('@', ':', '/' inside credentials would
+      // break the URL otherwise).
+      const encUser = encodeURIComponent(creds.username);
+      const encPass = encodeURIComponent(creds.password);
+      // Insert user:pass@ after the scheme://
+      const m = base.match(/^(https?:\/\/)(.*)$/);
+      if (!m) return null;
+      const url = `${m[1]}${encUser}:${encPass}@${m[2]}/${encodedPath}`;
+      return { url };
     },
   };
 }

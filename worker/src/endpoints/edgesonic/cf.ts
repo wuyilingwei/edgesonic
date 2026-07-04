@@ -62,10 +62,13 @@ export const cfRoutes = new Hono<{
 // Scoping to this file's /cf/* prefix keeps the protection without the leak.
 cfRoutes.use("/cf/*", permissionMiddleware("manage_cloudflare"));
 
-// Script name must match wrangler.toml `name = "edgesonic"`. We hard-code
-// rather than reading from env so a misconfigured deployment can't push a
-// secret into the wrong Worker.
-const SCRIPT_NAME = "edgesonic";
+// Script name must match wrangler.toml `name = "edgesonic"`. 093 — read from
+// env.WORKER_NAME (wrangler.toml [vars]) so a renamed deployment picks up the
+// new name without a code change. Falls back to "edgesonic" for deployments
+// that haven't yet added WORKER_NAME to their [vars].
+function scriptName(env: { WORKER_NAME?: string }): string {
+  return env.WORKER_NAME || "edgesonic";
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -152,7 +155,7 @@ cfRoutes.post("/cf/setToken", async (c) => {
   try {
     await callCfApi(
       writer,
-      `/accounts/${accountId}/workers/scripts/${SCRIPT_NAME}/secrets`,
+      `/accounts/${accountId}/workers/scripts/${scriptName(c.env)}/secrets`,
       {
         method: "PUT",
         body: JSON.stringify({
@@ -164,7 +167,7 @@ cfRoutes.post("/cf/setToken", async (c) => {
     );
     await callCfApi(
       writer,
-      `/accounts/${accountId}/workers/scripts/${SCRIPT_NAME}/secrets`,
+      `/accounts/${accountId}/workers/scripts/${scriptName(c.env)}/secrets`,
       {
         method: "PUT",
         body: JSON.stringify({
@@ -255,7 +258,7 @@ cfRoutes.post("/cf/setCron", async (c) => {
   try {
     const result = await callCfApi(
       token,
-      `/accounts/${accountId}/workers/scripts/${SCRIPT_NAME}/schedules`,
+      `/accounts/${accountId}/workers/scripts/${scriptName(c.env)}/schedules`,
       {
         method: "PUT",
         body: JSON.stringify(crons.map((cron) => ({ cron }))),
@@ -280,7 +283,7 @@ cfRoutes.get("/cf/getCron", async (c) => {
   try {
     const result = await callCfApi(
       token,
-      `/accounts/${accountId}/workers/scripts/${SCRIPT_NAME}/schedules`,
+      `/accounts/${accountId}/workers/scripts/${scriptName(c.env)}/schedules`,
     );
     // CF returns `{ schedules: [{ cron, created_on, modified_on }] }`
     const r = result as { schedules?: Array<{ cron: string }> };
@@ -327,7 +330,7 @@ cfRoutes.get("/cf/ensureDefaultCron", async (c) => {
   try {
     const result = await callCfApi(
       token,
-      `/accounts/${accountId}/workers/scripts/${SCRIPT_NAME}/schedules`,
+      `/accounts/${accountId}/workers/scripts/${scriptName(c.env)}/schedules`,
     );
     const r = result as { schedules?: Array<{ cron: string }> };
     existing = r.schedules || [];
@@ -349,7 +352,7 @@ cfRoutes.get("/cf/ensureDefaultCron", async (c) => {
   try {
     const result = await callCfApi(
       token,
-      `/accounts/${accountId}/workers/scripts/${SCRIPT_NAME}/schedules`,
+      `/accounts/${accountId}/workers/scripts/${scriptName(c.env)}/schedules`,
       {
         method: "PUT",
         body: JSON.stringify([{ cron: DEFAULT_CRON }]),
@@ -410,7 +413,7 @@ cfRoutes.get("/cf/getAnalytics", async (c) => {
           accountTag: accountId,
           since,
           until,
-          scriptName: SCRIPT_NAME,
+          scriptName: scriptName(c.env),
         },
       }),
     });

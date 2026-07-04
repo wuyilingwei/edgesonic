@@ -63,8 +63,9 @@ function stableParamString(params: Record<string, string | number | undefined>):
   return JSON.stringify(entries);
 }
 
-// Core fetch primitive. Reads api_key from features, hits KV first, then
-// reaches out to ws.audioscrobbler.com on a miss. Always JSON.
+// Core fetch primitive. Reads api_key from features, hits D1 lastfm_cache
+// first, then reaches out to ws.audioscrobbler.com on a miss. Always JSON.
+// 090 — Cache moved from KV (24h TTL) to D1 `lastfm_cache` table.
 export async function lastfmFetch(
   env: Env,
   method: string,
@@ -76,10 +77,13 @@ export async function lastfmFetch(
   // Cache key omits the api_key itself; rotating the key shouldn't invalidate
   // the dataset because the dataset hasn't changed.
   const cacheKey = `lastfm:${method}:${stableParamString(params)}`;
-  const cached = await env.KV.get(cacheKey);
-  if (cached !== null) {
-    try { return JSON.parse(cached) as Record<string, unknown>; }
-    catch { /* fall through and re-fetch on parse error */ }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const cacheRow = await env.DB.prepare(
+    "SELECT value FROM lastfm_cache WHERE cache_key = ? AND expires_at > ?"
+  ).bind(cacheKey, nowSec).first<{ value: string }>();
+  if (cacheRow !== null) {
+    try { return JSON.parse(cacheRow.value) as Record<string, unknown>; }
+    catch { /* corrupt cache → fall through and re-fetch */ }
   }
 
   const url = new URL(BASE_URL);
@@ -125,7 +129,11 @@ export async function lastfmFetch(
     );
   }
 
-  await env.KV.put(cacheKey, JSON.stringify(body), { expirationTtl: CACHE_TTL_SEC });
+  // 090 — Write to D1 lastfm_cache instead of KV.
+  await env.DB.prepare(
+    "INSERT INTO lastfm_cache (cache_key, value, expires_at) VALUES (?, ?, ?)" +
+    " ON CONFLICT(cache_key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at"
+  ).bind(cacheKey, JSON.stringify(body), nowSec + CACHE_TTL_SEC).run();
   return body;
 }
 

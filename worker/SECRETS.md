@@ -14,7 +14,9 @@ bindings.
 | `WORK_UPLOAD_HMAC_KEY` | 066 | HMAC-SHA-256 key for browser-pool transcode upload tokens (`/edgesonic/work/upload`). | Yes |
 | `CF_API_TOKEN` | 054 | Cloudflare API token for cron / analytics integration. Pushed dynamically via `/edgesonic/cf/setToken`. | Yes (set via Settings UI) |
 | `CF_ACCOUNT_ID` | 054 | Cloudflare account id paired with `CF_API_TOKEN`. | Yes (set via Settings UI) |
-| `STORAGE_KEY` | 068 | AES-256-GCM master key for `storage_sources.password_encrypted`. 32 bytes / 64 hex chars. | Yes |
+| `R2_ACCESS_KEY_ID` | 091 | R2 S3 access key for presigned URL signing. Pair with `R2_SECRET_ACCESS_KEY`. | Yes (to enable presign) |
+| `R2_SECRET_ACCESS_KEY` | 091 | R2 S3 secret key for presigned URL signing. | Yes (to enable presign) |
+| `R2_ACCOUNT_ID` | 091 | Cloudflare account id hosting the R2 bucket. Defaults to `wrangler.toml` `account_id` if absent, but must be set as a secret for presign to activate. | Yes (to enable presign) |
 
 ---
 
@@ -112,72 +114,106 @@ wrangler secret put WORK_UPLOAD_HMAC_KEY   # overwrite
 
 ---
 
-## 2. `STORAGE_KEY` (task 068)
+## 2. `CF_API_TOKEN` / `CF_ACCOUNT_ID` (task 054)
+
+These are managed through the Settings UI → "Cloudflare 集成" sub-block. See
+the docstring in `worker/src/endpoints/edgesonic/cf.ts` and the inline notes in
+`worker/src/types/env.d.ts` for the full flow. They are listed here only so
+operators have a single inventory of all secrets the worker reads.
+
+---
+
+## 3. `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_ACCOUNT_ID` (task 091)
 
 ### Why
 
-WebDAV / Subsonic upstream credentials used to sit in `storage_sources.password`
-as plaintext, which meant any D1 reader (CF dashboard SELECT, accidental backup
-download, a leaked operator token) could see them. Task 068 introduces a new
-`password_encrypted` column whose contents are AES-256-GCM blobs of the form
-`v1:<base64url(nonce(12) || ciphertext || tag(16))>`. `STORAGE_KEY` is the
-master key those blobs are sealed under.
+The `/rest/stream` endpoint serves R2 bytes by reading the object inside the
+Worker and streaming the body back to the browser. Cloudflare does not
+publish a per-sub-request bandwidth limit, but in practice multiple
+concurrent sub-requests on the same Worker invocation share an outbound
+channel — production observed ~1.2 MB/s when the browser work pool ran 3
+metadata fetches alongside the playing stream.
 
-When the secret is **unset or empty**, the worker keeps writing plaintext into
-the legacy `password` column so existing deployments keep working — and the
-`/storage/sources/migratePasswords` endpoint refuses to run. After you push
-the secret, all new add/update flows route through `encryptPassword()` and the
-migrate endpoint can sweep the legacy rows.
+Task 091 adds an optional short-circuit: when `enable_r2_presign` is `'1'`
+AND all three R2 secrets are set, the stream endpoint signs a 5-minute
+SigV4 presigned URL and returns a **302 redirect**. The browser then fetches
+R2 bytes directly from the R2 S3 endpoint, entirely outside the Worker
+sub-request budget. R2 egress is free, so this costs nothing extra.
 
-### How to set
+When any of the three secrets is unset (or the feature flag is `'0'`), the
+endpoint falls back to the existing in-Worker stream — no behaviour change.
+
+### How to create the R2 S3 API token
+
+1. Cloudflare dashboard → **R2 → Manage R2 API Tokens** → **Create API Token**.
+2. Permissions: **Object Read** (only — presigned URLs are GET-only; the
+   worker never writes through S3).
+3. Specify bucket: `edgesonic-music` (or `*` if you prefer a single token
+   for future buckets).
+4. TTL: leave default (no expiry) or set a rotation window.
+5. On creation Cloudflare shows **Access Key ID** and **Secret Access Key**
+   **once**. Copy them immediately — the secret is never shown again.
+
+### How to set the secrets
 
 ```bash
-# 64 hex chars = 32 random bytes — AES-256 key material
-openssl rand -hex 32 | pbcopy        # macOS clipboard
-# or just: openssl rand -hex 32
-
 cd worker
-wrangler secret put STORAGE_KEY      # paste the value on stdin
+
+# The Access Key ID (safe to echo — it's like a username)
+wrangler secret put R2_ACCESS_KEY_ID
+# paste the Access Key ID from the R2 dashboard
+
+# The Secret Access Key (sensitive — handle like a password)
+wrangler secret put R2_SECRET_ACCESS_KEY
+# paste the Secret Access Key from the R2 dashboard
+
+# The Cloudflare account id hosting the bucket
+wrangler secret put R2_ACCOUNT_ID
+# paste df4481f3ce1fa0394b4617442a97d147 (or your own)
 ```
 
 Verify:
 
 ```bash
 wrangler secret list
-# expect: STORAGE_KEY  Secret
+# expect: R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID
 ```
 
-### One-time migration (recommended right after setting the secret)
+### Enabling the feature flag
 
-From the Settings → Storage Sources page, an admin clicks
-"Migrate plaintext passwords". The endpoint
-`POST /storage/sources/migratePasswords` walks every row with
-`password_encrypted IS NULL AND password <> ''`, rewrites it to
-`password_encrypted = encryptPassword(password)`, clears the legacy column,
-and returns `{ migrated, failed, total }`. The button is super-admin only.
+After pushing the three secrets, flip the flag:
 
-### Rotation (out of scope for v1)
+```bash
+# Via the Settings UI → Feature Strings → enable_r2_presign → set to "1"
+# Or via D1 directly:
+npx wrangler d1 execute edgesonic-db --remote --command \
+  "UPDATE feature_strings SET value='1', updated_at=unixepoch() WHERE key='enable_r2_presign'"
+```
 
-Rotating `STORAGE_KEY` would invalidate every existing `v1:` blob. A future
-task will handle envelope-style rotation; for now treat the key as effectively
-permanent. **Make a copy when you generate it.**
+The in-isolate memory cache has a 60s TTL, so the change takes effect within
+a minute without a redeploy.
 
-### Length / entropy
+### Rotation
 
-- Exactly 64 hex chars (32 bytes raw). `parseHexKey()` rejects anything else.
-- Generate with `openssl rand -hex 32` — 256 bits is the standard AES-256 key
-  size.
-- Do **not** reuse `WORK_UPLOAD_HMAC_KEY` or `CF_API_TOKEN` here; they live in
-  separate trust domains.
+Rotating the R2 S3 API token does **not** invalidate already-issued presigned
+URLs until their 5-minute TTL elapses (the signature is computed from the
+secret at presign time, not verified against R2's live token list). To rotate:
 
----
+1. Create a new R2 API token in the dashboard.
+2. `wrangler secret put R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` with the
+   new values.
+3. Wait 5 minutes for outstanding presigned URLs to drain.
 
-## 3. `CF_API_TOKEN` / `CF_ACCOUNT_ID` (task 054)
+### Security notes
 
-These are managed through the Settings UI → "Cloudflare 集成" sub-block. See
-the docstring in `worker/src/endpoints/edgesonic/cf.ts` and the inline notes in
-`worker/src/types/env.d.ts` for the full flow. They are listed here only so
-operators have a single inventory of all secrets the worker reads.
+- Presigned URLs are **per-object, 5-minute TTL**. A leaked URL gives read
+  access to exactly one R2 object for at most 5 minutes. This is acceptable
+  for music streaming where the browser needs to fetch the bytes anyway.
+- The Access Key ID is visible in the presigned URL's `X-Amz-Credential`
+  query param. This is by design (S3 presigned URLs always expose it) — the
+  Access Key ID alone cannot authenticate, only the paired secret can sign.
+- Do **not** set `R2_ACCOUNT_ID` in `wrangler.toml` `[vars]` — it would be
+  public in the bundle. Always use a secret.
 
 ---
 

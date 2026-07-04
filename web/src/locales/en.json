@@ -73,6 +73,11 @@
       "unconfiguredTitle": "Cloudflare API not configured",
       "unconfiguredMessage": "CF_API_TOKEN / CF_ACCOUNT_ID are not set, so the dashboard cannot read or modify the cron schedule. Existing features keep working, but you won't be able to recover the hourly cron after a redeploy without these credentials. Configure them in Settings → Cloudflare integration."
     },
+    "r2Presign": {
+      "title": "R2 streams go through the Worker",
+      "message": "R2 presigned direct-stream is not active (enable_r2_presign is off or R2 S3 secrets are not configured). R2 streams currently pass through the Worker sub-request channel and can be throttled to ~1.2 MB/s under concurrency. Enabling presign lets the browser fetch R2 bytes directly, bypassing the sub-request bandwidth pool. See Settings → Feature Strings + SECRETS.md §4.",
+      "action": "Go to settings"
+    },
     "systemActivity": {
       "label": "// SYSTEM ACTIVITY"
     },
@@ -407,6 +412,22 @@
         "saved": "Cross-origin isolation saved",
         "saveFailed": "Save failed"
       },
+      "presign": {
+        "title": "Presigned URL Direct Stream",
+        "hint": "302-redirect /rest/stream to a short-lived R2 S3 / WebDAV UserInfo URL so the browser fetches bytes directly, bypassing the Worker sub-request bandwidth pool. R2 egress is free; WebDAV streams benefit most (no Worker binding fast path).",
+        "secretsConfigured": "R2 SECRETS SET",
+        "secretsMissing": "R2 SECRETS MISSING",
+        "r2SecretsMissingHint": "R2 presign is OFF because the three Workers Secrets below are not set. Without them the stream endpoint falls back to the in-Worker proxy even when the flag is on.",
+        "secretPushHint": "Push them via `wrangler secret put <NAME>` — see worker/SECRETS.md §3 for the walkthrough.",
+        "r2Toggle": "Enable R2 presign",
+        "r2ToggleDesc": "Off keeps the in-Worker stream path. On without secrets silently falls back to the in-Worker path.",
+        "webdavToggle": "Enable WebDAV presign",
+        "webdavToggleDesc": "Default on. Per-credential stream_proxy_strategy (always/never/r2_only/webdav_only) still gates which clients opt in.",
+        "save": "Save",
+        "r2Saved": "R2 presign flag saved",
+        "webdavSaved": "WebDAV presign flag saved",
+        "saveFailed": "Save failed"
+      },
       "cf": {
         "title": "Cloudflare Integration",
         "desc": "Push the Cloudflare API token into Workers Secrets, manage cron schedules dynamically, and read 24h Worker analytics. Token never leaves CF's secret store. Requires super admin.",
@@ -591,7 +612,13 @@
       "loadFailed": "Failed to load credentials",
       "labelEditPlaceholder": "Click to edit label",
       "labelSaved": "Label updated",
-      "labelTooLong": "Label must be 200 chars or fewer"
+      "labelTooLong": "Label must be 200 chars or fewer",
+      "colStrategy": "302 strategy",
+      "strategyAlways": "Always direct (302)",
+      "strategyNever": "Always proxy",
+      "strategyR2Only": "R2 direct only",
+      "strategyWebdavOnly": "WebDAV direct only",
+      "strategySaved": "302 strategy updated"
     }
   },
   "sources": {

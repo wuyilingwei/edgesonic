@@ -14,19 +14,15 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 // ============================================================================
-// Task 047 — getNowPlaying (KV-backed active stream registry).
+// Task 047 — getNowPlaying (D1-backed active stream registry).
 //
-// Companion to the scrobble KV write in annotation.ts: every scrobble (both
-// submission=true and =false) writes `now_playing:{username}` → {songId,
-// startedAt, clientId} with a 300s TTL. This endpoint scans that key prefix
-// and returns one <entry> per active listener with full song metadata + a
-// `minutesAgo` field and `playerId`.
+// 090 — Migrated from KV to D1 `now_playing` table. Scrobble writes
+// (annotation.ts) UPSERT into now_playing; this endpoint reads with a 300s
+// staleness filter (WHERE updated_at > now-300) to match the old KV TTL.
 //
 // Visibility:
-//   admin (level=3) → all active listeners
-//   non-admin       → only own row
-// (EdgeSonic has no "public user" flag yet — when 044 / sharing lands, this
-// is the place to OR in `users.public = 1`.)
+//   view_all_users_items perm → all active listeners
+//   otherwise                 → only own row
 //
 // Permission: `browse` (consistent with getRandomSongs / search3).
 // ============================================================================
@@ -49,14 +45,15 @@ const attrs = (o: object) => ({
   _attributes: o as Record<string, string | number | boolean | undefined>,
 });
 
-// Shape of the JSON value stored at `now_playing:{username}`.
+// Row shape from D1 `now_playing` table.
 interface NowPlayingEntry {
   songId: string;
   startedAt: number; // unix seconds
   clientId: string;
 }
 
-const PREFIX = "now_playing:";
+// Active-stream TTL: matches the old KV expirationTtl (300s).
+const NOW_PLAYING_TTL_SEC = 300;
 
 const getNowPlayingHandler = async (c: import("hono").Context<{
   Bindings: Env;
@@ -65,44 +62,33 @@ const getNowPlayingHandler = async (c: import("hono").Context<{
   const user = c.get("user");
   const env = c.env;
 
-  // Scan all active now_playing entries. KV.list returns key names; we then
-  // fetch each value in parallel. We cap the result set at 1000 keys — a
-  // reasonable upper bound for "concurrent listeners on one instance" and
-  // matches KV.list's default per-page limit.
-  const listed = await env.KV.list({ prefix: PREFIX, limit: 1000 });
-
-  // Visibility filter (before fetching values — saves KV reads).
-  // 087 — replaces the pre-existing `user.level === 3` hardcoded admin check
-  // with the view_all_users_items permission. Default behaviour is unchanged
-  // (L3 carries the permission by default).
+  // 090 — Query D1 `now_playing` table; filter rows older than 300s (mirrors
+  // old KV TTL). Visibility: view_all_users_items → all rows, else own only.
   const seeAll = await hasPermission(env.DB, user, "view_all_users_items");
-  const visibleKeys = seeAll
-    ? listed.keys.map((k) => k.name)
-    : listed.keys
-        .map((k) => k.name)
-        .filter((name) => name === `${PREFIX}${user.username}`);
+  const nowSec = Math.floor(Date.now() / 1000);
+  const cutoff = nowSec - NOW_PLAYING_TTL_SEC;
 
-  if (visibleKeys.length === 0) {
-    return c.text(subsonicOK({ nowPlaying: {} }), 200, XML);
+  interface NowPlayingRow {
+    username: string;
+    song_id: string;
+    started_at: number;
+    client_id: string;
   }
 
-  // Fetch values in parallel.
-  const fetched = await Promise.all(
-    visibleKeys.map(async (key) => {
-      const raw = await env.KV.get(key);
-      if (!raw) return null;
-      let parsed: NowPlayingEntry | null = null;
-      try {
-        parsed = JSON.parse(raw) as NowPlayingEntry;
-      } catch {
-        return null;
-      }
-      if (!parsed?.songId) return null;
-      const username = key.slice(PREFIX.length);
-      return { username, ...parsed };
-    }),
-  );
-  const entries = fetched.filter((x): x is NowPlayingEntry & { username: string } => x !== null);
+  const rows = seeAll
+    ? (await env.DB.prepare(
+        "SELECT username, song_id, started_at, client_id FROM now_playing WHERE updated_at > ?"
+      ).bind(cutoff).all<NowPlayingRow>()).results
+    : (await env.DB.prepare(
+        "SELECT username, song_id, started_at, client_id FROM now_playing WHERE username = ? AND updated_at > ?"
+      ).bind(user.username, cutoff).all<NowPlayingRow>()).results;
+
+  const entries = rows.map((r) => ({
+    username: r.username,
+    songId: r.song_id,
+    startedAt: r.started_at,
+    clientId: r.client_id,
+  })).filter((x): x is NowPlayingEntry & { username: string } => Boolean(x.songId));
 
   if (entries.length === 0) {
     return c.text(subsonicOK({ nowPlaying: {} }), 200, XML);
@@ -130,7 +116,6 @@ const getNowPlayingHandler = async (c: import("hono").Context<{
   const songById = new Map<string, SongMaster & { artist_name: string | null; album_name: string | null }>();
   for (const s of songsWithNames) songById.set(s.id, s);
 
-  const nowSec = Math.floor(Date.now() / 1000);
   const entryXmls = entries
     .map((e) => {
       const song = songById.get(e.songId);

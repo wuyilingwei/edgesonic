@@ -41,14 +41,13 @@ interface SourceRow {
   base_url: string;
   username: string | null;
   password: string | null;
-  // 068 — encrypted column also pulled so asyncScanSource can decrypt via env.
-  password_encrypted: string | null;
   root_path: string | null;
   // 089 S2 — 'library' (default) | 'sync_only' (scan but skip DB inserts)
   mode?: string | null;
 }
 
-const LAST_RUN_KV_KEY = "cron:last_scan_ts";
+// 090 — cron:last_scan_ts moved from KV to D1 `kv_store` table.
+const LAST_RUN_KEY = "cron:last_scan_ts";
 
 export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Promise<void> {
   // ------------------------------------------------------------------
@@ -60,22 +59,27 @@ export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Pr
 
   const now = Math.floor(Date.now() / 1000);
   if (hours > 1) {
-    const lastStr = await env.KV.get(LAST_RUN_KV_KEY);
-    const last = lastStr ? Number(lastStr) : 0;
+    const row = await env.DB.prepare("SELECT value FROM kv_store WHERE key = ?")
+      .bind(LAST_RUN_KEY)
+      .first<{ value: string }>();
+    const last = row ? Number(row.value) : 0;
     if (Number.isFinite(last) && last > 0 && now - last < hours * 3600) {
       return;                                               // not yet
     }
   }
   // Stamp BEFORE dispatching so failures don't cause a runaway every-tick
   // retry. Bigger cadence will simply wait another hour.
-  await env.KV.put(LAST_RUN_KV_KEY, String(now));
+  await env.DB.prepare(
+    "INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)" +
+    " ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+  ).bind(LAST_RUN_KEY, String(now), now).run();
 
   // ------------------------------------------------------------------
   // Enumerate enabled WebDAV sources
   // ------------------------------------------------------------------
   const db = env.DB;
   const sources = (await db.prepare(
-    `SELECT id, base_url, username, password, password_encrypted, root_path, mode FROM storage_sources
+    `SELECT id, base_url, username, password, root_path, mode FROM storage_sources
      WHERE type = 'webdav' AND enabled = 1`,
   ).all<SourceRow>()).results;
   if (!sources.length) return;
@@ -98,7 +102,7 @@ export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Pr
     // ctx.waitUntil so per-source progress can finish past the immediate
     // return value of scheduled().
     ctx.waitUntil(
-      asyncScanSource(db, src, jobId, { etagCheck, env }).catch((e) => {
+      asyncScanSource(db, src, jobId, { etagCheck }).catch((e) => {
         console.error(`scheduled scan source=${src.id} failed:`, e);
       }),
     );

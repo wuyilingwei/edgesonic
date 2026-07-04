@@ -127,8 +127,6 @@ export interface StorageSource {
   base_url: string;
   username: string | null;
   password: string | null;
-  // 023 — AES-256-GCM encrypted password blob (`v1:<base64url>`)
-  password_encrypted?: string | null;
   // 0003 — path prefix inside the remote
   root_path?: string | null;
   last_sync: number | null;

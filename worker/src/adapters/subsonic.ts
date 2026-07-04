@@ -24,13 +24,11 @@ export interface SubsonicAdapterOptions {
   incomingChain?: string[];
 }
 
-// 068 — `env` is optional so legacy call sites still compile while we migrate
-// them over. When provided, the password column may be a `v1:<base64url>` blob
-// that's transparently decrypted via env.STORAGE_KEY (see adapters/index.ts).
 export function createSubsonicAdapter(
   db: D1Database,
   opts: SubsonicAdapterOptions = {},
-  env?: { STORAGE_KEY?: string },
+  // env kept for call-site compat; no longer used for decryption
+  _env?: unknown,
 ): StorageAdapter {
   return {
     // 089 S2 — Subsonic sources are read-only; writing is not supported.
@@ -40,7 +38,7 @@ export function createSubsonicAdapter(
 
     async stream(uri: string, range?: string): Promise<StreamResult> {
       const { path } = parseStorageUri(uri);
-      const creds = await getSourceCredentials(db, "subsonic", env);
+      const creds = await getSourceCredentials(db, "subsonic");
       if (!creds) {
         return { body: null, statusCode: 401, contentLength: null, contentType: "text/plain", acceptRanges: false };
       }
