@@ -36,7 +36,7 @@ export interface StreamResult {
 }
 
 export interface StorageUri {
-  scheme: "r2" | "url" | "webdav" | "subsonic";
+  scheme: "r2" | "url" | "webdav" | "subsonic" | "s3";
   sourceId: string;
   path: string;
 }
@@ -83,5 +83,47 @@ export async function getSourceCredentials(
     username: source.username || "",
     password: source.password || "",
     baseUrl: source.base_url.replace(/\/+$/, "") + (root ? `/${root}` : ""),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 096 — S3 config resolver
+// ---------------------------------------------------------------------------
+
+interface S3SourceRow {
+  base_url: string;
+  username: string | null;
+  password: string | null;
+  root_path: string | null;
+  region: string | null;
+}
+
+/**
+ * Look up an enabled s3 source by id and return a fully resolved S3Config.
+ * Returns null when the source is missing, not type='s3', or disabled.
+ */
+export async function getS3Config(
+  db: D1Database,
+  sourceId: string,
+): Promise<import("./s3").S3Config | null> {
+  const row = await db
+    .prepare(
+      "SELECT base_url, username, password, root_path, region FROM storage_sources WHERE id = ? AND type = 's3' AND enabled = 1",
+    )
+    .bind(sourceId)
+    .first<S3SourceRow>();
+
+  if (!row) return null;
+
+  const { parseS3RootPath } = await import("./s3");
+  const { bucket, prefix } = parseS3RootPath(row.root_path || "");
+
+  return {
+    endpoint: row.base_url.replace(/\/+$/, ""),
+    bucket,
+    prefix,
+    accessKeyId: row.username || "",
+    secretAccessKey: row.password || "",
+    region: row.region || "us-east-1",
   };
 }

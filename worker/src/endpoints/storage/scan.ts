@@ -52,6 +52,17 @@ interface SourceRow {
   mode?: string | null;
 }
 
+// 096 — S3 source row (includes region for SigV4)
+interface S3ScanSourceRow {
+  id: string;
+  base_url: string;
+  username: string | null;
+  password: string | null;
+  root_path: string | null;
+  region: string | null;
+  mode?: string | null;
+}
+
 // 051 — Existing-instance snapshot used by asyncScanSource to decide skip/UPDATE/INSERT.
 interface ExistingRow {
   id: string;
@@ -61,8 +72,8 @@ interface ExistingRow {
   tagScanned: number;
 }
 
-// Kick off a WebDAV scan. The actual work runs inside ctx.waitUntil so the
-// HTTP response returns immediately; clients poll /rest/getScanStatus for
+// Kick off a WebDAV and/or S3 scan. The actual work runs inside ctx.waitUntil
+// so the HTTP response returns immediately; clients poll /rest/getScanStatus for
 // progress / completion. Each invocation creates one scan_jobs row per source.
 // GET /rest/startScan[?id=<sourceId>]
 scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) => {
@@ -70,13 +81,20 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
   const db = env.DB;
   const onlyId = c.req.query("id");
 
-  const sources = (await db.prepare(
+  // Query WebDAV sources
+  const davSources = (await db.prepare(
     `SELECT id, base_url, username, password, root_path, mode FROM storage_sources
      WHERE type = 'webdav' AND enabled = 1 ${onlyId ? "AND id = ?" : ""}`
   ).bind(...(onlyId ? [onlyId] : [])).all<SourceRow>()).results;
 
-  if (sources.length === 0) {
-    return c.text(subsonicError(70, "No enabled WebDAV source to scan"), 404, {
+  // 096 — Query S3-compatible sources
+  const s3Sources = (await db.prepare(
+    `SELECT id, base_url, username, password, root_path, region, mode FROM storage_sources
+     WHERE type = 's3' AND enabled = 1 ${onlyId ? "AND id = ?" : ""}`
+  ).bind(...(onlyId ? [onlyId] : [])).all<S3ScanSourceRow>()).results;
+
+  if (davSources.length === 0 && s3Sources.length === 0) {
+    return c.text(subsonicError(70, "No enabled WebDAV or S3 source to scan"), 404, {
       "Content-Type": "application/xml; charset=UTF-8",
     });
   }
@@ -86,7 +104,7 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
 
   // Insert scan_jobs rows synchronously so getScanStatus immediately sees them
   // as running; the actual scan runs in ctx.waitUntil.
-  for (const src of sources) {
+  for (const src of [...davSources, ...s3Sources]) {
     const jobId = "sj-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
     await queries.insertScanJob({ id: jobId, sourceId: src.id });
     jobs.push({ id: jobId, source_id: src.id });
@@ -110,10 +128,15 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
   // ctx.waitUntil keeps the Worker alive until the scan finishes (subject to
   // platform CPU/wall caps); the response below returns right away.
   const exec = c.executionCtx;
-  for (let i = 0; i < jobs.length; i++) {
-    const job = jobs[i];
-    const src = sources[i];
+  let jobIdx = 0;
+  for (const src of davSources) {
+    const job = jobs[jobIdx++];
     exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled, env }));
+  }
+  // 096 — S3 sources
+  for (const src of s3Sources) {
+    const job = jobs[jobIdx++];
+    exec.waitUntil(asyncScanS3Source(env, db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled }));
   }
 
   return c.text(
@@ -543,6 +566,230 @@ export async function asyncScanSource(
       totalItems: audio.length,
       endedAt: Math.floor(Date.now() / 1000),
       errorMessage: complete ? null : `Subrequest budget exhausted (added ${added})`,
+    });
+  } catch (e) {
+    await queries.updateScanJob(jobId, {
+      status: "failed",
+      endedAt: Math.floor(Date.now() / 1000),
+      errorMessage: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+// 096 — S3 scanner. Mirrors asyncScanSource but uses ListObjectsV2 pagination
+// instead of WebDAV PROPFIND. S3 objects are always flat (no isDir); we
+// paginate until nextToken is null or MAX_S3_PAGES is reached.
+const MAX_S3_PAGES = 50; // 50 × 1000 = 50k objects max per invocation
+
+export async function asyncScanS3Source(
+  env: Env,
+  db: D1Database,
+  src: S3ScanSourceRow,
+  jobId: string,
+  opts: { etagCheck?: boolean; dispatchToWorkerPool?: boolean } = {},
+): Promise<void> {
+  const queries = createQueries(db);
+  const now = Math.floor(Date.now() / 1000);
+  const etagCheck = opts.etagCheck !== false;
+  const dispatchToWorkerPool = opts.dispatchToWorkerPool === true;
+  const dispatchTargets: Array<{ instanceId: string; uri: string; suffix: string; size: number }> = [];
+
+  try {
+    const { parseS3RootPath, listS3Objects } = await import("../../adapters/s3");
+    const { bucket, prefix } = parseS3RootPath(src.root_path || "");
+    const config = {
+      endpoint: (src.base_url || "").replace(/\/+$/, ""),
+      bucket,
+      prefix,
+      accessKeyId: src.username || "",
+      secretAccessKey: src.password || "",
+      region: src.region || "us-east-1",
+    };
+
+    // Collect all audio objects across all pages
+    const audio: Array<{ key: string; size: number; etag: string | null; lastModified: number | null }> = [];
+    let nextToken: string | undefined;
+    let pages = 0;
+    let complete = true;
+
+    do {
+      const result = await listS3Objects(config, nextToken, 1000);
+      for (const obj of result.objects) {
+        if (AUDIO_EXT.has(extOf(obj.key))) {
+          audio.push(obj);
+        }
+      }
+      nextToken = result.nextToken ?? undefined;
+      pages++;
+      if (pages >= MAX_S3_PAGES && nextToken) { complete = false; break; }
+    } while (nextToken);
+
+    // Pull prior snapshot (same structure as WebDAV scan)
+    const existingMap = new Map<string, ExistingRow>();
+    {
+      const rows = (await db.prepare(
+        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned
+         FROM song_instances WHERE source_id = ?`,
+      ).bind(src.id).all<{
+        id: string;
+        storage_uri: string;
+        source_etag: string | null;
+        source_last_modified: number | null;
+        size: number | null;
+        tag_scanned: number | null;
+      }>()).results;
+      for (const r of rows) {
+        existingMap.set(r.storage_uri, {
+          id: r.id,
+          etag: r.source_etag,
+          lastModified: r.source_last_modified,
+          size: r.size,
+          tagScanned: r.tag_scanned ?? 0,
+        });
+      }
+    }
+
+    await queries.updateScanJob(jobId, { totalItems: audio.length });
+
+    const stmts: D1PreparedStatement[] = [];
+    const touchedAlbums = new Set<string>();
+    let scanned = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    const flush = async () => {
+      for (let i = 0; i < stmts.length; i += 80) {
+        await db.batch(stmts.slice(i, i + 80));
+      }
+      stmts.length = 0;
+      await queries.updateScanJob(jobId, { scannedItems: scanned });
+    };
+
+    // Strip configured prefix from key to get the "relative" path for guessFromPath.
+    // S3 ListObjectsV2 with a prefix returns objects whose keys start with that prefix.
+    // e.g. prefix="music/", key="music/Artist/Album/track.mp3" → rel="Artist/Album/track.mp3"
+    const normPrefix = prefix ? prefix.replace(/^\/?/, "").replace(/\/?$/, "/") : "";
+
+    for (const obj of audio) {
+      scanned++;
+      // Storage URI: s3://<sourceId>/<fullObjectKey> (key within bucket, NOT including bucket)
+      const uri = `s3://${src.id}/${obj.key}`;
+      const prior = existingMap.get(uri);
+
+      // Path 1: unchanged → skip
+      if (prior && etagCheck) {
+        const etagSame = obj.etag !== null && prior.etag !== null && obj.etag === prior.etag;
+        const lmSame = obj.lastModified !== null && prior.lastModified !== null && obj.lastModified === prior.lastModified;
+        const sizeSame = prior.size === obj.size;
+        if (etagSame && lmSame && sizeSame) {
+          skipped++;
+          if (dispatchToWorkerPool && prior.tagScanned === 0) {
+            dispatchTargets.push({ instanceId: prior.id, uri, suffix: extOf(obj.key), size: obj.size });
+          }
+          if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+          continue;
+        }
+      }
+
+      // Path 2: changed → UPDATE
+      if (prior) {
+        stmts.push(
+          db.prepare(
+            `UPDATE song_instances
+             SET source_etag = ?, source_last_modified = ?, size = ?,
+                 suffix = ?, tag_scanned = 0, updated_at = ?
+             WHERE id = ?`,
+          ).bind(obj.etag, obj.lastModified, obj.size, extOf(obj.key), now, prior.id),
+        );
+        updated++;
+        if (dispatchToWorkerPool) {
+          dispatchTargets.push({ instanceId: prior.id, uri, suffix: extOf(obj.key), size: obj.size });
+        }
+        if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+        continue;
+      }
+
+      // Path 3: new → INSERT
+      if (src.mode === "sync_only") {
+        if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+        continue;
+      }
+
+      // Use the prefix-stripped key for metadata guessing so guessFromPath
+      // sees "Artist/Album/Track.mp3" rather than "music/Artist/Album/Track.mp3".
+      const relKey = normPrefix && obj.key.startsWith(normPrefix)
+        ? obj.key.substring(normPrefix.length)
+        : obj.key;
+
+      const meta = guessFromPath(relKey);
+      const artistId = "ar-" + md5(meta.artist).substring(0, 10);
+      const albumId = "al-" + md5(meta.artist + " " + meta.album).substring(0, 10);
+      const masterId = "sm-" + md5(uri).substring(0, 10);
+      const instanceId = "si-" + md5(uri).substring(0, 10);
+      touchedAlbums.add(albumId);
+
+      stmts.push(
+        db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+          .bind(artistId, meta.artist, meta.artist.toLowerCase(), now, now),
+        db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+          .bind(albumId, meta.album, meta.album.toLowerCase(), now, now),
+        db.prepare(
+          `INSERT OR IGNORE INTO song_masters (id, album_id, artist_id, title, sort_title, track, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(masterId, albumId, artistId, meta.title, meta.title.toLowerCase(), meta.track, now, now),
+        db.prepare(
+          `INSERT OR IGNORE INTO song_instances
+             (id, master_id, source_id, storage_uri, suffix, size,
+              source_etag, source_last_modified, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(instanceId, masterId, src.id, uri, extOf(obj.key), obj.size, obj.etag, obj.lastModified, now, now),
+      );
+
+      if (dispatchToWorkerPool) {
+        dispatchTargets.push({ instanceId, uri, suffix: extOf(obj.key), size: obj.size });
+      }
+
+      if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+    }
+
+    void updated; void skipped;
+
+    await flush();
+
+    for (const albumId of touchedAlbums) {
+      await db.prepare(
+        `UPDATE albums SET
+           song_count = (SELECT COUNT(*) FROM song_masters WHERE album_id = ?),
+           size = (SELECT COALESCE(SUM(si.size), 0) FROM song_instances si
+                   JOIN song_masters sm ON sm.id = si.master_id WHERE sm.album_id = ?),
+           updated_at = ?
+         WHERE id = ?`
+      ).bind(albumId, albumId, now, albumId).run();
+    }
+
+    await db.prepare("UPDATE storage_sources SET last_sync = ? WHERE id = ?")
+      .bind(now, src.id).run();
+
+    if (dispatchToWorkerPool && dispatchTargets.length > 0) {
+      try {
+        await dispatchWorkBatch(db, dispatchTargets.map((t) => ({
+          taskType: "metadata",
+          payload: { instanceId: t.instanceId, sourceUri: t.uri, suffix: t.suffix, size: t.size },
+          requiredCaps: ["music-metadata"],
+          priority: 5,
+          dedupKey: t.instanceId,
+        })));
+      } catch (e) {
+        console.error(`[s3scan ${jobId}] dispatchWorkBatch failed:`, e);
+      }
+    }
+
+    await queries.updateScanJob(jobId, {
+      status: complete ? "completed" : "failed",
+      scannedItems: scanned,
+      totalItems: audio.length,
+      endedAt: Math.floor(Date.now() / 1000),
+      errorMessage: complete ? null : `S3 page budget exhausted after ${MAX_S3_PAGES} pages`,
     });
   } catch (e) {
     await queries.updateScanJob(jobId, {

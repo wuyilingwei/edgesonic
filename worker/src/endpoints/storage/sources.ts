@@ -30,11 +30,11 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
   const db = c.env.DB;
   const result = await db.prepare(
     `SELECT id, type, name, base_url, username,
-            root_path, last_sync, enabled, mode
+            root_path, region, last_sync, enabled, mode
      FROM storage_sources ORDER BY created_at ASC`
   ).all<{
     id: string; type: string; name: string; base_url: string; username: string | null;
-    root_path: string | null; last_sync: number | null; enabled: number;
+    root_path: string | null; region: string | null; last_sync: number | null; enabled: number;
     mode: string;
   }>();
   const sources = result.results.map((s) => ({
@@ -46,6 +46,8 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
       lastSync: s.last_sync ? String(s.last_sync) : "0",
       // 089 S2 — 'library' | 'sync_only'
       mode: s.mode ?? "library",
+      // 096 — region for S3-compatible sources
+      region: s.region ?? "us-east-1",
     },
   }));
   return c.text(subsonicOK({ storageSources: { source: sources } }), 200, XML);
@@ -54,7 +56,7 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
 sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async (c) => {
   const body = await c.req.json<{
     type: string; base_url: string; name?: string; username?: string;
-    password?: string; root_path?: string; mode?: string;
+    password?: string; root_path?: string; mode?: string; region?: string;
   }>();
   if (!body.type || !body.base_url) {
     return c.text(subsonicError(0, "Missing type or base_url"), 400, XML);
@@ -64,17 +66,19 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
   if (mode !== "library" && mode !== "sync_only") {
     return c.text(subsonicError(0, "Invalid mode: must be 'library' or 'sync_only'"), 400, XML);
   }
+  // 096 — region (S3-compatible sources; default us-east-1 for all types)
+  const region = body.region || "us-east-1";
   const db = c.env.DB;
   const id = crypto.randomUUID().substring(0, 8);
   const now = Math.floor(Date.now() / 1000);
   const password = body.password ?? "";
   await db.prepare(
     `INSERT INTO storage_sources
-       (id, type, name, base_url, username, password, root_path, mode, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, type, name, base_url, username, password, root_path, region, mode, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, body.type, body.name || "", body.base_url, body.username || null,
-    password, body.root_path || "", mode, now, now,
+    password, body.root_path || "", region, mode, now, now,
   ).run();
   return c.text(subsonicOK({}), 200, XML);
 });
@@ -82,7 +86,7 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
 sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), async (c) => {
   const body = await c.req.json<{
     id: string; name?: string; base_url?: string; username?: string; password?: string;
-    root_path?: string; enabled?: number; mode?: string;
+    root_path?: string; enabled?: number; mode?: string; region?: string;
   }>();
   if (!body.id) {
     return c.text(subsonicError(0, "Missing id"), 400, XML);
@@ -105,6 +109,8 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   if (body.enabled !== undefined) { sets.push("enabled = ?"); binds.push(body.enabled ? 1 : 0); }
   // 089 S2 — update mode
   if (body.mode !== undefined) { sets.push("mode = ?"); binds.push(body.mode); }
+  // 096 — update region
+  if (body.region !== undefined && body.region !== "") { sets.push("region = ?"); binds.push(body.region); }
   if (sets.length === 0) {
     return c.text(subsonicError(0, "Nothing to update"), 400, XML);
   }

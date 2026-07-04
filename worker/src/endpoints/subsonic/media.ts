@@ -134,6 +134,15 @@ async function openSourceForTranscode(
       const r = await createWebDAVAdapter(env.DB, env).stream(storageUri);
       return r.body ? { body: r.body, contentType: r.contentType } : null;
     }
+    case "s3": {
+      // 096 — S3-compatible proxy stream for transcoding
+      const { getS3Config } = await import("../../adapters/index");
+      const { createS3Adapter } = await import("../../adapters/s3");
+      const config = await getS3Config(env.DB, parsed.sourceId);
+      if (!config) return null;
+      const r = await createS3Adapter(config).stream(storageUri);
+      return r.body ? { body: r.body, contentType: r.contentType } : null;
+    }
     default:
       // subsonic-upstream is intentionally excluded — we never re-transcode a
       // proxied stream (matches the policy in endpoints/transcode.ts).
@@ -364,6 +373,17 @@ mediaRoutes.get("/stream", async (c) => {
     case "webdav":
       result = await createWebDAVAdapter(env.DB, env).stream(selected.storage_uri, range);
       break;
+    case "s3": {
+      // 096 — S3-compatible proxy stream (always proxied in v1; presign is v2)
+      const { getS3Config } = await import("../../adapters/index");
+      const { createS3Adapter } = await import("../../adapters/s3");
+      const s3config = await getS3Config(env.DB, parsed.sourceId);
+      if (!s3config) {
+        return c.text(subsonicError(70, "S3 source not found or disabled"), 404, { "Content-Type": "application/xml; charset=UTF-8" });
+      }
+      result = await createS3Adapter(s3config).stream(selected.storage_uri, range);
+      break;
+    }
     case "subsonic": {
       if (!(await getFeature(env, "enable_subsonic_upstream"))) {
         return c.text(subsonicError(50, "Subsonic upstream sources are disabled"), 403, { "Content-Type": "application/xml; charset=UTF-8" });

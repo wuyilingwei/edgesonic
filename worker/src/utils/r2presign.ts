@@ -30,54 +30,14 @@
 //                           `wrangler secret put CF_ACCOUNT_ID`)
 //
 // Region is hardcoded to "auto" — R2 ignores the region but SigV4 requires one.
+//
+// 096 — SigV4 primitives extracted to sigv4.ts; imported here to keep the
+// public API (presignR2Get + PresignOpts) fully backward-compatible.
+
+import { hex, hmac, sha256Hex, uriEncode } from "./sigv4";
 
 const SERVICE = "s3";
 const REGION = "auto";
-
-// ---- Helpers ---------------------------------------------------------------
-
-function hex(buf: ArrayBuffer): string {
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-async function hmac(key: ArrayBuffer | Uint8Array, msg: string): Promise<ArrayBuffer> {
-  const k = key instanceof Uint8Array ? key : new Uint8Array(key);
-  const cryptoKey = await crypto.subtle.importKey(
-    "raw",
-    k as BufferSource,
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  return crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(msg));
-}
-
-async function sha256Hex(msg: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
-  return hex(buf);
-}
-
-function uriEncode(s: string, encodeSlash = true): string {
-  let out = "";
-  for (const ch of [...s]) {
-    const code = ch.charCodeAt(0);
-    if (
-      (code >= 0x30 && code <= 0x39) || // 0-9
-      (code >= 0x41 && code <= 0x5a) || // A-Z
-      (code >= 0x61 && code <= 0x7a) || // a-z
-      ch === "-" || ch === "_" || ch === "." || ch === "~"
-    ) {
-      out += ch;
-    } else if (ch === "/" && !encodeSlash) {
-      out += "/";
-    } else {
-      for (const byte of new TextEncoder().encode(ch)) {
-        out += "%" + byte.toString(16).toUpperCase().padStart(2, "0");
-      }
-    }
-  }
-  return out;
-}
 
 // ---- Presign ---------------------------------------------------------------
 
