@@ -11,8 +11,16 @@
 // The COI middleware runs getFeatureString on every request, so collapsing that
 // to ~1 KV read per isolate per TTL is the main KV-cost reduction.
 
-const CACHE_TTL = 60; // seconds — KV blob TTL
-const MEM_TTL_MS = CACHE_TTL * 1000;
+// Two independent TTLs. Memory TTL is short (freshness) — an admin toggle
+// propagates to a warm isolate within this window. KV TTL is long, because KV
+// is only a shared cache in front of D1: writes to KV are the scarce quota
+// (free tier ~1k/day), so we want them RARE. With a short KV TTL the blob was
+// rewritten on every ~60s expiry per active isolate → thousands of KV.put/day.
+// A long KV TTL means the blob is (re)written ~once/hour/isolate + on explicit
+// invalidate (admin flips a flag → invalidate* deletes it → next read rebuilds).
+// Memory-miss but KV-hit costs only a KV.get, never a put.
+const MEM_TTL_MS = 60 * 1000;         // 60s — in-isolate freshness
+const KV_TTL_SECONDS = 60 * 60;       // 1h  — KV cache lifetime (write-rare)
 
 const BOOL_KV_KEY = "features:all";
 const STR_KV_KEY = "feature_strings:all";
@@ -25,9 +33,10 @@ const STR_KV_KEY = "feature_strings:all";
 // runtime ever handed us a fresh env per request we'd simply degrade to one
 // blob read per request (still far cheaper than one read per flag), never wrong.
 //
-// Trade-off: after an admin flips a flag, a warm isolate that didn't service
-// the write serves the old map for up to CACHE_TTL (the same window the KV TTL
-// already allowed). invalidate* drops this env's copy + the KV blob immediately.
+// Trade-off: invalidate* deletes the KV blob + this env's copy immediately, so
+// other warm isolates serve the old map only until their MEM_TTL_MS (60s)
+// lapses — their next memory-miss hits the now-absent KV blob and rebuilds from
+// D1. Staleness after an admin flip is therefore bounded by MEM_TTL_MS.
 type EnvCache = {
   bool?: { data: Record<string, boolean>; exp: number };
   str?: { data: Record<string, string>; exp: number };
@@ -56,7 +65,7 @@ async function loadBoolMap(env: Env): Promise<Record<string, boolean>> {
   const rows = await env.DB.prepare("SELECT key, value FROM features").all<{ key: string; value: number }>();
   const data: Record<string, boolean> = {};
   for (const r of rows.results ?? []) data[r.key] = r.value !== 0;
-  await env.KV.put(BOOL_KV_KEY, JSON.stringify(data), { expirationTtl: CACHE_TTL });
+  await env.KV.put(BOOL_KV_KEY, JSON.stringify(data), { expirationTtl: KV_TTL_SECONDS });
   c.bool = { data, exp: Date.now() + MEM_TTL_MS };
   return data;
 }
@@ -77,7 +86,7 @@ async function loadStrMap(env: Env): Promise<Record<string, string>> {
   const rows = await env.DB.prepare("SELECT key, value FROM feature_strings").all<{ key: string; value: string }>();
   const data: Record<string, string> = {};
   for (const r of rows.results ?? []) data[r.key] = r.value;
-  await env.KV.put(STR_KV_KEY, JSON.stringify(data), { expirationTtl: CACHE_TTL });
+  await env.KV.put(STR_KV_KEY, JSON.stringify(data), { expirationTtl: KV_TTL_SECONDS });
   c.str = { data, exp: Date.now() + MEM_TTL_MS };
   return data;
 }
