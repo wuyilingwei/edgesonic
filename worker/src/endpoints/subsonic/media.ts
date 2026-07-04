@@ -277,6 +277,15 @@ mediaRoutes.get("/stream", async (c) => {
   // Falls through to in-Worker stream on any failure / disabled path.
   if (!needsTranscode) {
     const strategy = (c.get("streamProxyStrategy") as string | undefined) || "always";
+    // 093 — WebDAV UserInfo presign embeds credentials in the redirect URL
+    // (user:password@host). Browsers block cross-origin redirects with
+    // embedded userinfo (CORS policy: "Redirect location contains a username
+    // and password, which is disallowed for cross-origin requests"), so the
+    // WebDAV presign path is only safe for native Subsonic clients that
+    // don't enforce that rule. Session auth = browser SPA → skip WebDAV
+    // presign entirely; fall through to the in-Worker stream instead.
+    const authMethod = (c.get("authMethod") as string | undefined) || "session";
+    const isBrowserSession = authMethod === "session";
 
     if (parsed.scheme === "r2") {
       const presignOn = await getFeatureString(env, "enable_r2_presign", "0");
@@ -310,19 +319,24 @@ mediaRoutes.get("/stream", async (c) => {
         }
       }
     } else if (parsed.scheme === "webdav") {
-      const presignOn = await getFeatureString(env, "enable_webdav_presign", "1");
-      const schemeAllowed = strategy === "always" || strategy === "webdav_only";
-      if (presignOn === "1" && schemeAllowed) {
-        try {
-          const adapter = createWebDAVAdapter(env.DB, env);
-          const presigned = await adapter.presign(selected.storage_uri, range);
-          if (presigned) {
-            const r = c.redirect(presigned.url, 302);
-            r.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
-            return r;
+      // Skip WebDAV presign for browser sessions — see isBrowserSession note above.
+      if (isBrowserSession) {
+        // fall through to in-Worker stream
+      } else {
+        const presignOn = await getFeatureString(env, "enable_webdav_presign", "1");
+        const schemeAllowed = strategy === "always" || strategy === "webdav_only";
+        if (presignOn === "1" && schemeAllowed) {
+          try {
+            const adapter = createWebDAVAdapter(env.DB, env);
+            const presigned = await adapter.presign(selected.storage_uri, range);
+            if (presigned) {
+              const r = c.redirect(presigned.url, 302);
+              r.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+              return r;
+            }
+          } catch {
+            // presign failure → fall through to in-Worker stream
           }
-        } catch {
-          // presign failure → fall through to in-Worker stream
         }
       }
     }
