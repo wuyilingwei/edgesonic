@@ -101,13 +101,23 @@ export async function presignR2Get(opts: PresignOpts): Promise<string> {
   const credentialScope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
   const credential = `${opts.accessKeyId}/${credentialScope}`;
 
-  // Query params (sorted by key for canonical form). We sign host only by
-  // default; if a Range header is supplied we add `range` to SignedHeaders.
-  const signedHeadersList = opts.rangeHeader ? ["host", "range"] : ["host"];
-  const signedHeaders = signedHeadersList.join(";");
+  // 093 — Sign host only. R2 accepts an unsigned Range header on a presigned
+  // GET (the official AWS SDK presign also signs host only by default). Signing
+  // Range required the browser to send the exact same Range value we signed,
+  // which <audio> does not guarantee — any mismatch 403'd the whole request.
+  // The `rangeHeader` opt is now ignored (kept on the interface for callers
+  // that already pass it; no behavior change at the call site).
+  void opts.rangeHeader;
+  const signedHeadersList = ["host"];
+  const signedHeaders = "host";
 
+  // 093 — Presigned GET must include X-Amz-Content-Sha256=UNSIGNED-PAYLOAD
+  // in the query string and use "UNSIGNED-PAYLOAD" as the canonical request
+  // payload hash. Using sha256("") (empty body hash) instead 403s on R2.
+  // Mirrors the AWS SDK v3 presign output.
   const queryParams: Record<string, string> = {
     "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
     "X-Amz-Credential": credential,
     "X-Amz-Date": amzDate,
     "X-Amz-Expires": String(ttl),
@@ -121,15 +131,9 @@ export async function presignR2Get(opts: PresignOpts): Promise<string> {
     .join("&");
 
   // Canonical headers: lowercase, trimmed, sorted, each "name:value\n".
-  const headerMap: Record<string, string> = { host };
-  if (opts.rangeHeader) headerMap["range"] = opts.rangeHeader;
-  const canonicalHeaders = signedHeadersList
-    .map((h) => `${h}:${headerMap[h].trim()}\n`)
-    .join("");
+  const canonicalHeaders = `host:${host.trim()}\n`;
 
-  // Hashed payload — for a GET without body, S3 allows "UNSIGNED-PAYLOAD".
-  // For presigned URLs (no X-Amz-Content-Sha256 in query), use empty body hash.
-  const payloadHash = await sha256Hex("");
+  const payloadHash = "UNSIGNED-PAYLOAD";
 
   const canonicalRequest = [
     "GET",
