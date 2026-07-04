@@ -183,13 +183,17 @@
     "hintBatch": "Only ticked fields are written; un-ticked fields stay as they are.",
     "batchHint": "Tick the ☐ on the left to apply that field to every selected track.",
     "coverPlaceholder": "Cover write-back will land in a later task",
+    "lyricsKeywords": "Keywords: <code>{null}</code> clear · <code>{write}</code> write library lyrics back into file · <code>{export}</code> export as same-name .lrc",
+    "coverKeywords": "Cover keywords: <code>{write}</code> write album cover into file · <code>{export}</code> export cover.jpg",
     "cover": {
       "dropHint": "Drop or click to pick a cover (JPEG / PNG, auto-compressed to ≤500KB)",
       "compressing": "Compressing cover…",
       "clear": "Remove",
       "info": "{kb} KB · {w}×{h}",
       "errInvalidType": "Please pick an image file",
-      "errTooLarge": "Cover still exceeds 500KB after compression ({kb} KB)"
+      "errTooLarge": "Cover still exceeds 500KB after compression ({kb} KB)",
+      "writeHint": "Write the album cover (D1 album.cover_r2_key) back into the file's embedded APIC/PICTURE",
+      "exportHint": "Export the album cover to cover.jpg in the song's directory"
     },
     "batchSaved": "Batch saved: {succeeded} ok / {failed} failed",
     "batchFailed": "Batch save failed"
@@ -526,6 +530,41 @@
         "resetFailedFailed": "Failed: {error}",
         "resetFailedHint": "Before resetting, make sure your browser workers are on the latest bundle (see the update banner at the top) so they don't immediately fail again.",
         "resetFailedConfirm": "Re-queue every failed task? Make sure your browser workers are running the latest bundle first."
+      },
+      "clone": {
+        "title": "Clone Subsonic server",
+        "desc": "Mirror an upstream Subsonic server's library into this EdgeSonic instance. The browser drives the clone — it fetches metadata + bytes directly from the upstream and writes them back here, so large libraries don't time out the Worker.",
+        "url": "Upstream URL",
+        "urlPlaceholder": "https://upstream.example.com",
+        "urlDesc": "Base URL of the upstream Subsonic server (no /rest suffix).",
+        "username": "Upstream username",
+        "usernamePlaceholder": "admin",
+        "password": "Upstream password",
+        "passwordPlaceholder": "Subsonic password (plaintext — required for token auth)",
+        "audioToggle": "Clone audio bytes",
+        "audioToggleDesc": "When on, the browser also downloads each song's /stream bytes and uploads them to local R2 at music/{artist}/{album}/{filename}. Off = metadata only.",
+        "usersToggle": "Clone user accounts",
+        "usersToggleDesc": "When on, also clone the upstream users list (requires upstream admin). Each upstream user is recreated locally with the same password + a 'cloned' Subsonic credential.",
+        "start": "Start clone",
+        "cancel": "Cancel",
+        "missingFields": "Upstream URL, username and password are required",
+        "done": "Clone finished",
+        "failed": "Clone failed",
+        "log": "Live log",
+        "stages": {
+          "metadata": "Metadata",
+          "audio": "Audio bytes",
+          "playlists": "Playlists",
+          "starred": "Starred",
+          "users": "Users"
+        },
+        "status": {
+          "idle": "PENDING",
+          "running": "RUNNING",
+          "done": "DONE",
+          "error": "ERROR",
+          "skipped": "SKIPPED"
+        }
       },
       "transcode": {
         "title": "Transcoder",
