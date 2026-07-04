@@ -25,6 +25,11 @@ export const usePlayerStore = defineStore("player", () => {
   const currentTime = ref(0);
   const duration = ref(0);
   const volume = ref(parseFloat(localStorage.getItem("edgesonic_volume") || "0.8"));
+  // 093d — buffered range tracking for the PlayerBar buffer bar overlay.
+  // `bufferedRanges` is an array of [startSec, endSec] tuples representing
+  // the byte ranges the browser has fetched so far. Updated on `progress`
+  // events from the active <audio> element (fires ~4×/s during download).
+  const bufferedRanges = ref<[number, number][]>([]);
 
   const current = computed<Track | null>(() => queue.value[index.value] || null);
   const hasTrack = computed(() => index.value >= 0 && index.value < queue.value.length);
@@ -33,6 +38,24 @@ export const usePlayerStore = defineStore("player", () => {
   let elB: HTMLAudioElement | null = null;
   let active: HTMLAudioElement | null = null;
   let preloaded: { el: HTMLAudioElement; index: number } | null = null;
+
+  function syncBuffered(el: HTMLAudioElement) {
+    if (el !== active) return;
+    const next: [number, number][] = [];
+    try {
+      for (let i = 0; i < el.buffered.length; i++) {
+        const start = el.buffered.start(i);
+        const end = el.buffered.end(i);
+        if (end - start > 0.05) next.push([start, end]);
+      }
+    } catch { /* buffered not ready yet */ }
+    // Shallow-compare to avoid ref churn when nothing moved.
+    const prev = bufferedRanges.value;
+    if (prev.length !== next.length ||
+        next.some((r, i) => r[0] !== prev[i][0] || r[1] !== prev[i][1])) {
+      bufferedRanges.value = next;
+    }
+  }
 
   function makeAudio(): HTMLAudioElement {
     const el = new Audio();
@@ -53,6 +76,7 @@ export const usePlayerStore = defineStore("player", () => {
     el.addEventListener("pause", () => { if (el === active) playing.value = false; });
     el.addEventListener("ended", () => { if (el === active) next(); });
     el.addEventListener("error", () => { if (el === active) playing.value = false; });
+    el.addEventListener("progress", () => syncBuffered(el));
     // Start prebuffering the next track only once the current one can play —
     // a slow upstream shouldn't have to feed two streams during startup.
     el.addEventListener("canplay", () => { if (el === active) preloadNext(); });
@@ -103,6 +127,7 @@ export const usePlayerStore = defineStore("player", () => {
     ensureElements();
     currentTime.value = 0;
     duration.value = track.duration || 0;
+    bufferedRanges.value = [];
 
     if (preloaded && preloaded.index === index.value) {
       // Swap in the prebuffered element — instant start
@@ -179,10 +204,11 @@ export const usePlayerStore = defineStore("player", () => {
     playing.value = false;
     currentTime.value = 0;
     duration.value = 0;
+    bufferedRanges.value = [];
   }
 
   return {
-    queue, index, playing, currentTime, duration, volume,
+    queue, index, playing, currentTime, duration, volume, bufferedRanges,
     current, hasTrack,
     setQueue, playAt, toggle, next, prev, seek, setVolume, clear,
   };

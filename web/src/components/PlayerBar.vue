@@ -17,6 +17,18 @@ const progressPct = computed(() =>
   player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0,
 );
 
+// 093d — buffered range segments rendered as a light bar behind the
+// play-progress fill. Each tuple is [startSec, endSec]; we map to % of
+// duration. Browsers usually return one continuous range [0, N] for
+// streaming media but may return multiple ranges after seeks.
+const bufferedSegments = computed(() => {
+  if (player.duration <= 0) return [] as { left: number; width: number }[];
+  return player.bufferedRanges.map(([s, e]) => ({
+    left: Math.min(Math.max((s / player.duration) * 100, 0), 100),
+    width: Math.min(Math.max(((e - s) / player.duration) * 100, 0), 100),
+  }));
+});
+
 const progressEl = ref<HTMLElement | null>(null);
 const dragging = ref(false);
 
@@ -77,6 +89,13 @@ function onVolume(e: Event) {
       <div class="pb-progress-row">
         <span class="pb-time">{{ formatDuration(Math.floor(player.currentTime)) }}</span>
         <div ref="progressEl" class="pb-progress" :class="{ disabled: !player.hasTrack }" @mousedown="onProgressDown">
+          <!-- 093d — buffered ranges (light bar behind the play fill) -->
+          <div
+            v-for="(seg, i) in bufferedSegments"
+            :key="i"
+            class="pb-progress-buffered"
+            :style="{ left: seg.left + '%', width: seg.width + '%' }"
+          ></div>
           <div class="pb-progress-fill" :style="{ width: progressPct + '%' }"></div>
           <div class="pb-progress-thumb" :class="{ active: dragging }" :style="{ left: progressPct + '%' }"></div>
         </div>
@@ -174,6 +193,13 @@ function onVolume(e: Event) {
   height: 3px; background: var(--color-bg-elevated);
 }
 .pb-progress-fill { position: absolute; left: 0; height: 3px; background: var(--color-accent-primary); }
+.pb-progress-buffered {
+  position: absolute;
+  height: 3px;
+  background: var(--color-text-secondary);
+  opacity: 0.35;
+  pointer-events: none;
+}
 .pb-progress-thumb {
   position: absolute; width: 9px; height: 9px;
   background: var(--color-accent-primary);
