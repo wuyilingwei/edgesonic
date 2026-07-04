@@ -260,9 +260,22 @@ export function useAuth() {
 
   // 089/S4 — Cross-source copy: POST /storage/files/crossCopy with JSON body.
   // Throws with the backend error message when ok:false so callers can surface it.
-  interface CrossCopyResult { ok: boolean; destUri?: string; error?: string; }
-  async function crossCopy(srcUri: string, destSource: string, destPath: string): Promise<CrossCopyResult> {
-    const text = await storagePost("files/crossCopy", { srcUri, destSource, destPath });
+  // 093f — optional registerInstance for the mirror-to-R2 flow: when present,
+  // the backend also creates a song_instances row for the new R2 copy.
+  interface CrossCopyResult { ok: boolean; destUri?: string; instanceId?: string; error?: string; }
+  interface RegisterInstanceOpts {
+    masterId: string; suffix: string; contentType: string; size: number; sourceInstanceId: string;
+  }
+  async function crossCopy(
+    srcUri: string,
+    destSource: string,
+    destPath: string,
+    registerInstance?: RegisterInstanceOpts,
+  ): Promise<CrossCopyResult> {
+    const text = await storagePost("files/crossCopy", {
+      srcUri, destSource, destPath,
+      ...(registerInstance ? { registerInstance } : {}),
+    });
     const data: CrossCopyResult = JSON.parse(text);
     if (!data.ok) throw new Error(data.error || "Cross-copy failed");
     return data;

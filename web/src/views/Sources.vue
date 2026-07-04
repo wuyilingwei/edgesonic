@@ -300,11 +300,30 @@ async function startMirror(s: Source) {
       for (const item of data.items || []) {
         st.currentTitle = item.title || item.storageUri.split("/").pop() || item.instanceId;
         try {
-          // Destination path mirrors the WebDAV path under music/
-          // Strip the webdav://sourceId/ prefix to get the remote path.
-          const remotePath = item.storageUri.replace(/^webdav:\/\/[^/]+\//, "");
-          const destPath = "music/" + remotePath;
-          await crossCopy(item.storageUri, "r2", destPath);
+          // 093f — Build a tree-structured R2 path:
+          //   music/{artist}/{album}/{filename}
+          // Sanitize artist/album for filesystem safety (strip path separators
+          // and other problematic chars). Falls back to flat music/{filename}
+          // when artist/album metadata is missing.
+          const filename = item.storageUri.split("/").pop() || item.instanceId;
+          const artist = (item.artistName || "").replace(/[\/\\:*?"<>|]/g, "_").trim() || "Unknown Artist";
+          const album = (item.albumName || "").replace(/[\/\\:*?"<>|]/g, "_").trim() || "Unknown Album";
+          const destPath = `music/${artist}/${album}/${filename}`;
+          // Determine suffix from the source URI.
+          const suffix = item.suffix || filename.split(".").pop() || "";
+          const contentType = suffix === "flac" ? "audio/flac"
+            : suffix === "mp3" ? "audio/mpeg"
+            : suffix === "wav" ? "audio/wav"
+            : suffix === "ogg" || suffix === "opus" ? "audio/ogg"
+            : suffix === "m4a" || suffix === "aac" ? "audio/mp4"
+            : "application/octet-stream";
+          await crossCopy(item.storageUri, "r2", destPath, {
+            masterId: item.masterId,
+            suffix,
+            contentType,
+            size: item.size,
+            sourceInstanceId: item.instanceId,
+          });
           st.done++;
         } catch (e) {
           st.failed++;

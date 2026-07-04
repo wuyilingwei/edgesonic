@@ -171,16 +171,30 @@ filesRoutes.post("/files/copy", permissionMiddleware("upload"), async (c) => {
 //                already present. For WebDAV the path is relative to the
 //                source's root (as stored in the adapter credentials).
 //
-// This endpoint copies bytes only — it does NOT insert records into the
-// library. Whether scanned files are entered into the media library is
-// controlled by the destination source's `mode` column ('library' | 'sync_only')
-// and is evaluated at scan time, not copy time.
+// 093f — Optional `registerInstance` body field (mirror-to-R2 flow): when
+// present, the endpoint also INSERTs a song_instances row for the new R2
+// copy so /rest/stream can select it without waiting for a re-scan.
+// Shape: { masterId, suffix, contentType, size, sourceInstanceId }.
+// The new instance id is `si-mirror-<rand16>` to distinguish from upload
+// and transcode flow ids. The source_type is 'original' (it's a lossless
+// copy of the original file, not a transcode).
 //
-// Response: { ok: true, destUri } or { ok: false, error: "..." }
+// Response: { ok: true, destUri, instanceId? } or { ok: false, error: "..." }
 filesRoutes.post("/files/crossCopy", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
-  const body = await c.req.json<{ srcUri?: string; destSource?: string; destPath?: string }>();
-  const { srcUri, destSource, destPath } = body;
+  const body = await c.req.json<{
+    srcUri?: string;
+    destSource?: string;
+    destPath?: string;
+    registerInstance?: {
+      masterId: string;
+      suffix: string;
+      contentType: string;
+      size: number;
+      sourceInstanceId: string;
+    };
+  }>();
+  const { srcUri, destSource, destPath, registerInstance } = body;
 
   if (!srcUri || !destSource || !destPath) {
     return c.json({ ok: false, error: "Missing srcUri, destSource, or destPath" }, 400);
@@ -267,7 +281,57 @@ filesRoutes.post("/files/crossCopy", permissionMiddleware("upload"), async (c) =
     );
   }
 
-  return c.json({ ok: true, destUri });
+  // ── 4. Optional song_instance registration (093f mirror-to-R2) ─────────
+  // When the caller provides registerInstance, create a song_instances row
+  // pointing at the new R2 copy so /rest/stream can select it immediately.
+  let instanceId: string | undefined;
+  if (registerInstance && destUri.startsWith("r2://")) {
+    try {
+      // Generate a unique id. crypto.randomUUID is available in Workers.
+      const rand = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+      instanceId = `si-mirror-${rand}`;
+      const now = Math.floor(Date.now() / 1000);
+      // Copy physical params from the source instance so the stream selector
+      // has bit_rate/duration/etc. without re-parsing.
+      const sourceRow = await env.DB.prepare(
+        "SELECT bit_rate, sample_rate, bit_depth, channels, duration, size, content_type, suffix, transcode_profile FROM song_instances WHERE id = ?",
+      ).bind(registerInstance.sourceInstanceId).first<{
+        bit_rate: number | null; sample_rate: number | null; bit_depth: number | null;
+        channels: number | null; duration: number | null; size: number | null;
+        content_type: string | null; suffix: string | null; transcode_profile: string | null;
+      }>();
+      await env.DB.prepare(
+        `INSERT INTO song_instances
+           (id, master_id, source_id, source_type, parent_instance_id,
+            storage_uri, transcode_profile, suffix, content_type,
+            bit_rate, sample_rate, bit_depth, channels, duration, size,
+            tag_scanned, created_at, updated_at)
+         VALUES (?, ?, 'r2-local', 'original', ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+      ).bind(
+        instanceId,
+        registerInstance.masterId,
+        registerInstance.sourceInstanceId,
+        destUri,
+        sourceRow?.suffix || registerInstance.suffix,
+        sourceRow?.content_type || registerInstance.contentType,
+        sourceRow?.bit_rate ?? null,
+        sourceRow?.sample_rate ?? null,
+        sourceRow?.bit_depth ?? null,
+        sourceRow?.channels ?? null,
+        sourceRow?.duration ?? null,
+        sourceRow?.size ?? registerInstance.size,
+        now,
+        now,
+      ).run();
+    } catch (e) {
+      // Registration failure is non-fatal — bytes are in R2, just no DB row.
+      // The caller can re-scan to pick it up, or retry the mirror.
+      console.error(`[crossCopy] instance registration failed:`, e);
+      instanceId = undefined;
+    }
+  }
+
+  return c.json({ ok: true, destUri, ...(instanceId ? { instanceId } : {}) });
 });
 
 // 055 — download / downloadMultiple moved to subsonic/download.ts (they remain
