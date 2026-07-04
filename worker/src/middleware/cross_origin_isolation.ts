@@ -37,7 +37,7 @@
 import { getFeatureString } from "../utils/features";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type HonoLikeContext = { env: any; res: { headers: Headers } };
+type HonoLikeContext = { env: any; res: { headers: Headers } & Partial<Response> };
 type Next = () => Promise<void>;
 
 export const crossOriginIsolationMiddleware = async (
@@ -55,7 +55,28 @@ export const crossOriginIsolationMiddleware = async (
     enabled = value !== "0";
   } catch { enabled = true; }
   if (!enabled) return;
-  c.res.headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  // 093 — Defensive: some handlers return Response.redirect() / fetch() passthroughs
+  // whose headers are immutable. Setting on them throws "Can't modify immutable
+  // headers" and 500s the whole response. Clone into a mutable copy when needed
+  // so the cross-origin headers still land without breaking the redirect.
+  try {
+    c.res.headers.set("Cross-Origin-Opener-Policy", "same-origin");
+  } catch {
+    // Reconstruct as a fresh mutable Response. Body may be null (e.g. 302
+    // redirect with no body) — pass through whatever the original had.
+    const orig = c.res as Response;
+    c.res = new Response(orig.body, {
+      status: orig.status,
+      statusText: orig.statusText,
+      headers: orig.headers,
+    });
+    c.res.headers.set("Cross-Origin-Opener-Policy", "same-origin");
+    c.res.headers.set("Cross-Origin-Embedder-Policy", "require-corp");
+    if (!c.res.headers.has("Cross-Origin-Resource-Policy")) {
+      c.res.headers.set("Cross-Origin-Resource-Policy", "same-origin");
+    }
+    return;
+  }
   c.res.headers.set("Cross-Origin-Embedder-Policy", "require-corp");
   if (!c.res.headers.has("Cross-Origin-Resource-Policy")) {
     c.res.headers.set("Cross-Origin-Resource-Policy", "same-origin");

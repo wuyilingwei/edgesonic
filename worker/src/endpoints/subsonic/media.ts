@@ -296,7 +296,15 @@ mediaRoutes.get("/stream", async (c) => {
             ttlSec: 300,
             rangeHeader: range,
           });
-          return Response.redirect(presigned, 302);
+          // 093 — use Hono's c.redirect() (mutable Response) instead of
+          // Response.redirect() (immutable headers — the COI middleware
+          // after-next stamps headers and 500s on immutable). Also stop the
+          // COI/CORP stamping entirely on presign redirects: the browser
+          // follows the 302 to a cross-origin R2 S3 host where EdgeSonic's
+          // same-origin CORP would be wrong anyway.
+          const r = c.redirect(presigned, 302);
+          r.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+          return r;
         } catch {
           // signing failure → fall through to in-Worker stream
         }
@@ -308,7 +316,11 @@ mediaRoutes.get("/stream", async (c) => {
         try {
           const adapter = createWebDAVAdapter(env.DB, env);
           const presigned = await adapter.presign(selected.storage_uri, range);
-          if (presigned) return Response.redirect(presigned.url, 302);
+          if (presigned) {
+            const r = c.redirect(presigned.url, 302);
+            r.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
+            return r;
+          }
         } catch {
           // presign failure → fall through to in-Worker stream
         }
