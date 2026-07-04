@@ -758,7 +758,13 @@
       },
       "durationSeconds": "{n}s",
       "durationMinutes": "{n}m"
-    }
+    },
+    "presignCreds": "Read-Only Direct Account",
+    "presignCredsHint": "Configure a read-only WebDAV account for presigned direct URLs to avoid exposing write credentials",
+    "presignUsername": "Read-only Username",
+    "presignPassword": "Read-only Password",
+    "presignStatusSet": "Read-only account configured",
+    "presignStatusUnset": "Using main account (read-only recommended)"
   },
   "radio": {
     "label": "// radio directory",
