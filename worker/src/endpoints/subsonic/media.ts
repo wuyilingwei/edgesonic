@@ -174,7 +174,10 @@ mediaRoutes.get("/stream", async (c) => {
     if (format !== "raw" && inst.suffix === format) { selected = inst; break; }
     if (inst.suffix === selected.suffix && (inst.bit_rate || 0) > (selected.bit_rate || 0)) selected = inst;
     if (inst.suffix === "flac" && selected.suffix !== "flac") selected = inst;
-    if (inst.source_id === "local" && selected.source_id !== "local") selected = inst;
+    // 093 — prefer R2 instances (Worker binding fast path + R2 presign
+    // eligible). Pre-093 checked source_id === 'local' which never matched
+    // the actual R2 source_id 'r2-local', so R2 copies were never preferred.
+    if (inst.storage_uri.startsWith("r2://") && !selected.storage_uri.startsWith("r2://")) selected = inst;
     if (maxBitRate > 0 && (inst.bit_rate || 0) <= maxBitRate && (selected.bit_rate || 0) > maxBitRate) selected = inst;
   }
 
