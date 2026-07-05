@@ -1,24 +1,63 @@
 name: Deploy EdgeSonic
 
+# Manual-only trigger — no automatic runs on push.
+# All Cloudflare credentials and resource identifiers are supplied at trigger
+# time; the repository itself stores no secrets.
+# D1 / KV / R2 resources are automatically created if they do not yet exist.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
     inputs:
+      cf_api_token:
+        description: 'Cloudflare API Token (Workers:Edit + D1:Edit + R2:Edit)'
+        required: true
+        type: string
+      cf_account_id:
+        description: 'Cloudflare Account ID'
+        required: true
+        type: string
       worker_name:
-        description: 'Worker script name (overrides default "edgesonic")'
+        description: 'Worker script name'
         required: false
         default: 'edgesonic'
+        type: string
+      d1_database_name:
+        description: 'D1 database name (auto-created if absent)'
+        required: false
+        default: 'edgesonic-db'
+        type: string
+      kv_namespace_name:
+        description: 'KV namespace name (auto-created if absent)'
+        required: false
+        default: 'edgesonic-kv'
+        type: string
+      r2_bucket_name:
+        description: 'R2 bucket name (auto-created if absent)'
+        required: false
+        default: 'edgesonic-music'
+        type: string
+      domain:
+        description: 'Custom domain e.g. edgesonic.example.com (leave empty → <worker>.workers.dev)'
+        required: false
+        default: ''
+        type: string
+      instance_id:
+        description: 'Anti-loop UUID for this Worker instance (auto-generated if empty)'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
-    environment: production   # optional: require manual approval in GitHub Environments
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Mask before any step that might echo the token accidentally.
+      - name: Mask API token
+        run: echo "::add-mask::${{ inputs.cf_api_token }}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -32,29 +71,94 @@ jobs:
       - name: Build frontend
         run: npm run build:web
 
-      - name: Generate wrangler.toml from template
+      # Ensure all required Cloudflare resources exist, resolve their IDs,
+      # and generate a fresh INSTANCE_ID when one is not supplied.
+      - name: Provision Cloudflare resources
+        id: provision
         env:
-          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CF_DATABASE_ID: ${{ secrets.CF_DATABASE_ID }}
-          CF_KV_ID: ${{ secrets.CF_KV_ID }}
-          CF_R2_BUCKET: ${{ secrets.CF_R2_BUCKET }}
-          CF_INSTANCE_ID: ${{ secrets.CF_INSTANCE_ID }}
-          CF_DOMAIN: ${{ secrets.CF_DOMAIN }}
-          WORKER_NAME: ${{ inputs.worker_name || 'edgesonic' }}
+          CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cf_account_id }}
         run: |
+          set -euo pipefail
+
+          DB_NAME="${{ inputs.d1_database_name }}"
+          KV_NAME="${{ inputs.kv_namespace_name }}"
+          R2_NAME="${{ inputs.r2_bucket_name }}"
+
+          # ── D1: get or create ──────────────────────────────────────────────
+          DB_LIST=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
+          DB_ID=$(echo "$DB_LIST" | jq -r --arg n "$DB_NAME" \
+            '.[] | select(.name==$n) | (.uuid // .database_id // "") | select(length>0)' \
+            2>/dev/null || echo "")
+          if [ -z "$DB_ID" ]; then
+            echo "Creating D1 database '$DB_NAME'..."
+            npx wrangler d1 create "$DB_NAME"
+            DB_ID=$(npx wrangler d1 list --json | jq -r --arg n "$DB_NAME" \
+              '.[] | select(.name==$n) | (.uuid // .database_id)')
+          fi
+          echo "D1 database_id: $DB_ID"
+          echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
+
+          # ── KV: get or create ──────────────────────────────────────────────
+          KV_LIST=$(npx wrangler kv namespace list --json 2>/dev/null || echo "[]")
+          KV_ID=$(echo "$KV_LIST" | jq -r --arg t "$KV_NAME" \
+            '.[] | select(.title==$t) | .id | select(length>0)' \
+            2>/dev/null || echo "")
+          if [ -z "$KV_ID" ]; then
+            echo "Creating KV namespace '$KV_NAME'..."
+            npx wrangler kv namespace create "$KV_NAME"
+            KV_ID=$(npx wrangler kv namespace list --json | jq -r --arg t "$KV_NAME" \
+              '.[] | select(.title==$t) | .id')
+          fi
+          echo "KV namespace id: $KV_ID"
+          echo "kv_id=$KV_ID" >> "$GITHUB_OUTPUT"
+
+          # ── R2: create bucket if missing ───────────────────────────────────
+          R2_LIST=$(npx wrangler r2 bucket list --json 2>/dev/null || echo "[]")
+          R2_EXISTS=$(echo "$R2_LIST" | jq -r --arg n "$R2_NAME" \
+            '.[] | select(.name==$n) | .name' 2>/dev/null || echo "")
+          if [ -z "$R2_EXISTS" ]; then
+            echo "Creating R2 bucket '$R2_NAME'..."
+            npx wrangler r2 bucket create "$R2_NAME"
+          fi
+
+          # ── Instance ID: use provided or generate ──────────────────────────
+          INST_ID="${{ inputs.instance_id }}"
+          if [ -z "$INST_ID" ]; then
+            INST_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+            echo "Generated INSTANCE_ID: $INST_ID"
+          fi
+          echo "instance_id=$INST_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Generate wrangler.toml
+        env:
+          CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+          DB_ID: ${{ steps.provision.outputs.db_id }}
+          KV_ID: ${{ steps.provision.outputs.kv_id }}
+          R2_BUCKET: ${{ inputs.r2_bucket_name }}
+          INST_ID: ${{ steps.provision.outputs.instance_id }}
+          DOMAIN: ${{ inputs.domain }}
+          WORKER_NAME: ${{ inputs.worker_name }}
+        run: |
+          set -euo pipefail
           sed \
             -e "s|<YOUR_CLOUDFLARE_ACCOUNT_ID>|${CF_ACCOUNT_ID}|g" \
-            -e "s|<YOUR_D1_DATABASE_ID>|${CF_DATABASE_ID}|g" \
-            -e "s|<YOUR_KV_NAMESPACE_ID>|${CF_KV_ID}|g" \
-            -e "s|<YOUR_R2_BUCKET_NAME>|${CF_R2_BUCKET}|g" \
-            -e "s|<GENERATE_A_UUID>|${CF_INSTANCE_ID}|g" \
-            -e "s|<your-domain.example.com>|${CF_DOMAIN}|g" \
+            -e "s|<YOUR_D1_DATABASE_ID>|${DB_ID}|g" \
+            -e "s|<YOUR_KV_NAMESPACE_ID>|${KV_ID}|g" \
+            -e "s|<YOUR_R2_BUCKET_NAME>|${R2_BUCKET}|g" \
+            -e "s|<GENERATE_A_UUID>|${INST_ID}|g" \
+            -e "s|<your-domain.example.com>|${DOMAIN}|g" \
             -e "s|^name = \"edgesonic\"|name = \"${WORKER_NAME}\"|" \
             worker/wrangler.toml.example > worker/wrangler.toml
 
-      - name: Deploy to Cloudflare Workers
+          # No custom domain → remove the routes block so wrangler uses <worker>.workers.dev
+          if [ -z "${DOMAIN}" ]; then
+            sed -i '/^routes/,/^\]/d' worker/wrangler.toml
+          fi
+
+      - name: Deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
         run: |
           VERSION=$(date +%s)
           npx wrangler deploy \

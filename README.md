@@ -155,25 +155,25 @@ npx wrangler d1 execute edgesonic-db --remote --command \
 
 ## CI/CD (GitHub Actions)
 
-The workflow at `.github/workflows/deploy.yml` auto-deploys on every push to `main` and can also be triggered manually from the GitHub Actions UI.
+The workflow at `.github/workflows/deploy.yml` is **manual-only** — it has no automatic push trigger. The repository stores no secrets; every credential and resource identifier is supplied as a workflow input when you press **Run workflow**.
 
-### Required repository secrets
+D1 databases, KV namespaces, and R2 buckets that do not yet exist are **automatically created** during the run.
 
-Configure these in **Settings → Secrets and variables → Actions → New repository secret**:
+### How to deploy
 
-| Secret | Description |
-|--------|-------------|
-| `CLOUDFLARE_API_TOKEN` | CF API token with Workers:Edit, D1:Edit, R2:Edit permissions |
-| `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account ID |
-| `CF_DATABASE_ID` | D1 database ID (from `wrangler d1 list`) |
-| `CF_KV_ID` | KV namespace ID (from `wrangler kv namespace list`) |
-| `CF_R2_BUCKET` | R2 bucket name (default: `edgesonic-music`) |
-| `CF_INSTANCE_ID` | Unique UUID for this deployment (generate with `uuidgen`) |
-| `CF_DOMAIN` | Custom domain (e.g. `edgesonic.example.com`); if you have no custom domain, use `<worker-name>.workers.dev` and remove the `routes` block from `worker/wrangler.toml.example` before running |
+1. Go to **Actions → Deploy EdgeSonic → Run workflow**
+2. Fill in the required inputs:
 
-### Manual trigger with worker name override
-
-Go to **Actions → Deploy EdgeSonic → Run workflow**. The optional `worker_name` input overrides the default `"edgesonic"` script name — useful for staging or multi-tenant deployments.
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `cf_api_token` | ✅ | — | CF API token (Workers:Edit + D1:Edit + R2:Edit) |
+| `cf_account_id` | ✅ | — | Cloudflare Account ID |
+| `worker_name` | optional | `edgesonic` | Worker script name |
+| `d1_database_name` | optional | `edgesonic-db` | D1 database (auto-created if absent) |
+| `kv_namespace_name` | optional | `edgesonic-kv` | KV namespace (auto-created if absent) |
+| `r2_bucket_name` | optional | `edgesonic-music` | R2 bucket (auto-created if absent) |
+| `domain` | optional | — | Custom domain; leave empty for `<worker>.workers.dev` |
+| `instance_id` | optional | — | Anti-loop UUID; auto-generated when blank |
 
 ### After every deploy
 
