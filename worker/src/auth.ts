@@ -283,12 +283,12 @@ export const authMiddleware = createMiddleware<{
   // demand a web session credential. Inside /rest/* a handful of management-
   // shaped endpoints (changePassword, share/podcast/radio CUD, download) still
   // need the same protection — REST_SESSION_ONLY_PATHS lists those.
-  const needsSession =
-    path.startsWith("/tag/") ||
-    path.startsWith("/storage/") ||
-    path.startsWith("/edgesonic/") ||
-    REST_SESSION_ONLY_PATHS.has(path);
+  const isManagement = path.startsWith("/tag/") || path.startsWith("/storage/") || path.startsWith("/edgesonic/");
+  const needsSession = isManagement || REST_SESSION_ONLY_PATHS.has(path);
   if (needsSession && authMethod !== "session") {
+    if (isManagement) {
+      return c.json({ ok: false, error: "This endpoint requires a web session credential" }, 403);
+    }
     return c.text(subsonicError(50, "This endpoint requires a web session credential"), 403, {
       "Content-Type": "application/xml; charset=UTF-8",
     });
@@ -315,7 +315,13 @@ export const permissionMiddleware = (requiredPermission: string) =>
       .bind(user.level, requiredPermission)
       .first<{ enabled: number; max_rph: number }>();
 
+    // Management routes (/edgesonic/, /tag/, /storage/) consume JSON; Subsonic
+    // /rest/* routes expect XML. Use the request path to pick the right format.
+    const reqPath = c.req.path;
+    const isMgmt = reqPath.startsWith("/edgesonic/") || reqPath.startsWith("/tag/") || reqPath.startsWith("/storage/");
+
     if (!perm || !perm.enabled) {
+      if (isMgmt) return c.json({ ok: false, error: "Not authorized" }, 403);
       return c.text(subsonicError(50, "Not authorized"), 403, {
         "Content-Type": "application/xml; charset=UTF-8",
       });
@@ -336,6 +342,7 @@ export const permissionMiddleware = (requiredPermission: string) =>
       const windowExpired = nowSec - windowStart >= 3600;
 
       if (!windowExpired && currentCount >= perm.max_rph) {
+        if (isMgmt) return c.json({ ok: false, error: "Rate limit exceeded" }, 429);
         return c.text(subsonicError(50, "Rate limit exceeded"), 429, {
           "Content-Type": "application/xml; charset=UTF-8",
         });
