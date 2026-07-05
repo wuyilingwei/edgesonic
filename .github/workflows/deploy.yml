@@ -1,47 +1,64 @@
 name: Deploy EdgeSonic
 
-# Manual-only trigger — no automatic runs on push.
-# All Cloudflare credentials and resource identifiers are supplied at trigger
-# time; the repository itself stores no secrets.
-# D1 / KV / R2 resources are automatically created if they do not yet exist.
+# Manual-only trigger.
+#
+# First run — fill in setup_token + Cloudflare credentials.  The workflow
+# saves everything as repository Secrets / Variables so future runs need
+# no inputs at all.
+#
+# Subsequent runs — leave every field empty and click "Run workflow".
+# Stored credentials are resolved automatically.
+#
+# Required GitHub PAT permissions (setup_token):
+#   Fine-grained: Actions (write) + Secrets (write) + Variables (write)
+#   Classic:      repo scope
 on:
   workflow_dispatch:
     inputs:
+      setup_token:
+        description: >
+          GitHub PAT — needed only on the first run (or when updating
+          credentials). Leave empty on subsequent deploys.
+        required: false
+        default: ''
+        type: string
       cf_api_token:
-        description: 'Cloudflare API Token (Workers:Edit + D1:Edit + R2:Edit)'
-        required: true
+        description: 'Cloudflare API Token (Workers:Edit + D1:Edit + R2:Edit) — leave empty after first run'
+        required: false
+        default: ''
         type: string
       cf_account_id:
-        description: 'Cloudflare Account ID'
-        required: true
+        description: 'Cloudflare Account ID — leave empty after first run'
+        required: false
+        default: ''
         type: string
       worker_name:
-        description: 'Worker script name'
+        description: 'Worker script name (default: edgesonic)'
         required: false
-        default: 'edgesonic'
+        default: ''
         type: string
       d1_database_name:
-        description: 'D1 database name (auto-created if absent)'
+        description: 'D1 database name, auto-created if absent (default: edgesonic-db)'
         required: false
-        default: 'edgesonic-db'
+        default: ''
         type: string
       kv_namespace_name:
-        description: 'KV namespace name (auto-created if absent)'
+        description: 'KV namespace name, auto-created if absent (default: edgesonic-kv)'
         required: false
-        default: 'edgesonic-kv'
+        default: ''
         type: string
       r2_bucket_name:
-        description: 'R2 bucket name (auto-created if absent)'
+        description: 'R2 bucket name, auto-created if absent (default: edgesonic-music)'
         required: false
-        default: 'edgesonic-music'
+        default: ''
         type: string
       domain:
-        description: 'Custom domain e.g. edgesonic.example.com (leave empty → <worker>.workers.dev)'
+        description: 'Custom domain e.g. edgesonic.example.com (empty → <worker>.workers.dev)'
         required: false
         default: ''
         type: string
       instance_id:
-        description: 'Anti-loop UUID for this Worker instance (auto-generated if empty)'
+        description: 'Anti-loop Worker UUID — auto-generated on first run and stored'
         required: false
         default: ''
         type: string
@@ -50,15 +67,122 @@ jobs:
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
+    permissions:
+      contents: read   # GITHUB_TOKEN; PAT for secret writes is supplied via input
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Mask before any step that might echo the token accidentally.
-      - name: Mask API token
-        run: echo "::add-mask::${{ inputs.cf_api_token }}"
+      # ── Step 1: Mask sensitive inputs immediately ─────────────────────────
+      # Must run before any step that could echo them.
+      - name: Mask sensitive inputs
+        run: |
+          [ -n "${{ inputs.setup_token }}" ]   && echo "::add-mask::${{ inputs.setup_token }}"
+          [ -n "${{ inputs.cf_api_token }}" ]  && echo "::add-mask::${{ inputs.cf_api_token }}"
+          [ -n "${{ inputs.cf_account_id }}" ] && echo "::add-mask::${{ inputs.cf_account_id }}"
 
+      # ── Step 2: Resolve final values ─────────────────────────────────────
+      # Priority: workflow input > stored Secret/Variable > built-in default.
+      # Sensitive values are re-masked after resolution.
+      - name: Resolve credentials and configuration
+        id: config
+        env:
+          IN_CF_TOKEN:   ${{ inputs.cf_api_token }}
+          IN_CF_ACCOUNT: ${{ inputs.cf_account_id }}
+          IN_WORKER:     ${{ inputs.worker_name }}
+          IN_D1:         ${{ inputs.d1_database_name }}
+          IN_KV:         ${{ inputs.kv_namespace_name }}
+          IN_R2:         ${{ inputs.r2_bucket_name }}
+          IN_DOMAIN:     ${{ inputs.domain }}
+          IN_INST:       ${{ inputs.instance_id }}
+          # Stored Secrets (empty string when not set — safe to reference)
+          ST_CF_TOKEN:   ${{ secrets.CF_API_TOKEN }}
+          ST_CF_ACCOUNT: ${{ secrets.CF_ACCOUNT_ID }}
+          ST_INST:       ${{ secrets.CF_INSTANCE_ID }}
+          # Stored Variables (plaintext config, visible in Settings → Variables)
+          VA_WORKER:     ${{ vars.CF_WORKER_NAME }}
+          VA_D1:         ${{ vars.CF_D1_NAME }}
+          VA_KV:         ${{ vars.CF_KV_NAME }}
+          VA_R2:         ${{ vars.CF_R2_NAME }}
+          VA_DOMAIN:     ${{ vars.CF_DOMAIN }}
+        run: |
+          set -euo pipefail
+
+          CF_TOKEN="${IN_CF_TOKEN:-${ST_CF_TOKEN:-}}"
+          CF_ACCOUNT="${IN_CF_ACCOUNT:-${ST_CF_ACCOUNT:-}}"
+          WORKER="${IN_WORKER:-${VA_WORKER:-edgesonic}}"
+          D1_NAME="${IN_D1:-${VA_D1:-edgesonic-db}}"
+          KV_NAME="${IN_KV:-${VA_KV:-edgesonic-kv}}"
+          R2_NAME="${IN_R2:-${VA_R2:-edgesonic-music}}"
+          DOMAIN="${IN_DOMAIN:-${VA_DOMAIN:-}}"
+          INST="${IN_INST:-${ST_INST:-}}"
+
+          if [ -z "$CF_TOKEN" ]; then
+            echo "❌ cf_api_token not provided and CF_API_TOKEN secret is not set."
+            echo "   Run the workflow with setup_token + cf_api_token to bootstrap."
+            exit 1
+          fi
+          if [ -z "$CF_ACCOUNT" ]; then
+            echo "❌ cf_account_id not provided and CF_ACCOUNT_ID secret is not set."
+            echo "   Run the workflow with setup_token + cf_account_id to bootstrap."
+            exit 1
+          fi
+
+          # Mask resolved credentials before writing them anywhere
+          echo "::add-mask::$CF_TOKEN"
+          echo "::add-mask::$CF_ACCOUNT"
+
+          {
+            echo "cf_token=$CF_TOKEN"
+            echo "cf_account=$CF_ACCOUNT"
+            echo "worker=$WORKER"
+            echo "d1_name=$D1_NAME"
+            echo "kv_name=$KV_NAME"
+            echo "r2_name=$R2_NAME"
+            echo "domain=$DOMAIN"
+            echo "inst=$INST"
+          } >> "$GITHUB_OUTPUT"
+
+      # ── Step 3: Persist credentials (first run / credential update) ───────
+      # Skipped on all subsequent runs where setup_token is empty.
+      # Secrets : CF_API_TOKEN, CF_ACCOUNT_ID, CF_INSTANCE_ID  (sensitive)
+      # Variables: CF_WORKER_NAME, CF_D1_NAME, CF_KV_NAME, CF_R2_NAME, CF_DOMAIN (config)
+      - name: Save credentials to repository Secrets and Variables
+        if: inputs.setup_token != ''
+        env:
+          GH_TOKEN:   ${{ inputs.setup_token }}
+          CF_TOKEN:   ${{ steps.config.outputs.cf_token }}
+          CF_ACCOUNT: ${{ steps.config.outputs.cf_account }}
+          WORKER:     ${{ steps.config.outputs.worker }}
+          D1_NAME:    ${{ steps.config.outputs.d1_name }}
+          KV_NAME:    ${{ steps.config.outputs.kv_name }}
+          R2_NAME:    ${{ steps.config.outputs.r2_name }}
+          DOMAIN:     ${{ steps.config.outputs.domain }}
+          INST:       ${{ steps.config.outputs.inst }}
+        run: |
+          echo "::add-mask::$GH_TOKEN"
+          REPO="$GITHUB_REPOSITORY"
+
+          save_secret()   { echo "$2" | gh secret set   "$1" --repo "$REPO" && echo "  ✓ secret   $1"; }
+          save_variable() { gh variable set "$1" --body "$2" --repo "$REPO" && echo "  ✓ variable $1"; }
+
+          echo "Saving Secrets..."
+          save_secret CF_API_TOKEN  "$CF_TOKEN"
+          save_secret CF_ACCOUNT_ID "$CF_ACCOUNT"
+          # CF_INSTANCE_ID saved after provisioning (may be auto-generated)
+
+          echo "Saving Variables..."
+          save_variable CF_WORKER_NAME "$WORKER"
+          save_variable CF_D1_NAME     "$D1_NAME"
+          save_variable CF_KV_NAME     "$KV_NAME"
+          save_variable CF_R2_NAME     "$R2_NAME"
+          [ -n "$DOMAIN" ] && save_variable CF_DOMAIN "$DOMAIN"
+          [ -n "$INST"   ] && save_secret   CF_INSTANCE_ID "$INST"
+
+          echo "✅ Saved. Future runs require no inputs."
+
+      # ── Step 4: Build ─────────────────────────────────────────────────────
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -71,21 +195,20 @@ jobs:
       - name: Build frontend
         run: npm run build:web
 
-      # Ensure all required Cloudflare resources exist, resolve their IDs,
-      # and generate a fresh INSTANCE_ID when one is not supplied.
+      # ── Step 5: Provision Cloudflare resources ────────────────────────────
       - name: Provision Cloudflare resources
         id: provision
         env:
-          CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+          CLOUDFLARE_API_TOKEN:  ${{ steps.config.outputs.cf_token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.config.outputs.cf_account }}
+          DB_NAME: ${{ steps.config.outputs.d1_name }}
+          KV_NAME: ${{ steps.config.outputs.kv_name }}
+          R2_NAME: ${{ steps.config.outputs.r2_name }}
+          INST:    ${{ steps.config.outputs.inst }}
         run: |
           set -euo pipefail
 
-          DB_NAME="${{ inputs.d1_database_name }}"
-          KV_NAME="${{ inputs.kv_namespace_name }}"
-          R2_NAME="${{ inputs.r2_bucket_name }}"
-
-          # ── D1: get or create ──────────────────────────────────────────────
+          # D1: get or create
           DB_LIST=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
           DB_ID=$(echo "$DB_LIST" | jq -r --arg n "$DB_NAME" \
             '.[] | select(.name==$n) | (.uuid // .database_id // "") | select(length>0)' \
@@ -96,10 +219,9 @@ jobs:
             DB_ID=$(npx wrangler d1 list --json | jq -r --arg n "$DB_NAME" \
               '.[] | select(.name==$n) | (.uuid // .database_id)')
           fi
-          echo "D1 database_id: $DB_ID"
           echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
 
-          # ── KV: get or create ──────────────────────────────────────────────
+          # KV: get or create
           KV_LIST=$(npx wrangler kv namespace list --json 2>/dev/null || echo "[]")
           KV_ID=$(echo "$KV_LIST" | jq -r --arg t "$KV_NAME" \
             '.[] | select(.title==$t) | .id | select(length>0)' \
@@ -110,10 +232,9 @@ jobs:
             KV_ID=$(npx wrangler kv namespace list --json | jq -r --arg t "$KV_NAME" \
               '.[] | select(.title==$t) | .id')
           fi
-          echo "KV namespace id: $KV_ID"
           echo "kv_id=$KV_ID" >> "$GITHUB_OUTPUT"
 
-          # ── R2: create bucket if missing ───────────────────────────────────
+          # R2: create bucket if missing
           R2_LIST=$(npx wrangler r2 bucket list --json 2>/dev/null || echo "[]")
           R2_EXISTS=$(echo "$R2_LIST" | jq -r --arg n "$R2_NAME" \
             '.[] | select(.name==$n) | .name' 2>/dev/null || echo "")
@@ -122,43 +243,56 @@ jobs:
             npx wrangler r2 bucket create "$R2_NAME"
           fi
 
-          # ── Instance ID: use provided or generate ──────────────────────────
-          INST_ID="${{ inputs.instance_id }}"
-          if [ -z "$INST_ID" ]; then
-            INST_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
-            echo "Generated INSTANCE_ID: $INST_ID"
+          # Instance ID: use stored or generate a fresh one
+          if [ -z "$INST" ]; then
+            INST=$(uuidgen | tr '[:upper:]' '[:lower:]')
+            echo "Generated INSTANCE_ID: $INST"
           fi
-          echo "instance_id=$INST_ID" >> "$GITHUB_OUTPUT"
+          echo "inst=$INST" >> "$GITHUB_OUTPUT"
 
+      # ── Step 6: Persist auto-generated INSTANCE_ID ────────────────────────
+      # Runs only when setup_token was supplied AND no instance_id was stored
+      # yet, so the same UUID is reused on every future deploy.
+      - name: Persist auto-generated INSTANCE_ID
+        if: inputs.setup_token != '' && steps.config.outputs.inst == ''
+        env:
+          GH_TOKEN: ${{ inputs.setup_token }}
+          INST:     ${{ steps.provision.outputs.inst }}
+        run: |
+          echo "::add-mask::$GH_TOKEN"
+          echo "$INST" | gh secret set CF_INSTANCE_ID --repo "$GITHUB_REPOSITORY"
+          echo "  ✓ secret   CF_INSTANCE_ID (auto-generated)"
+
+      # ── Step 7: Generate wrangler.toml and deploy ─────────────────────────
       - name: Generate wrangler.toml
         env:
-          CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
-          DB_ID: ${{ steps.provision.outputs.db_id }}
-          KV_ID: ${{ steps.provision.outputs.kv_id }}
-          R2_BUCKET: ${{ inputs.r2_bucket_name }}
-          INST_ID: ${{ steps.provision.outputs.instance_id }}
-          DOMAIN: ${{ inputs.domain }}
-          WORKER_NAME: ${{ inputs.worker_name }}
+          CF_ACCOUNT_ID: ${{ steps.config.outputs.cf_account }}
+          DB_ID:   ${{ steps.provision.outputs.db_id }}
+          KV_ID:   ${{ steps.provision.outputs.kv_id }}
+          R2_NAME: ${{ steps.config.outputs.r2_name }}
+          INST:    ${{ steps.provision.outputs.inst }}
+          DOMAIN:  ${{ steps.config.outputs.domain }}
+          WORKER:  ${{ steps.config.outputs.worker }}
         run: |
           set -euo pipefail
           sed \
             -e "s|<YOUR_CLOUDFLARE_ACCOUNT_ID>|${CF_ACCOUNT_ID}|g" \
             -e "s|<YOUR_D1_DATABASE_ID>|${DB_ID}|g" \
             -e "s|<YOUR_KV_NAMESPACE_ID>|${KV_ID}|g" \
-            -e "s|<YOUR_R2_BUCKET_NAME>|${R2_BUCKET}|g" \
-            -e "s|<GENERATE_A_UUID>|${INST_ID}|g" \
+            -e "s|<YOUR_R2_BUCKET_NAME>|${R2_NAME}|g" \
+            -e "s|<GENERATE_A_UUID>|${INST}|g" \
             -e "s|<your-domain.example.com>|${DOMAIN}|g" \
-            -e "s|^name = \"edgesonic\"|name = \"${WORKER_NAME}\"|" \
+            -e "s|^name = \"edgesonic\"|name = \"${WORKER}\"|" \
             worker/wrangler.toml.example > worker/wrangler.toml
 
-          # No custom domain → remove the routes block so wrangler uses <worker>.workers.dev
-          if [ -z "${DOMAIN}" ]; then
+          # No custom domain → remove routes block; worker uses <name>.workers.dev
+          if [ -z "$DOMAIN" ]; then
             sed -i '/^routes/,/^\]/d' worker/wrangler.toml
           fi
 
       - name: Deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.config.outputs.cf_token }}
         run: |
           VERSION=$(date +%s)
           npx wrangler deploy \
