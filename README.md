@@ -155,34 +155,24 @@ npx wrangler d1 execute edgesonic-db --remote --command \
 
 ## CI/CD (GitHub Actions)
 
-The workflow at `.github/workflows/deploy.yml` is **manual-only** (no automatic push trigger). Credentials are stored in the repository's own Secrets and Variables after the first run — subsequent deploys require zero inputs.
+The workflow at `.github/workflows/deploy.yml` is **manual-only** (no automatic push trigger). All credentials are supplied as workflow inputs each time — the repository itself stores nothing.
 
 D1 databases, KV namespaces, and R2 buckets that do not yet exist are **automatically created and bound** during the run.
 
-### First run (bootstrap)
+### How to deploy
 
-1. [Create a GitHub PAT](https://github.com/settings/tokens) with these permissions:
-   - Fine-grained: **Actions** (write) + **Secrets** (write) + **Variables** (write)
-   - Classic alternative: `repo` scope
-2. Go to **Actions → Deploy EdgeSonic → Run workflow** and fill in:
+Go to **Actions → Deploy EdgeSonic → Run workflow** and fill in:
 
-| Input | Description |
-|-------|-------------|
-| `setup_token` | The PAT you just created — saves all other values as secrets/variables |
-| `cf_api_token` | CF API token (Workers:Edit + D1:Edit + R2:Edit) |
-| `cf_account_id` | Cloudflare Account ID |
-| `worker_name` | Worker script name (default: `edgesonic`) |
-| `d1_database_name` | D1 database name (default: `edgesonic-db`) |
-| `kv_namespace_name` | KV namespace name (default: `edgesonic-kv`) |
-| `r2_bucket_name` | R2 bucket name (default: `edgesonic-music`) |
-| `domain` | Custom domain — leave empty for `<worker>.workers.dev` |
-| `instance_id` | Anti-loop UUID — leave empty to auto-generate and store |
-
-After this run completes, your repository's **Settings → Secrets** will contain `CF_API_TOKEN`, `CF_ACCOUNT_ID`, `CF_INSTANCE_ID`, and **Settings → Variables** will contain the resource names.
-
-### Subsequent runs
-
-Click **Run workflow** with all inputs left empty. Stored credentials are resolved automatically.
+| Input | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `cf_api_token` | ✅ | — | CF API token (Workers:Edit + D1:Edit + R2:Edit) |
+| `cf_account_id` | ✅ | — | Cloudflare Account ID |
+| `worker_name` | optional | `edgesonic` | Worker script name |
+| `d1_database_name` | optional | `edgesonic-db` | D1 database (auto-created if absent) |
+| `kv_namespace_name` | optional | `edgesonic-kv` | KV namespace (auto-created if absent) |
+| `r2_bucket_name` | optional | `edgesonic-music` | R2 bucket (auto-created if absent) |
+| `domain` | optional | — | Custom domain; leave empty for `<worker>.workers.dev` |
+| `instance_id` | optional | — | Anti-loop UUID; auto-generated when blank |
 
 ### After every deploy
 
