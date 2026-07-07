@@ -63,12 +63,38 @@ VERSION="$(date +%s)"
 if [ "$VERSION_ONLY" -eq 1 ]; then
   echo "▶ [版本] 上传新版本（不切生产流量）…"
   npx wrangler versions upload --config "$CONFIG" --var WORKER_VERSION:"$VERSION"
+  echo ""
+  echo "✓ 完成。WORKER_VERSION=$VERSION（版本上传，未切生产，cron 未受影响）"
 else
   echo "▶ [部署] wrangler deploy（含 web/dist 静态资源）…"
   npx wrangler deploy --config "$CONFIG" $CONTAINERS_FLAG --var WORKER_VERSION:"$VERSION"
-fi
 
-echo ""
-echo "✓ 完成。WORKER_VERSION=$VERSION"
-echo "  提醒：wrangler deploy 会清空动态配置的 cron —— 部署后到"
-echo "        Settings → Cloudflare → \"Ensure default cron\" 重新应用定时任务（见 worker/CF_CRON.md）。"
+  # wrangler deploy 会清空 Cloudflare 上的所有 cron 触发器（[triggers] 留空时 CF 认为「无计划」）。
+  # 部署完毕后立即通过 CF API 恢复默认时间表，避免每次 deploy 后都要手动点 UI。
+  # 自定义 cron 表达式：export EDGESONIC_CRON="*/30 * * * *"（默认每小时整点）。
+  CRON_EXPR="${EDGESONIC_CRON:-0 */1 * * *}"
+  ACCOUNT_ID=$(grep -m1 '^account_id' "$CONFIG" | sed 's/[^"]*"\([^"]*\)".*/\1/')
+  WORKER_NAME=$(grep -m1 '^name' "$CONFIG" | sed 's/[^"]*"\([^"]*\)".*/\1/')
+
+  echo ""
+  echo "✓ 完成。WORKER_VERSION=$VERSION"
+
+  if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "$ACCOUNT_ID" ] && [ -n "$WORKER_NAME" ]; then
+    echo "▶ [Cron] 恢复 cron 触发器（${CRON_EXPR}）…"
+    CF_RESP=$(curl -s -X PUT \
+      "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/schedules" \
+      -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data-raw "[{\"cron\":\"${CRON_EXPR}\"}]")
+    if echo "$CF_RESP" | grep -q '"success":true'; then
+      echo "✓ Cron 已恢复：${CRON_EXPR}"
+    else
+      echo "⚠ Cron 自动恢复失败，请到 Settings → Cloudflare → \"Ensure default cron\""
+      echo "  CF 响应：$(echo "$CF_RESP" | cut -c1-300)"
+    fi
+  else
+    echo "  提醒：未设置 CLOUDFLARE_API_TOKEN，无法自动恢复 cron。"
+    echo "  请到 Settings → Cloudflare → \"Ensure default cron\" 重新应用定时任务（见 worker/CF_CRON.md）。"
+    echo "  或：export CLOUDFLARE_API_TOKEN=<token> 后重新运行，deploy.sh 将自动恢复。"
+  fi
+fi
