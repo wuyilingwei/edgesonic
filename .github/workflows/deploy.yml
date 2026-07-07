@@ -163,3 +163,23 @@ jobs:
             --config worker/wrangler.toml \
             --containers-rollout=none \
             --var WORKER_VERSION:"${VERSION}"
+
+      - name: Restore cron schedule
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
+          CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+          WORKER_NAME: ${{ inputs.worker_name }}
+        run: |
+          # wrangler deploy clears all cron triggers — PUT the default back immediately.
+          CRON_EXPR="0 */1 * * *"
+          CF_RESP=$(curl -s -X PUT \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/schedules" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-raw "[{\"cron\":\"${CRON_EXPR}\"}]")
+          if echo "$CF_RESP" | grep -q '"success":true'; then
+            echo "Cron restored: ${CRON_EXPR}"
+          else
+            echo "::warning::Cron restore failed — go to Settings → Cloudflare → 'Ensure default cron'"
+            echo "$CF_RESP" | cut -c1-400
+          fi
