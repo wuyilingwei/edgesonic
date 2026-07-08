@@ -103,3 +103,5 @@ const getAvatarHandler = async (c: import("hono").Context<{ Bindings: Env; Varia
 
 accountRoutes.get("/getAvatar", getAvatarHandler);
 accountRoutes.get("/getAvatar.view", getAvatarHandler);
+accountRoutes.post("/getAvatar", getAvatarHandler);
+accountRoutes.post("/getAvatar.view", getAvatarHandler);
