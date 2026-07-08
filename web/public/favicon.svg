@@ -1,0 +1,45 @@
+<svg width="256" height="256" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="discGrad" cx="35%" cy="32%" r="78%">
+      <stop offset="0%" stop-color="#FFE066"/>
+      <stop offset="45%" stop-color="#FBAD41"/>
+      <stop offset="100%" stop-color="#E8720B"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 主碟片(vinyl/CD) -->
+  <circle cx="128" cy="128" r="90" fill="url(#discGrad)" stroke="#0C1E3E" stroke-width="3"/>
+
+  <!-- 碟纹凹槽 -->
+  <circle cx="128" cy="128" r="79" fill="none" stroke="#E8720B" stroke-width="1.4" opacity="0.55"/>
+  <circle cx="128" cy="128" r="67" fill="none" stroke="#E8720B" stroke-width="1.4" opacity="0.55"/>
+  <circle cx="128" cy="128" r="55" fill="none" stroke="#E8720B" stroke-width="1.4" opacity="0.55"/>
+
+  <!-- 中心唱片标签,空心白色圆环 -->
+  <circle cx="128" cy="128" r="34" fill="#FFFFFF" stroke="#0C1E3E" stroke-width="2"/>
+
+  <!-- 中心结构:白色底 + 橙黄三角面构成的网,代表多源汇聚与代理路由拓扑 -->
+  <circle cx="128" cy="128" r="34" fill="#FFFFFF" stroke="#F38020" stroke-width="2"/>
+
+  <g stroke="#FFFFFF" stroke-width="1.2" stroke-linejoin="round">
+    <polygon points="128,128 128,108 145.32,118" fill="#F38020"/>
+    <polygon points="128,128 145.32,118 145.32,138" fill="#FBAD41"/>
+    <polygon points="128,128 145.32,138 128,148" fill="#F38020"/>
+    <polygon points="128,128 128,148 110.68,138" fill="#FBAD41"/>
+    <polygon points="128,128 110.68,138 110.68,118" fill="#F38020"/>
+    <polygon points="128,128 110.68,118 128,108" fill="#FBAD41"/>
+  </g>
+
+  <!-- 外圈六个顶点小点 -->
+  <g fill="#F38020">
+    <circle cx="128" cy="108" r="2"/>
+    <circle cx="145.32" cy="118" r="2"/>
+    <circle cx="145.32" cy="138" r="2"/>
+    <circle cx="128" cy="148" r="2"/>
+    <circle cx="110.68" cy="138" r="2"/>
+    <circle cx="110.68" cy="118" r="2"/>
+  </g>
+
+  <!-- 焦点:加粗中心点 -->
+  <circle cx="128" cy="128" r="4" fill="#FFFFFF" stroke="#F38020" stroke-width="2.5"/>
+</svg>

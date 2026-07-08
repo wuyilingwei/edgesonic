@@ -30,9 +30,8 @@ async function submit() {
     <div class="login-card">
       <div class="login-header">
         <div class="login-logo">
-          <span class="logo-bracket">[</span>
+          <img src="/logo.svg" alt="EdgeSonic" class="login-logo-img" />
           <span class="logo-text">EDGESONIC</span>
-          <span class="logo-bracket">]</span>
         </div>
         <p class="login-subtitle">{{ t("login.subtitle") }}</p>
       </div>
@@ -92,14 +91,24 @@ async function submit() {
 }
 
 .login-logo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.login-logo-img {
+  height: 56px;
+  width: 56px;
+  object-fit: contain;
+}
+.login-logo .logo-text {
   font-family: var(--font-mono);
   font-size: 1.5rem;
   font-weight: 700;
   color: var(--color-accent-primary);
   letter-spacing: 0.15em;
-  margin-bottom: 0.5rem;
 }
-.logo-bracket { color: var(--color-text-muted); }
 
 .login-subtitle {
   font-family: var(--font-mono);
