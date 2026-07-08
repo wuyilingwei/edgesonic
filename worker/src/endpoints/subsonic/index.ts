@@ -25,6 +25,9 @@ import { subsonicScanRoutes } from "./scan";
 
 export const subsonicRoutes = new Hono();
 
+// 107 — the f=json format middleware lives in ../../index.ts, mounted on
+// /rest/* BEFORE authMiddleware so auth-failure envelopes convert too.
+
 subsonicRoutes.route("/", pingRoutes);
 subsonicRoutes.route("/", browsingRoutes);
 subsonicRoutes.route("/", searchRoutes);

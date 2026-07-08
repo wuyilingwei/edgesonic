@@ -32,9 +32,13 @@ const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 // ---------------------------------------------------------------------------
 // getOpenSubsonicExtensions
 // ---------------------------------------------------------------------------
-// Spec: returns an `openSubsonicExtensions` element whose children are one
-// `<openSubsonicExtensions name="..." versions="[1,2]"/>` per extension.
-// Both Subsonic-XML and most JSON clients accept this exact shape.
+// Spec (107): one `<openSubsonicExtensions name="...">` element per
+// extension, each carrying `<versions>N</versions>` CHILD ELEMENTS — the
+// shape Navidrome emits. The JSON serialization (middleware/format.ts) turns
+// this into `"openSubsonicExtensions":[{"name":"...","versions":[1,2]}]`
+// with versions as an array of numbers, exactly as the OpenSubsonic docs
+// require. The old form (versions="[1]" attribute) serialized to the JSON
+// string `"versions":"[1]"`, which strict clients reject.
 
 const EXTENSIONS: Array<{ name: string; versions: number[] }> = [
   { name: "apiKeyAuthentication", versions: [1] },
@@ -46,12 +50,8 @@ const extensionsHandler = (c: import("hono").Context) => {
   return c.text(
     subsonicOK({
       openSubsonicExtensions: EXTENSIONS.map((ext) => ({
-        _attributes: {
-          name: ext.name,
-          // Versions emit as JSON-style "[1]" — what real OpenSubsonic servers
-          // (Navidrome, Gonic) do; clients parse this as a typed array.
-          versions: JSON.stringify(ext.versions),
-        },
+        _attributes: { name: ext.name },
+        versions: ext.versions,
       })),
     }),
     200, XML,

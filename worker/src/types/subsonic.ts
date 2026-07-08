@@ -30,9 +30,11 @@ export interface SubsonicAlbum {
 export interface SubsonicChild {
   id: string; parent: string; isDir: boolean;
   title: string; album?: string; artist?: string;
-  track?: number; year?: number; genre?: string;
+  albumId?: string; artistId?: string;
+  track?: number; discNumber?: number; year?: number; genre?: string;
   coverArt?: string; size?: number; contentType?: string;
   suffix?: string; duration?: number; bitRate?: number;
+  created?: string; type?: string;
   isVideo: boolean;
   starred?: string;
   userRating?: number;
@@ -75,13 +77,29 @@ export function mapAlbum(a: Album, artistName?: string, annotation?: AnnotationL
   return applyAnnotation(obj, annotation);
 }
 
-export function mapSong(s: SongMaster, parentId: string, annotation?: AnnotationLite): SubsonicChild {
+// 107 — song rows joined with artists/albums carry the display names; the
+// mapper picks them up when present. Before 107 `album` was set to the album
+// ID (parentId), which broke every client that displays Child.album as text.
+export function mapSong(
+  s: SongMaster & { artist_name?: string | null; album_name?: string | null },
+  parentId: string,
+  annotation?: AnnotationLite,
+): SubsonicChild {
   const obj: SubsonicChild = {
     id: s.id, parent: parentId, isDir: false,
-    title: s.title, album: parentId,
-    track: s.track ?? undefined, genre: s.genre ?? undefined,
+    title: s.title,
+    album: s.album_name ?? undefined,
+    artist: s.artist_name ?? undefined,
+    albumId: s.album_id,
+    artistId: s.artist_id || undefined,
+    track: s.track ?? undefined,
+    discNumber: s.disc ?? undefined,
+    genre: s.genre ?? undefined,
     coverArt: s.album_id.startsWith("al-") ? s.album_id : `al-${s.album_id}`,
-    duration: s.duration ?? undefined, isVideo: false,
+    duration: s.duration ?? undefined,
+    created: formatISODate(s.created_at),
+    type: "music",
+    isVideo: false,
   };
   return applyAnnotation(obj, annotation);
 }

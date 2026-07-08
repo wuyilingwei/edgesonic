@@ -1,5 +1,11 @@
 import type { Artist, Album, SongMaster, SongInstance, Annotation, User, Playlist, Bookmark, PlayQueue, TranscodeJob, InternetRadioStation, PodcastChannel, PodcastEpisode, Share } from "../types/entities";
 
+// 107 — display names joined onto song_masters rows for Subsonic Child fields.
+export interface SongNames {
+  artist_name: string | null;
+  album_name: string | null;
+}
+
 export function createQueries(db: D1Database) {
   return {
     // Artists
@@ -220,14 +226,26 @@ export function createQueries(db: D1Database) {
     },
 
     // Song Masters
-    async getSongMaster(id: string): Promise<SongMaster | null> {
-      return db.prepare("SELECT * FROM song_masters WHERE id = ?").bind(id).first<SongMaster>();
+    // 107 — join artist/album display names so mapSong can emit the
+    // spec-required Child.artist / Child.album text fields everywhere.
+    async getSongMaster(id: string): Promise<(SongMaster & SongNames) | null> {
+      return db.prepare(
+        `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
+         FROM song_masters sm
+         LEFT JOIN artists ar ON ar.id = sm.artist_id
+         LEFT JOIN albums al ON al.id = sm.album_id
+         WHERE sm.id = ?`
+      ).bind(id).first<SongMaster & SongNames>();
     },
 
-    async getSongMastersByAlbum(albumId: string): Promise<SongMaster[]> {
+    async getSongMastersByAlbum(albumId: string): Promise<(SongMaster & SongNames)[]> {
       const result = await db.prepare(
-        "SELECT * FROM song_masters WHERE album_id = ? ORDER BY disc ASC, track ASC"
-      ).bind(albumId).all<SongMaster>();
+        `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
+         FROM song_masters sm
+         LEFT JOIN artists ar ON ar.id = sm.artist_id
+         LEFT JOIN albums al ON al.id = sm.album_id
+         WHERE sm.album_id = ? ORDER BY sm.disc ASC, sm.track ASC`
+      ).bind(albumId).all<SongMaster & SongNames>();
       return result.results;
     },
 
@@ -235,17 +253,21 @@ export function createQueries(db: D1Database) {
     // 084 — D1 SQLite has a ~100 bind variable cap per statement. Batch ≤ 80
     // so callers like /rest/getNowPlaying (KV active streams) and bookmarks
     // listings don't crash with "too many SQL variables" on large inputs.
-    async getSongMastersByIds(ids: string[]): Promise<SongMaster[]> {
+    async getSongMastersByIds(ids: string[]): Promise<(SongMaster & SongNames)[]> {
       if (ids.length === 0) return [];
       const uniq = Array.from(new Set(ids));
       const BATCH = 80;
-      const rows: SongMaster[] = [];
+      const rows: (SongMaster & SongNames)[] = [];
       for (let i = 0; i < uniq.length; i += BATCH) {
         const batch = uniq.slice(i, i + BATCH);
         const placeholders = batch.map(() => "?").join(",");
         const result = await db.prepare(
-          `SELECT * FROM song_masters WHERE id IN (${placeholders})`
-        ).bind(...batch).all<SongMaster>();
+          `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
+           FROM song_masters sm
+           LEFT JOIN artists ar ON ar.id = sm.artist_id
+           LEFT JOIN albums al ON al.id = sm.album_id
+           WHERE sm.id IN (${placeholders})`
+        ).bind(...batch).all<SongMaster & SongNames>();
         rows.push(...result.results);
       }
       return rows;
