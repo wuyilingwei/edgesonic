@@ -594,6 +594,12 @@
         "saveFailed": "保存失败"
       }
     },
+    "user": {
+      "title": "用户"
+    },
+    "system": {
+      "title": "系统"
+    },
     "sessions": {
       "title": "会话",
       "desc": "当前账户的活动登录会话",
