@@ -95,26 +95,32 @@ function doLogout() {
   <!-- 登录后框架：NavBar + Sidebar + Main + PlayerBar -->
   <div v-else class="shell">
     <nav class="navbar">
-      <button class="hamburger" @click="menuOpen = !menuOpen">☰</button>
+      <!-- left: hamburger + nav links -->
+      <div class="nav-left">
+        <button class="hamburger" @click="menuOpen = !menuOpen">☰</button>
+        <div class="nav-links">
+          <router-link to="/" class="nav-link" :class="{ active: route.path === '/' }">
+            <span class="link-prefix">// </span>{{ t("app.menu.dashboard") }}
+          </router-link>
+          <router-link to="/library" class="nav-link" :class="{ active: route.path.startsWith('/library') }">
+            <span class="link-prefix">// </span>{{ t("app.menu.library") }}
+          </router-link>
+        </div>
+      </div>
+
+      <!-- center: logo (absolutely centered) -->
       <router-link to="/" class="nav-logo">
         <img src="/logo.svg" alt="EdgeSonic" class="nav-logo-img" />
         <span class="logo-text">EDGESONIC</span>
       </router-link>
 
-      <div class="nav-links">
-        <router-link to="/" class="nav-link" :class="{ active: route.path === '/' }">
-          <span class="link-prefix">// </span>{{ t("app.menu.dashboard") }}
-        </router-link>
-        <router-link to="/library" class="nav-link" :class="{ active: route.path.startsWith('/library') }">
-          <span class="link-prefix">// </span>{{ t("app.menu.library") }}
-        </router-link>
-      </div>
-
+      <!-- right: user -->
       <div class="nav-user">
         <span class="nav-username">{{ username }}</span>
         <span class="status-badge" :class="level >= 3 ? 'warning' : level >= 2 ? 'info' : 'muted'">{{ levelLabel }}</span>
         <button class="btn-secondary btn-sm" @click="doLogout">{{ t("app.logout") }}</button>
       </div>
+
       <div class="nav-scanline"></div>
     </nav>
 
@@ -171,22 +177,32 @@ function doLogout() {
   animation: pulse 4s ease-in-out infinite;
   pointer-events: none;
 }
+.nav-left {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
 .nav-logo {
-  display: flex; align-items: center; gap: 8px;
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px;
   font-family: var(--font-mono);
   font-size: 1.05rem;
   font-weight: 600;
   letter-spacing: 0.18em;
   color: var(--color-accent-primary);
-  flex-shrink: 0;
+  line-height: 1;
+  white-space: nowrap;
 }
 .nav-logo-img {
-  height: 28px;
-  width: 28px;
+  height: 38px;
+  width: 38px;
   object-fit: contain;
-  flex-shrink: 0;
+  display: block;
 }
-.nav-links { display: flex; gap: 1.25rem; flex: 1; }
+.nav-links { display: flex; gap: 1.25rem; }
 .nav-link {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
@@ -197,7 +213,7 @@ function doLogout() {
 }
 .nav-link:hover, .nav-link.active { color: var(--color-accent-primary); }
 .link-prefix { color: var(--color-text-muted); }
-.nav-user { display: flex; align-items: center; gap: 0.7rem; flex-shrink: 0; }
+.nav-user { display: flex; align-items: center; gap: 0.7rem; flex: 1; justify-content: flex-end; }
 .nav-username {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
@@ -280,6 +296,7 @@ function doLogout() {
 @media (max-width: 960px) {
   .hamburger { display: inline-flex; align-items: center; justify-content: center; }
   .nav-links { display: none; }
+  .nav-username { display: none; }
   .sidebar { transform: translateX(-100%); bottom: 0; box-shadow: 8px 0 40px rgba(0, 0, 0, 0.6); }
   .sidebar.open { transform: translateX(0); }
   .sidebar-overlay.open { display: block; }
