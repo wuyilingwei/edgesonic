@@ -883,6 +883,17 @@ export function parseMultistatus(xml: string, basePath: string): DavEntry[] {
       if (/^https?:\/\//i.test(href)) href = new URL(href).pathname;
       href = decodeURIComponent(href);
     } catch { /* keep raw */ }
+    // Decode XML entities that WebDAV servers emit inside <href> text nodes.
+    // XML requires '&' to be escaped as '&amp;' (and similarly for other
+    // special chars). decodeURIComponent only handles percent-encoding, so
+    // filenames containing '&' end up stored as '&amp;' — causing HTTP 404
+    // on subsequent stream fetches. Apply the five standard XML entities.
+    href = href
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&apos;/g, "'")
+      .replace(/&quot;/g, '"');
     href = stripTrailingSlash(href);
     let rel = href.startsWith(basePath) ? href.substring(basePath.length) : href;
     rel = rel.replace(/^\/+/, "");
