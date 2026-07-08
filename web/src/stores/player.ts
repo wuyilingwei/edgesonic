@@ -1,5 +1,5 @@
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useAuth } from "../api";
 
 export interface Track {
@@ -24,7 +24,11 @@ export const usePlayerStore = defineStore("player", () => {
   const playing = ref(false);
   const currentTime = ref(0);
   const duration = ref(0);
-  const volume = ref(parseFloat(localStorage.getItem("edgesonic_volume") || "0.8"));
+  const volume = ref(parseFloat(
+    localStorage.getItem("edgesonic:volume") ||
+    localStorage.getItem("edgesonic_volume") ||
+    "0.8"
+  ));
   // 093d — buffered range tracking for the PlayerBar buffer bar overlay.
   // `bufferedRanges` is an array of [startSec, endSec] tuples representing
   // the byte ranges the browser has fetched so far. Updated on `progress`
@@ -38,6 +42,8 @@ export const usePlayerStore = defineStore("player", () => {
   let elB: HTMLAudioElement | null = null;
   let active: HTMLAudioElement | null = null;
   let preloaded: { el: HTMLAudioElement; index: number } | null = null;
+  // Pending seek position to restore after loadedmetadata fires (page-reload resume).
+  let _pendingRestoreTime: number | null = null;
 
   function syncBuffered(el: HTMLAudioElement) {
     if (el !== active) return;
@@ -125,7 +131,8 @@ export const usePlayerStore = defineStore("player", () => {
     const track = current.value;
     if (!track) return;
     ensureElements();
-    currentTime.value = 0;
+    // If restoring a saved position, show it immediately; otherwise reset to 0.
+    currentTime.value = _pendingRestoreTime ?? 0;
     duration.value = track.duration || 0;
     bufferedRanges.value = [];
 
@@ -144,11 +151,24 @@ export const usePlayerStore = defineStore("player", () => {
       active!.src = streamUrl(track.id);
     }
     active!.volume = volume.value;
+
+    // One-shot seek to restored position once audio metadata is available.
+    if (_pendingRestoreTime !== null) {
+      const t = _pendingRestoreTime;
+      _pendingRestoreTime = null;
+      const onMeta = () => {
+        if (active) { active.currentTime = t; currentTime.value = t; }
+        active?.removeEventListener("loadedmetadata", onMeta);
+      };
+      active!.addEventListener("loadedmetadata", onMeta);
+    }
+
     if (autoplay) void active!.play().catch(() => { playing.value = false; });
   }
 
   /** Replace queue and start playing at startIndex. */
   function setQueue(tracks: Track[], startIndex = 0) {
+    _pendingRestoreTime = null; // cancel any page-reload restore when user starts a new queue
     invalidatePreload();
     queue.value = tracks;
     index.value = tracks.length ? Math.min(Math.max(startIndex, 0), tracks.length - 1) : -1;
@@ -157,14 +177,22 @@ export const usePlayerStore = defineStore("player", () => {
 
   function playAt(i: number) {
     if (i < 0 || i >= queue.value.length) return;
+    _pendingRestoreTime = null; // cancel restore when user explicitly navigates
     index.value = i;
     loadCurrent();
   }
 
   function toggle() {
-    if (!hasTrack.value || !active) return;
-    if (active.paused) void active.play().catch(() => { playing.value = false; });
-    else active.pause();
+    if (!hasTrack.value) return;
+    ensureElements();
+    // Audio not loaded yet (e.g. page-reload with restored queue) — load and play.
+    // _pendingRestoreTime (if set) will seek to the saved position via loadedmetadata.
+    if (!active!.currentSrc) {
+      loadCurrent(true);
+      return;
+    }
+    if (active!.paused) void active!.play().catch(() => { playing.value = false; });
+    else active!.pause();
   }
 
   function next() {
@@ -190,11 +218,12 @@ export const usePlayerStore = defineStore("player", () => {
     volume.value = Math.min(Math.max(v, 0), 1);
     if (elA) elA.volume = volume.value;
     if (elB) elB.volume = volume.value;
-    localStorage.setItem("edgesonic_volume", String(volume.value));
+    localStorage.setItem("edgesonic:volume", String(volume.value));
   }
 
   /** Stop playback and clear queue (e.g. on logout). */
   function clear() {
+    _pendingRestoreTime = null;
     invalidatePreload();
     for (const el of [elA, elB]) {
       if (el) { el.pause(); el.removeAttribute("src"); el.load(); }
@@ -205,7 +234,62 @@ export const usePlayerStore = defineStore("player", () => {
     currentTime.value = 0;
     duration.value = 0;
     bufferedRanges.value = [];
+    // Clear persisted player state on logout so the next session starts fresh.
+    localStorage.removeItem("edgesonic:queue");
+    localStorage.removeItem("edgesonic:currentIndex");
+    localStorage.removeItem("edgesonic:currentTime");
   }
+
+  // ---- localStorage persistence ----
+
+  /** Serialize queue to minimal objects (stream URLs are generated on demand). */
+  function _saveQueueAndIndex() {
+    const slim = queue.value.map((t) => ({
+      id: t.id, title: t.title, artist: t.artist, album: t.album,
+      ...(t.coverArt !== undefined ? { coverArt: t.coverArt } : {}),
+      duration: t.duration,
+    }));
+    localStorage.setItem("edgesonic:queue", JSON.stringify(slim));
+    localStorage.setItem("edgesonic:currentIndex", String(index.value));
+  }
+
+  let _lastTimeSave = 0;
+
+  // Restore persisted state on store init (runs once, synchronously).
+  try {
+    const rawQueue = localStorage.getItem("edgesonic:queue");
+    if (rawQueue) {
+      const saved = JSON.parse(rawQueue) as Track[];
+      if (Array.isArray(saved) && saved.length > 0) {
+        const rawIdx = parseInt(localStorage.getItem("edgesonic:currentIndex") ?? "", 10);
+        const savedIdx = isNaN(rawIdx) ? 0 : Math.min(Math.max(rawIdx, 0), saved.length - 1);
+        const rawTime = parseFloat(localStorage.getItem("edgesonic:currentTime") ?? "");
+        queue.value = saved;
+        index.value = savedIdx;
+        if (!isNaN(rawTime) && rawTime > 0) {
+          _pendingRestoreTime = rawTime;
+          currentTime.value = rawTime; // show saved position in UI immediately
+        }
+        // Audio is intentionally NOT initialized here; loadCurrent(true) runs
+        // lazily on the first toggle() so streamUrl is generated fresh at play time.
+      }
+    }
+  } catch { /* corrupt localStorage — skip silently */ }
+
+  // Persist queue + index whenever either changes (deep: array mutations included).
+  watch([queue, index], _saveQueueAndIndex, { deep: true });
+
+  // Throttle currentTime writes to at most once per 5 s to avoid excessive I/O.
+  watch(currentTime, () => {
+    const now = Date.now();
+    if (now - _lastTimeSave >= 5000) {
+      localStorage.setItem("edgesonic:currentTime", String(Math.floor(currentTime.value)));
+      _lastTimeSave = now;
+    }
+  });
+
+  // Volume is already written in setVolume(); watch covers direct ref mutations.
+  watch(volume, (v) => localStorage.setItem("edgesonic:volume", String(v)));
 
   return {
     queue, index, playing, currentTime, duration, volume, bufferedRanges,
