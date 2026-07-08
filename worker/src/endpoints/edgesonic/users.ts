@@ -76,8 +76,14 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
   if (!body.username) {
     return c.json({ ok: false, error: "Missing username" }, 400);
   }
+  const caller = c.get("user");
   const db = c.env.DB;
   const now = Math.floor(Date.now() / 1000);
+
+  // Constraint B — an admin cannot promote themselves to superadmin.
+  if (body.level !== undefined && body.level >= 3 && caller.username === body.username) {
+    return c.json({ ok: false, error: "Cannot promote yourself to superadmin" }, 400);
+  }
 
   if (body.password) {
     await db.prepare(
@@ -88,11 +94,41 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
     if (body.level < 0 || body.level > 3) {
       return c.json({ ok: false, error: "Invalid level (0-3)" }, 400);
     }
+    // Constraint A — must keep at least one active superadmin when demoting.
+    if (body.level < 3) {
+      const targetUser = await db
+        .prepare("SELECT level FROM users WHERE username = ?")
+        .bind(body.username)
+        .first<{ level: number }>();
+      if (targetUser && targetUser.level === 3) {
+        const countRow = await db
+          .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
+          .first<{ cnt: number }>();
+        if ((countRow?.cnt ?? 0) <= 1) {
+          return c.json({ ok: false, error: "Must keep at least one superadmin" }, 400);
+        }
+      }
+    }
     await db.prepare(
       "UPDATE users SET level = ?, updated_at = ? WHERE username = ?"
     ).bind(body.level, now, body.username).run();
   }
   if (body.enabled !== undefined) {
+    // Constraint A — disabling a superadmin must leave at least one active.
+    if (!body.enabled) {
+      const targetUser = await db
+        .prepare("SELECT level FROM users WHERE username = ?")
+        .bind(body.username)
+        .first<{ level: number }>();
+      if (targetUser && targetUser.level === 3) {
+        const countRow = await db
+          .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
+          .first<{ cnt: number }>();
+        if ((countRow?.cnt ?? 0) <= 1) {
+          return c.json({ ok: false, error: "Must keep at least one superadmin" }, 400);
+        }
+      }
+    }
     await db.prepare(
       "UPDATE users SET enabled = ?, updated_at = ? WHERE username = ?"
     ).bind(body.enabled ? 1 : 0, now, body.username).run();
@@ -106,6 +142,19 @@ usersRoutes.post("/users/delete", permissionMiddleware("manage_users"), async (c
     return c.json({ ok: false, error: "Missing username" }, 400);
   }
   const db = c.env.DB;
+  // Constraint A — deleting a superadmin must leave at least one active.
+  const targetUser = await db
+    .prepare("SELECT level FROM users WHERE username = ?")
+    .bind(body.username)
+    .first<{ level: number }>();
+  if (targetUser && targetUser.level === 3) {
+    const countRow = await db
+      .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
+      .first<{ cnt: number }>();
+    if ((countRow?.cnt ?? 0) <= 1) {
+      return c.json({ ok: false, error: "Must keep at least one superadmin" }, 400);
+    }
+  }
   await db.prepare("DELETE FROM users WHERE username = ?").bind(body.username).run();
   return c.json({ ok: true });
 });
