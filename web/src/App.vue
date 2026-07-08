@@ -82,9 +82,8 @@ function doLogout() {
     <nav class="navbar">
       <button class="hamburger" @click="menuOpen = !menuOpen">☰</button>
       <router-link to="/" class="nav-logo">
-        <span class="logo-bracket">[</span>
+        <img src="/logo.svg" alt="EdgeSonic" class="nav-logo-img" />
         <span class="logo-text">EDGESONIC</span>
-        <span class="logo-bracket">]</span>
       </router-link>
 
       <div class="nav-links">
@@ -158,7 +157,7 @@ function doLogout() {
   pointer-events: none;
 }
 .nav-logo {
-  display: flex; align-items: center; gap: 2px;
+  display: flex; align-items: center; gap: 8px;
   font-family: var(--font-mono);
   font-size: 1.05rem;
   font-weight: 600;
@@ -166,7 +165,12 @@ function doLogout() {
   color: var(--color-accent-primary);
   flex-shrink: 0;
 }
-.logo-bracket { color: var(--color-text-muted); }
+.nav-logo-img {
+  height: 28px;
+  width: 28px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
 .nav-links { display: flex; gap: 1.25rem; flex: 1; }
 .nav-link {
   font-family: var(--font-mono);
