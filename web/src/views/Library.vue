@@ -164,6 +164,16 @@ const editErr = ref(false);
 const editorOpen = ref(false);
 const editorMode = computed<"single" | "batch">(() => editTargets.value.length > 1 ? "batch" : "single");
 
+// === Edit mode toggle (songs tab, admin-only) ===
+// Default OFF: admins land in browse mode; click the ✎ toggle to reveal
+// checkboxes, batch-preview, and the batch toolbar. Turning edit mode off
+// also clears any pending selection so no ghost state lingers.
+const editMode = ref(false);
+function toggleEditMode() {
+  editMode.value = !editMode.value;
+  if (!editMode.value) clearSelection();
+}
+
 async function openEditor(s: Track) {
   editTargets.value = [s];
   editMsg.value = ""; editErr.value = false;
@@ -623,22 +633,31 @@ async function submitCreateAndAdd() {
 
     <!-- Tab: all songs -->
     <div v-else-if="tab === 'songs'">
+      <!-- 101: edit mode toggle. Admins default to browse mode; click to reveal
+           checkboxes / batch toolbar. The button lives at the top-right of the
+           songs tab so it's discoverable without cluttering the song list. -->
+      <div v-if="isAdmin" class="songs-tab-toolbar">
+        <button
+          :class="['btn-secondary', 'btn-sm', 'edit-mode-toggle', { 'edit-mode-active': editMode }]"
+          @click="toggleEditMode"
+        >{{ editMode ? t("library.editModeOff") : t("library.editModeOn") }}</button>
+      </div>
       <!-- 079: discoverability hint — explains the per-row ✎ and the batch
            workflow so admins don't have to hover-discover them. Fades to 50%
            opacity after 5s (see songsHintFaded) but stays visible. -->
       <div
-        v-if="isAdmin && allSongs.length > 0"
+        v-if="isAdmin && editMode && allSongs.length > 0"
         class="songs-hint"
         :class="{ faded: songsHintFaded }"
       >{{ t("library.songsHint") }}</div>
       <!-- 079: batch-edit preview row. Shown only when nothing is selected;
            swaps out for the active batch-toolbar below as soon as the user
            ticks a row. -->
-      <div v-if="isAdmin && !selectedIds.length" class="batch-preview">
+      <div v-if="isAdmin && editMode && !selectedIds.length" class="batch-preview">
         <span class="mono-label">{{ t("library.batchHint") }}</span>
       </div>
       <!-- Batch selection toolbar (admin-only) -->
-      <div v-if="isAdmin && selectedIds.length" class="batch-toolbar">
+      <div v-if="isAdmin && editMode && selectedIds.length" class="batch-toolbar">
         <span class="mono-label">{{ t("library.selected", { n: selectedIds.length }) }}</span>
         <button class="btn-secondary btn-sm" @click="clearSelection">{{ t("library.clearSelection") }}</button>
         <button
@@ -648,9 +667,9 @@ async function submitCreateAndAdd() {
           @click="openBatchEditor"
         >{{ t("library.batchEdit") }}</button>
       </div>
-      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin ? '24px ' : ''}36px 1fr 1fr auto auto${isAdmin ? ' 32px' : ''} 32px 32px`">
+      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin && editMode ? '24px ' : ''}36px 1fr 1fr auto auto${isAdmin ? ' 32px' : ''} 32px 32px`">
         <div class="table-header">
-          <span v-if="isAdmin"></span>
+          <span v-if="isAdmin && editMode"></span>
           <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span><span></span><span></span>
         </div>
         <div
@@ -661,7 +680,7 @@ async function submitCreateAndAdd() {
           @click="playFromAll(i)"
         >
           <input
-            v-if="isAdmin"
+            v-if="isAdmin && editMode"
             type="checkbox"
             class="row-check"
             :checked="selectedSet.has(s.id)"
@@ -836,7 +855,7 @@ async function submitCreateAndAdd() {
 .load-more { display: flex; justify-content: center; padding: 1.25rem 0 0.5rem; }
 
 /* artists */
-.artist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1rem; }
+.artist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1rem; align-items: start; }
 .artist-card { text-align: center; padding: 1.5rem 1rem 1.1rem; }
 .artist-glyph {
   width: 56px; height: 56px; margin: 0 auto 0.7rem;
@@ -854,7 +873,7 @@ async function submitCreateAndAdd() {
 }
 
 /* albums */
-.album-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1rem; }
+.album-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1rem; align-items: start; }
 .album-card { padding: 0; overflow: hidden; }
 .album-cover {
   aspect-ratio: 1;
@@ -908,6 +927,19 @@ async function submitCreateAndAdd() {
   transition: opacity 0.4s ease;
 }
 .songs-hint.faded { opacity: 0.5; }
+
+/* 101: songs-tab edit mode toggle. Aligns to the right so it doesn't steal
+   attention from the song list; turns accent-colored when edit mode is on. */
+.songs-tab-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+.edit-mode-toggle { font-family: var(--font-mono); font-size: var(--fs-sm); }
+.edit-mode-active {
+  border-color: var(--color-accent-primary, #6366f1);
+  color: var(--color-accent-primary, #6366f1);
+}
 
 /* 079: batch-edit preview row. Displaces itself in favour of batch-toolbar
    the moment a row is ticked, so the two never stack. */
