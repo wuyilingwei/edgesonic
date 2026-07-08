@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { usePlayerStore } from "../stores/player";
 import { useAuth, formatDuration } from "../api";
@@ -8,10 +8,15 @@ const { t } = useI18n();
 const player = usePlayerStore();
 const { coverArtUrl } = useAuth();
 
+// 102: size must come from the backend allow-list (64/96/128/…): 80 was
+// silently ignored, so the sized cache never engaged. On 404 (album without
+// embedded/curated art) fall back to the ♪ placeholder instead of a broken img.
+const coverFailed = ref(false);
 const coverSrc = computed(() => {
   const t = player.current;
-  return t?.coverArt ? coverArtUrl(t.coverArt, 80) : "";
+  return t?.coverArt ? coverArtUrl(t.coverArt, 96) : "";
 });
+watch(coverSrc, () => { coverFailed.value = false; });
 
 const progressPct = computed(() =>
   player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0,
@@ -64,7 +69,7 @@ function onVolume(e: Event) {
     <!-- Track info -->
     <div class="pb-track">
       <div class="pb-cover">
-        <img v-if="coverSrc" :src="coverSrc" alt="" />
+        <img v-if="coverSrc && !coverFailed" :src="coverSrc" alt="" @error="coverFailed = true" />
         <span v-else class="pb-cover-placeholder">♪</span>
       </div>
       <div v-if="player.current" class="pb-meta">

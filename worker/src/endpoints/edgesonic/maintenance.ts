@@ -244,3 +244,62 @@ maintenanceRoutes.post("/maintenance/resetFailedWork",
     ...(onlyTaskType ? { taskType: onlyTaskType } : {}),
   });
 });
+
+// ---------------------------------------------------------------------------
+// GET /edgesonic/maintenance/webdavThroughput?id=<sm-...>&bytes=N
+// ---------------------------------------------------------------------------
+// 103 — Diagnose "WebDAV playback is slow": measures the Worker→WebDAV-origin
+// leg in isolation. Fetches up to N bytes (default 4 MiB, max 32 MiB) of the
+// song's webdav instance inside the Worker and discards them.
+//
+// Interpreting the result against what the browser observes on /rest/stream:
+//   - originMBps low here too            → the origin / CF-to-origin route is
+//                                          the bottleneck (hot cache is the fix)
+//   - originMBps high, browser still slow → the sub-request bandwidth pool is
+//                                          throttling the proxied stream
+//                                          (hot cache / presign is the fix)
+maintenanceRoutes.get("/maintenance/webdavThroughput",
+  permissionMiddleware("maintenance_cleanup"),
+  async (c) => {
+  const env = c.env as Env;
+  const id = c.req.query("id");
+  if (!id) return c.json({ ok: false, error: "Missing id (song master id)" }, 400);
+  const bytesParam = parseInt(c.req.query("bytes") || "0", 10) || 4 * 1024 * 1024;
+  const bytes = Math.min(Math.max(bytesParam, 64 * 1024), 32 * 1024 * 1024);
+
+  const inst = await env.DB.prepare(
+    `SELECT storage_uri FROM song_instances
+     WHERE master_id = ? AND storage_uri LIKE 'webdav://%' AND missing = 0
+     LIMIT 1`,
+  ).bind(id).first<{ storage_uri: string }>();
+  if (!inst) return c.json({ ok: false, error: "No webdav instance for this id" }, 404);
+
+  const { createWebDAVAdapter } = await import("../../adapters/webdav");
+  const t0 = Date.now();
+  const resp = await createWebDAVAdapter(env.DB, env).stream(inst.storage_uri, `bytes=0-${bytes - 1}`);
+  if (!resp.body || resp.statusCode >= 400) {
+    return c.json({ ok: false, error: `origin responded ${resp.statusCode}` }, 502);
+  }
+  const reader = resp.body.getReader();
+  let received = 0;
+  let ttfbMs: number | null = null;
+  while (received < bytes) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (ttfbMs === null) ttfbMs = Date.now() - t0;
+    received += value.length;
+  }
+  await reader.cancel().catch(() => {});
+  const elapsedMs = Date.now() - t0;
+  const transferMs = Math.max(elapsedMs - (ttfbMs ?? 0), 1);
+
+  return c.json({
+    ok: true,
+    uri: inst.storage_uri.replace(/^(webdav:\/\/[^/]+).*/, "$1/…"),
+    requestedBytes: bytes,
+    receivedBytes: received,
+    ttfbMs,
+    elapsedMs,
+    originMBps: Number((received / 1024 / 1024 / (transferMs / 1000)).toFixed(2)),
+  });
+});

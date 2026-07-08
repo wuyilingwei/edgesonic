@@ -53,7 +53,11 @@ registerRoutes(app);
 
 app.onError((err, c) => {
   console.error(err);
-  const isSubsonic = c.req.url.includes("/rest/");
+  // 055 — Match authMiddleware's format policy: /rest/* returns Subsonic XML,
+  // the management buckets (/edgesonic /tag /storage) return JSON. Using
+  // pathname (not c.req.url) so a query string containing "/rest/" can't
+  // trick a management error into rendering as XML.
+  const isSubsonic = new URL(c.req.url).pathname.startsWith("/rest/");
   if (isSubsonic) {
     return c.text(
       `<?xml version="1.0" encoding="UTF-8"?>

@@ -273,6 +273,23 @@ mediaRoutes.get("/stream", async (c) => {
   // url/subsonic schemes never presign. Transcode branch never presigns.
   // Falls through to in-Worker stream on any failure / disabled path.
   if (!needsTranscode) {
+    // 103 — WebDAV hot cache: schedule a background copy to R2 so the next
+    // play of this master rides the r2:// fast path instead of the proxied
+    // (bandwidth-pool-throttled) WebDAV stream. Fire-and-forget; dedupe and
+    // rollback live in utils/hotcache.ts. Runs before the presign 302 so the
+    // copy also happens for clients that get redirected.
+    if (parsed.scheme === "webdav") {
+      const hotcacheOn = await getFeatureString(env, "enable_webdav_hotcache", "0");
+      if (hotcacheOn === "1") {
+        try {
+          const { hotCacheWebdav } = await import("../../utils/hotcache");
+          hotCacheWebdav(env, selected, c.executionCtx as unknown as ExecutionContext<unknown>);
+        } catch {
+          // no ExecutionContext (tests) / import failure → play proceeds uncached
+        }
+      }
+    }
+
     const strategy = (c.get("streamProxyStrategy") as string | undefined) || "always";
     // 093 — WebDAV UserInfo presign embeds credentials in the redirect URL
     // (user:password@host). Browsers block cross-origin redirects with
@@ -515,15 +532,21 @@ mediaRoutes.get("/getCoverArt", async (c) => {
     if (!album) { albumId = id; album = await queries.getAlbum(albumId); }
     if (!album) return c.body(null, 404 as never);
     coverKey = album.cover_r2_key ?? null;
-    // 076 — DO NOT fall back to song-instance-directory cover.jpg here. The
-    // covers.resolveAlbumCover path used to look at the first song's parent
-    // directory and pick any cover.jpg / folder.jpg / front.jpg — which means
-    // every album sharing a parent dir (e.g. a NAS root with a generic
-    // cover.jpg) ended up writing distinct covers/al-X keys whose R2 bytes
-    // were the SAME image. The visible result: hundreds of albums showed the
-    // same anime-character cover. We now strictly require an admin-curated
-    // cover_r2_key; anything else returns 404 so the front-end placeholder
-    // (♪ glyph) renders, which is the honest UX.
+    // 102 — on-demand EMBEDDED-ART resolution. 076 dropped the on-demand path
+    // entirely because its directory-image fallback assigned a shared parent
+    // dir cover.jpg to every album under it; but mapAlbum/mapSong kept
+    // advertising coverArt unconditionally, so every uncurated album 404'd.
+    // covers.resolveAlbumCover is now embedded-only (APIC/FLAC PICTURE from
+    // the album's own file — no cross-album hazard), so we can resolve+cache
+    // lazily again. Albums without embedded art still 404 → placeholder.
+    if (!coverKey) {
+      const { resolveAlbumCover } = await import("../../utils/covers");
+      try {
+        coverKey = await resolveAlbumCover(env, albumId);
+      } catch {
+        coverKey = null; // source unreachable → behave as "no cover"
+      }
+    }
   } else if (prefix === "ar-") {
     const artist = await queries.getArtist(entityId);
     coverKey = artist?.image_r2_key ?? null;

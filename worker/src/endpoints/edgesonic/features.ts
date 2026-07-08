@@ -116,6 +116,13 @@ const STRING_FEATURE_KEYS = new Set([
     // binding fast path. Per-credential strategy in subsonic_credentials
     // still gates which clients opt in.
     "enable_webdav_presign",
+    // 103 — WebDAV play-through hot cache. When '1', a raw (non-transcode)
+    // /rest/stream of a webdav:// instance schedules a background copy of the
+    // whole file into R2 (cache/webdav/<masterId>.<suffix>) and registers a
+    // source_type='cached' instance, so subsequent plays stream from R2
+    // (Worker binding fast path / R2 presign 302) instead of the throttled
+    // proxied WebDAV path. Default '0' — it consumes R2 storage.
+    "enable_webdav_hotcache",
   ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -192,6 +199,10 @@ function validateFeatureString(key: string, value: string): string | null {
     case "enable_webdav_presign":
       // 092 — only '0' or '1'. Mirrors enable_r2_presign shape.
       if (value !== "0" && value !== "1") return "enable_webdav_presign must be '0' or '1'";
+      return null;
+    case "enable_webdav_hotcache":
+      // 103 — only '0' or '1'. Mirrors enable_webdav_presign shape.
+      if (value !== "0" && value !== "1") return "enable_webdav_hotcache must be '0' or '1'";
       return null;
     case "worker_poll_interval_seconds": {
       // Stored as a stringified integer in [30, 3600]. Anything lower hammers

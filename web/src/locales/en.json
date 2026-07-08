@@ -11,7 +11,8 @@
     "copied": "COPIED ✓",
     "actions": "Actions",
     "on": "ON",
-    "off": "OFF"
+    "off": "OFF",
+    "sessionExpired": "Session expired, please log in again"
   },
   "app": {
     "groups": {
@@ -25,6 +26,7 @@
       "sources": "Sources",
       "users": "Users",
       "settings": "Settings",
+      "tools": "Tools",
       "radio": "Radio",
       "podcasts": "Podcasts",
       "shares": "Shares",
@@ -349,6 +351,13 @@
     "pause": "Pause",
     "next": "Next"
   },
+  "tools": {
+    "label": "SYSTEM / TOOLS",
+    "title": "Tools",
+    "superAdminOnly": "This page requires super-admin (level 3)",
+    "tabClone": "Clone (upstream → local)",
+    "tabPush": "Push (local → upstream)"
+  },
   "settings": {
     "label": "SYSTEM / SETTINGS",
     "title": "Settings",
@@ -566,6 +575,13 @@
           "done": "DONE",
           "error": "ERROR",
           "skipped": "SKIPPED"
+        },
+        "push": {
+          "title": "Push to upstream",
+          "desc": "Write local stars and playlists back to the upstream server: songs are matched via upstream search3 with cleaned titles (leading track numbers stripped) and only written when the combined title/artist/duration confidence is high enough; playlists whose name already exists upstream are skipped.",
+          "start": "Start push",
+          "starred": "Starred",
+          "playlists": "Playlists"
         }
       },
       "transcode": {
