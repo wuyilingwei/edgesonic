@@ -161,7 +161,9 @@
     "selectPlaylist": "选择一个歌单",
     "noPlaylists": "暂无歌单 — 请先新建一个",
     "songsHint": "💡 悬停歌曲行编辑 (✎) · 多选后顶部出现批量编辑",
-    "batchHint": "勾选歌曲行以批量操作（编辑标签 / 加入歌单 / 分享）"
+    "batchHint": "勾选歌曲行以批量操作（编辑标签 / 加入歌单 / 分享）",
+    "editModeOn": "✎ 编辑",
+    "editModeOff": "✕ 退出编辑"
   },
   "tagEditor": {
     "singleTitle": "编辑歌曲信息",
