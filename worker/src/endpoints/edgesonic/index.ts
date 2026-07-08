@@ -32,6 +32,7 @@ import { maintenanceRoutes } from "./maintenance";
 import { versionRoutes } from "./version";
 import { r2presignRoutes } from "./r2presign";
 import { cloneRoutes } from "./clone";
+import { statsRoutes } from "./stats";
 
 export const edgesonicRoutes = new Hono();
 
@@ -54,3 +55,5 @@ edgesonicRoutes.route("/", versionRoutes);
 edgesonicRoutes.route("/", r2presignRoutes);
 // 094 — Subsonic server clone write endpoints (super-admin only, browser-driven)
 edgesonicRoutes.route("/", cloneRoutes);
+// 101 — storage stats + R2 cost estimation
+edgesonicRoutes.route("/", statsRoutes);

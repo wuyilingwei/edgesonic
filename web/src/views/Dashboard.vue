@@ -24,6 +24,64 @@ const { isLoggedIn, username, isAdmin, isSuperAdmin, level, authFetch, storageFe
 const workerPool = useWorkerPool();
 const loading = ref(true);
 const stats = ref({ artists: 0, albums: 0, songs: 0, sources: 0, users: 0 });
+
+// 101 — Storage stats + R2 cost estimation (super-admin only)
+interface StorageRow { source_type: string; count: number; bytes: number }
+interface StorageStats {
+  breakdown: StorageRow[];
+  r2CoverCount: number;
+  freeAllocationGb: number;
+}
+const storageStats = ref<StorageStats | null>(null);
+const storageLoading = ref(false);
+const freeAllocInput = ref(10);
+const freeAllocSaving = ref(false);
+
+const R2_PRICE_PER_GB = 0.015;
+
+const r2Row = computed(() =>
+  storageStats.value?.breakdown.find((r) => r.source_type === "r2") ?? { source_type: "r2", count: 0, bytes: 0 },
+);
+const r2Gb = computed(() => r2Row.value.bytes / 1024 ** 3);
+const billableGb = computed(() => Math.max(0, r2Gb.value - freeAllocInput.value));
+const monthlyCost = computed(() => billableGb.value * R2_PRICE_PER_GB);
+
+function fmtBytes(b: number): string {
+  if (b <= 0) return "0 B";
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 ** 2) return `${(b / 1024).toFixed(1)} KB`;
+  if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MB`;
+  return `${(b / 1024 ** 3).toFixed(2)} GB`;
+}
+
+async function loadStorageStats() {
+  storageLoading.value = true;
+  try {
+    const text = await edgesonicFetch("stats/storage");
+    const data = JSON.parse(text) as { ok?: boolean } & Partial<StorageStats>;
+    if (data.ok) {
+      storageStats.value = {
+        breakdown: data.breakdown ?? [],
+        r2CoverCount: data.r2CoverCount ?? 0,
+        freeAllocationGb: data.freeAllocationGb ?? 10,
+      };
+      freeAllocInput.value = storageStats.value.freeAllocationGb;
+    }
+  } catch { /* stay null */ } finally {
+    storageLoading.value = false;
+  }
+}
+
+async function saveFreeAlloc() {
+  if (freeAllocSaving.value) return;
+  freeAllocSaving.value = true;
+  try {
+    await edgesonicPost("features/updateString", { key: "r2_free_allocation_gb", value: String(freeAllocInput.value) });
+    if (storageStats.value) storageStats.value.freeAllocationGb = freeAllocInput.value;
+  } catch { /* ignore */ } finally {
+    freeAllocSaving.value = false;
+  }
+}
 const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year: string }>>([]);
 
 // 080 — Cron warning state. Three modes:
@@ -335,6 +393,8 @@ onMounted(async () => {
     void refreshActivity();
     startActivityPolling();
     document.addEventListener("visibilitychange", onActivityVisibility);
+    // 101 — storage stats (super-admin only, one-shot, no polling needed)
+    void loadStorageStats();
   }
 });
 
@@ -560,6 +620,91 @@ onUnmounted(() => {
       <transition name="dashboard-toast">
         <div v-if="activityToast" class="activity-toast">{{ activityToast }}</div>
       </transition>
+    </section>
+
+    <!-- 101 — Storage & R2 Cost Estimation (super-admin only) -->
+    <section v-if="isSuperAdmin" class="storage-section">
+      <div class="page-section-header">
+        <span class="mono-label">Storage</span>
+        <button class="btn-sm btn-secondary" :disabled="storageLoading" @click="loadStorageStats">↻</button>
+      </div>
+
+      <div class="storage-panels">
+        <!-- breakdown table -->
+        <div class="card storage-breakdown-card">
+          <div class="card-header"><span class="card-title">数据量</span></div>
+          <div v-if="storageLoading" class="storage-loading">加载中…</div>
+          <table v-else-if="storageStats" class="storage-table">
+            <thead>
+              <tr><th>存储源</th><th class="num-col">文件数</th><th class="num-col">占用空间</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in storageStats.breakdown" :key="row.source_type">
+                <td class="type-cell">{{ row.source_type.toUpperCase() }}</td>
+                <td class="num-col">{{ row.count.toLocaleString() }}</td>
+                <td class="num-col">{{ fmtBytes(row.bytes) }}</td>
+              </tr>
+              <tr v-if="storageStats.r2CoverCount > 0" class="cover-row">
+                <td class="type-cell">R2 封面</td>
+                <td class="num-col">{{ storageStats.r2CoverCount }}</td>
+                <td class="num-col muted">–</td>
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr>
+                <td><strong>合计</strong></td>
+                <td class="num-col">
+                  <strong>{{ storageStats.breakdown.reduce((s, r) => s + r.count, 0).toLocaleString() }}</strong>
+                </td>
+                <td class="num-col">
+                  <strong>{{ fmtBytes(storageStats.breakdown.reduce((s, r) => s + r.bytes, 0)) }}</strong>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+          <div v-else class="storage-loading muted">暂无数据</div>
+        </div>
+
+        <!-- R2 cost card -->
+        <div class="card r2-cost-card">
+          <div class="card-header"><span class="card-title">R2 费用估算</span></div>
+          <div class="cost-rows">
+            <div class="cost-row">
+              <span class="cost-label">R2 文件用量</span>
+              <span class="cost-value">{{ fmtBytes(r2Row.bytes) }}</span>
+            </div>
+            <div class="cost-row cost-row-input">
+              <label class="cost-label" for="free-alloc">免费额度分配</label>
+              <div class="free-alloc-input-row">
+                <input
+                  id="free-alloc"
+                  v-model.number="freeAllocInput"
+                  type="number" min="0" max="10" step="0.5"
+                  class="free-alloc-input"
+                />
+                <span class="cost-unit">GB</span>
+                <button class="btn-sm btn-primary" :disabled="freeAllocSaving" @click="saveFreeAlloc">保存</button>
+              </div>
+              <div class="cost-hint muted">Cloudflare R2 共 10 GB 免费额，此处设置分配给 EdgeSonic 的部分</div>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">计费用量</span>
+              <span class="cost-value" :class="{ 'cost-zero': billableGb <= 0 }">
+                {{ billableGb <= 0 ? '0 GB（免费额内）' : `${billableGb.toFixed(3)} GB` }}
+              </span>
+            </div>
+            <div class="cost-row cost-total-row">
+              <span class="cost-label">预估月费</span>
+              <span class="cost-value cost-total">
+                {{ monthlyCost <= 0 ? '$0.00' : `$${monthlyCost.toFixed(4)}` }}
+              </span>
+            </div>
+            <div class="cost-pricing-note muted">
+              超出免费额按 $0.015 / GB·月计费（仅存储部分，R2 出站流量免费）
+            </div>
+          </div>
+        </div>
+      </div>
     </section>
 
     <!-- Stats -->
@@ -980,4 +1125,47 @@ onUnmounted(() => {
 @media (max-width: 720px) {
   .wp-counts { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ── 101: Storage section ─────────────────────────────────────────── */
+.storage-section { margin-bottom: 2rem; }
+.storage-panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 720px) { .storage-panels { grid-template-columns: 1fr; } }
+
+.storage-loading { padding: 1rem; color: var(--color-text-muted); font-size: 0.85rem; }
+.storage-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+.storage-table th {
+  text-align: left; padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted); font-weight: 600; font-size: 0.75rem;
+  text-transform: uppercase; letter-spacing: 0.04em;
+}
+.storage-table td { padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--color-border-subtle, var(--color-border)); }
+.storage-table tfoot td { border-top: 2px solid var(--color-border); border-bottom: none; padding-top: 0.5rem; }
+.num-col { text-align: right; font-variant-numeric: tabular-nums; }
+.type-cell { font-family: monospace; font-size: 0.8rem; }
+.cover-row td { color: var(--color-text-muted); font-style: italic; }
+.muted { color: var(--color-text-muted); }
+
+.cost-rows { display: flex; flex-direction: column; gap: 0.75rem; padding: 0.25rem 0; }
+.cost-row { display: flex; justify-content: space-between; align-items: baseline; gap: 0.5rem; font-size: 0.875rem; }
+.cost-row-input { flex-direction: column; align-items: flex-start; gap: 0.3rem; }
+.cost-label { color: var(--color-text-muted); white-space: nowrap; }
+.cost-value { font-variant-numeric: tabular-nums; font-weight: 500; }
+.cost-zero { color: var(--color-text-muted); }
+.cost-total-row { border-top: 1px solid var(--color-border); padding-top: 0.5rem; margin-top: 0.25rem; }
+.cost-total { font-size: 1.1rem; font-weight: 700; color: var(--color-accent, var(--color-primary)); }
+.free-alloc-input-row { display: flex; align-items: center; gap: 0.4rem; }
+.free-alloc-input {
+  width: 5rem; padding: 0.25rem 0.4rem;
+  border: 1px solid var(--color-border); border-radius: 4px;
+  background: var(--color-bg-input, var(--color-bg)); color: var(--color-text);
+  font-size: 0.875rem;
+}
+.cost-unit { color: var(--color-text-muted); font-size: 0.85rem; }
+.cost-hint { font-size: 0.78rem; line-height: 1.4; }
+.cost-pricing-note { font-size: 0.78rem; line-height: 1.4; border-top: 1px solid var(--color-border); padding-top: 0.5rem; margin-top: 0.25rem; }
 </style>
