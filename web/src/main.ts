@@ -20,6 +20,9 @@ const routes = [
   // Permissions matrix now lives inside Settings; keep the old route working.
   { path: "/permissions", redirect: "/settings" },
   { path: "/settings", component: Settings, meta: { title: "Settings" } },
+  // 104 — Tools page: Subsonic clone (pull) + push-to-upstream, extracted from
+  // Settings. Lazy-loaded — super-admin workflows, rarely visited.
+  { path: "/tools", component: () => import("./views/Tools.vue"), meta: { title: "Tools" } },
   // 062 — Internet Radio management. Lazy-loaded; view is rarely needed by
   // non-admin users so we keep it out of the main chunk.
   { path: "/radio", component: () => import("./views/Radio.vue"), meta: { title: "Radio" } },

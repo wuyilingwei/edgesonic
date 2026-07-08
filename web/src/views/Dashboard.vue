@@ -5,7 +5,7 @@ import { useAuth, parseXmlAttrs } from "../api";
 import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
-const { isLoggedIn, username, isAdmin, isSuperAdmin, level, authFetch, storageFetch, edgesonicFetch, edgesonicPost } = useAuth();
+const { isLoggedIn, username, isAdmin, isSuperAdmin, level, authFetch, storageFetch, edgesonicFetch, edgesonicPost, handleAuthError } = useAuth();
 const workerPool = useWorkerPool();
 const loading = ref(true);
 const stats = ref({ artists: 0, albums: 0, songs: 0, sources: 0, users: 0 });
@@ -168,6 +168,11 @@ async function loadWorkStatus() {
     workLoad.value = Array.isArray(parsed.load) ? parsed.load : [];
     workError.value = "";
   } catch (e) {
+    if (handleAuthError(e)) {
+      showToast(t("common.sessionExpired"));
+      stopActivityPolling();
+      return;
+    }
     workError.value = e instanceof Error ? e.message : String(e);
   }
 }
@@ -188,6 +193,11 @@ async function loadScanStatus() {
     }));
     scanError.value = "";
   } catch (e) {
+    if (handleAuthError(e)) {
+      showToast(t("common.sessionExpired"));
+      stopActivityPolling();
+      return;
+    }
     scanError.value = e instanceof Error ? e.message : String(e);
   }
 }

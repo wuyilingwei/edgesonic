@@ -11,7 +11,8 @@
     "copied": "已复制 ✓",
     "actions": "操作",
     "on": "开",
-    "off": "关"
+    "off": "关",
+    "sessionExpired": "会话已过期，请重新登录"
   },
   "app": {
     "groups": {
@@ -25,6 +26,7 @@
       "sources": "存储源",
       "users": "用户",
       "settings": "设置",
+      "tools": "工具",
       "radio": "电台",
       "podcasts": "播客",
       "shares": "分享",
@@ -349,6 +351,13 @@
     "pause": "暂停",
     "next": "下一首"
   },
+  "tools": {
+    "label": "系统 / 工具",
+    "title": "工具",
+    "superAdminOnly": "此页面需要超级管理员（等级 3）",
+    "tabClone": "克隆（上游 → 本地）",
+    "tabPush": "推送（本地 → 上游）"
+  },
   "settings": {
     "label": "系统 / 设置",
     "title": "设置",
@@ -566,6 +575,13 @@
           "done": "完成",
           "error": "错误",
           "skipped": "已跳过"
+        },
+        "push": {
+          "title": "推送到上游",
+          "desc": "将本地的收藏与歌单写回上游服务器：按清洗后的曲名（去除前导编号等）在上游 search3 搜索，仅当标题/歌手/时长综合置信度足够时才写入；上游已存在的同名歌单会跳过。",
+          "start": "开始推送",
+          "starred": "收藏",
+          "playlists": "歌单"
         }
       },
       "transcode": {

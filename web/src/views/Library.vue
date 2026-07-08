@@ -537,9 +537,13 @@ async function submitCreateAndAdd() {
     <div v-if="error" class="status-badge error">{{ error }}</div>
 
     <!-- Drill-down: songs of an album (any tab) -->
-    <div v-if="currentAlbum" class="table-wrap song-table" :style="`--grid-cols: 36px 1fr auto auto${isAdmin ? ' 32px' : ''}`">
+    <!-- 102: share/add-playlist buttons are grid-inline since 086 v3, so the
+         column template must carry their two 32px tracks; `auto` tracks are
+         banned — each .table-row is its own grid, so content-sized tracks
+         misalign across rows. -->
+    <div v-if="currentAlbum" class="table-wrap song-table" :style="`--grid-cols: 36px 2fr 1fr 64px${isAdmin ? ' 32px' : ''} 32px 32px`">
       <div class="table-header">
-        <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span>
+        <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span><span></span><span></span>
       </div>
       <!-- 061: album-level share affordance, sits above the track table. -->
       <button v-if="currentAlbum" class="album-share-btn" :title="t('library.share')" @click.stop="openShare('album', currentAlbum.id, currentAlbum.name)">⤴ {{ t("library.share") }}</button>
@@ -568,7 +572,7 @@ async function submitCreateAndAdd() {
     <div v-else-if="currentArtist" class="album-grid">
       <div v-for="al in albums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
         <div class="album-cover">
-          <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 300)" :alt="al.name" loading="lazy" />
+          <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
           <span v-else class="album-cover-placeholder">♪</span>
         </div>
         <div class="album-body">
@@ -608,7 +612,7 @@ async function submitCreateAndAdd() {
       <div class="album-grid">
         <div v-for="al in allAlbums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
           <div class="album-cover">
-            <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 300)" :alt="al.name" loading="lazy" />
+            <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
             <span v-else class="album-cover-placeholder">♪</span>
           </div>
           <div class="album-body">
@@ -667,7 +671,9 @@ async function submitCreateAndAdd() {
           @click="openBatchEditor"
         >{{ t("library.batchEdit") }}</button>
       </div>
-      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin && editMode ? '24px ' : ''}36px 1fr 1fr auto auto${isAdmin ? ' 32px' : ''} 32px 32px`">
+      <!-- 102: no `auto` tracks (per-row grids misalign); artist/time get
+           fixed-share tracks so columns line up across every row. -->
+      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin && editMode ? '24px ' : ''}36px 2fr 1.5fr 1fr 64px${isAdmin ? ' 32px' : ''} 32px 32px`">
         <div class="table-header">
           <span v-if="isAdmin && editMode"></span>
           <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span><span></span><span></span>
@@ -898,7 +904,7 @@ async function submitCreateAndAdd() {
 .song-no { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); text-align: right; }
 .song-title { font-size: var(--fs-md); color: var(--color-text-primary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-album { font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.song-artist { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); }
+.song-artist { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-time { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); }
 
 /* tag editor — 079: keep ✎ permanently visible at 0.5 opacity so admins
