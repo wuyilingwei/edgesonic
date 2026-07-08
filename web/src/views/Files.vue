@@ -24,7 +24,7 @@ import type { ScrapeResult } from "../lib/scrape";
 import { extractMetadata, isBrowserParse, suffixOf } from "../lib/metadata";
 
 const { t } = useI18n();
-const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, edgesonicPost, uploadFile, crossCopy, writeTags, submitMetadata, tidyFolder, restUrl, level } = useAuth();
+const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, edgesonicPost, uploadFile, crossCopy, writeTags, submitMetadata, tidyFolder, restUrl, level, handleAuthError } = useAuth();
 // 056 — Worker pool surface: progress / speed / pause / recent chips.
 const workerPool = useWorkerPool();
 
@@ -713,7 +713,12 @@ async function loadWorkStatus() {
     } else {
       workStatusError.value = data.error || t("files.workQueue.statusLoadFailed");
     }
-  } catch {
+  } catch (e) {
+    if (handleAuthError(e)) {
+      showToast(t("common.sessionExpired"), "error");
+      stopWorkStatusPolling();
+      return;
+    }
     workStatusError.value = t("files.workQueue.statusLoadFailed");
   }
 }

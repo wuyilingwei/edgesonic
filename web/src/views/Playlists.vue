@@ -449,7 +449,7 @@ onMounted(loadPlaylists);
           @click="openPlaylist(p)"
         >
           <div class="playlist-cover">
-            <img v-if="p.coverArt" :src="coverArtUrl(p.coverArt, 300)" :alt="p.name" loading="lazy" />
+            <img v-if="p.coverArt" :src="coverArtUrl(p.coverArt, 256)" :alt="p.name" loading="lazy" />
             <span v-else class="playlist-cover-placeholder">♫</span>
           </div>
           <div class="playlist-body">
@@ -477,7 +477,7 @@ onMounted(loadPlaylists);
     <template v-else>
       <div class="detail-header">
         <div class="detail-cover">
-          <img v-if="currentPlaylist.coverArt" :src="coverArtUrl(currentPlaylist.coverArt, 300)" :alt="currentPlaylist.name" />
+          <img v-if="currentPlaylist.coverArt" :src="coverArtUrl(currentPlaylist.coverArt, 256)" :alt="currentPlaylist.name" />
           <span v-else class="playlist-cover-placeholder">♫</span>
         </div>
         <div class="detail-meta">

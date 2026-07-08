@@ -158,7 +158,76 @@ async function findSubsonicCredential(
 
   for (const sess of sessions.results) {
     if (md5(sess.token + salt) === token) {
+      // 105 — sliding renewal: an actively used session keeps living instead
+      // of hard-dying 24h after login (which users perceived as "the deploy
+      // logged me out" — the 081 update banner made them reload right onto
+      // the expired session). Bump only when under 20h remain so a busy tab
+      // costs at most one D1 write every ~4h.
+      await renewSessionIfNeeded(db, sess.token);
       // 092 — session credentials always use 'always' (no per-session tuning).
+      return { credential: sess.token, kind: "session", streamProxyStrategy: "always" };
+    }
+  }
+
+  return null;
+}
+
+const SESSION_TTL_SEC = 86400;
+const SESSION_RENEW_THRESHOLD_SEC = 72000; // renew when < 20h left
+
+async function renewSessionIfNeeded(db: D1Database, token: string): Promise<void> {
+  const now = Math.floor(Date.now() / 1000);
+  await db
+    .prepare("UPDATE sessions SET expires_at = ? WHERE token = ? AND expires_at < ?")
+    .bind(now + SESSION_TTL_SEC, token, now + SESSION_RENEW_THRESHOLD_SEC)
+    .run();
+}
+
+// 105 — Legacy Subsonic password auth (`p=<plain>` or `p=enc:<hex>`). Several
+// clients (and "force plain-text auth" toggles) never send t/s; before 105
+// those requests fell through to "Wrong username or password". Order mirrors
+// findSubsonicCredential: subsonic_credentials first, then session tokens.
+async function findSubsonicCredentialByPassword(
+  db: D1Database,
+  username: string,
+  rawPassword: string,
+): Promise<{ credential: string; kind: "subsonic_cred" | "session"; streamProxyStrategy: string } | null> {
+  let plain = rawPassword;
+  if (plain.startsWith("enc:")) {
+    const hex = plain.substring(4);
+    if (/^[0-9a-fA-F]*$/.test(hex) && hex.length % 2 === 0) {
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+      // Subsonic hex-encodes the UTF-8 bytes of the password.
+      plain = new TextDecoder().decode(bytes);
+    }
+  }
+
+  const creds = await db
+    .prepare("SELECT password, stream_proxy_strategy FROM subsonic_credentials WHERE username = ?")
+    .bind(username)
+    .all<{ password: string; stream_proxy_strategy: string | null }>();
+  for (const cred of creds.results) {
+    if (cred.password === plain) {
+      await db
+        .prepare("UPDATE subsonic_credentials SET last_used = ? WHERE username = ? AND password = ?")
+        .bind(Math.floor(Date.now() / 1000), username, cred.password)
+        .run();
+      const strat = cred.stream_proxy_strategy;
+      const strategy = (strat === "always" || strat === "never" || strat === "r2_only" || strat === "webdav_only")
+        ? strat
+        : "always";
+      return { credential: cred.password, kind: "subsonic_cred", streamProxyStrategy: strategy };
+    }
+  }
+
+  const sessions = await db
+    .prepare("SELECT token FROM sessions WHERE username = ? AND expires_at > ?")
+    .bind(username, Math.floor(Date.now() / 1000))
+    .all<{ token: string }>();
+  for (const sess of sessions.results) {
+    if (sess.token === plain) {
+      await renewSessionIfNeeded(db, sess.token);
       return { credential: sess.token, kind: "session", streamProxyStrategy: "always" };
     }
   }
@@ -189,8 +258,23 @@ export const authMiddleware = createMiddleware<{
 }>(async (c, next) => {
   const path = new URL(c.req.url).pathname;
 
+  // 055 — Management buckets (/edgesonic /tag /storage) are JSON-only on the
+  // client; returning a Subsonic XML error body there breaks the SPA's
+  // JSON.parse with "Unexpected token '<'". Format the error per request
+  // path: XML for /rest/*, JSON for the management buckets. Mirrors the same
+  // policy already used by permissionMiddleware below.
+  const isMgmt = path.startsWith("/edgesonic/") || path.startsWith("/tag/") || path.startsWith("/storage/");
+  const authFail = (code: number, message: string, status: 401 | 403) =>
+    isMgmt
+      ? c.json({ ok: false, error: message }, status)
+      : c.text(subsonicError(code, message), status, {
+          "Content-Type": "application/xml; charset=UTF-8",
+        });
+
   // --- Anti-loop proxy chain guard (DESIGN.md §3.2) ---
-  // Another EdgeSonic proxying us appends its INSTANCE_ID to esChain.
+  // Another EdgeSonic proxying us appends its INSTANCE_ID to esChain. The
+  // chain guard only ever fires on /rest/* (proxied Subsonic calls), so we
+  // keep the XML shape there; a management path would never carry esChain.
   const chain = parseChain(c.req.query("esChain") || c.req.header("X-EdgeSonic-Chain"));
   if (chain.length > 0) {
     const xmlHeaders = { "Content-Type": "application/xml; charset=UTF-8" };
@@ -219,16 +303,12 @@ export const authMiddleware = createMiddleware<{
   const db = c.env.DB;
 
   if (!username) {
-    return c.text(subsonicError(40, "Missing username"), 401, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
+    return authFail(40, "Missing username", 401);
   }
 
   const user = await lookupUser(db, username);
   if (!user || !user.enabled) {
-    return c.text(subsonicError(40, "Wrong username or password"), 401, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
+    return authFail(40, "Wrong username or password", 401);
   }
 
   // --- Authenticate (records which credential type succeeded) ---
@@ -251,6 +331,13 @@ export const authMiddleware = createMiddleware<{
       // 092 — per-credential 302 strategy, surfaced to the stream endpoint.
       c.set("streamProxyStrategy", cred.streamProxyStrategy);
     }
+  } else if (q.p) {
+    // 105 — legacy password auth (p=plain / p=enc:hex)
+    const cred = await findSubsonicCredentialByPassword(db, username, q.p);
+    if (cred) {
+      authMethod = cred.kind;
+      c.set("streamProxyStrategy", cred.streamProxyStrategy);
+    }
   }
 
   // 092 — API key path defaults to 'always' (no per-key tuning yet).
@@ -259,9 +346,7 @@ export const authMiddleware = createMiddleware<{
   }
 
   if (!authMethod) {
-    return c.text(subsonicError(40, "Wrong username or password"), 401, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
+    return authFail(40, "Wrong username or password", 401);
   }
 
   // --- Guest (Level 0) Access Control ---
@@ -273,23 +358,17 @@ export const authMiddleware = createMiddleware<{
         .bind(guestToken, Math.floor(Date.now() / 1000))
         .first();
       if (!tokenData) {
-        return c.text(subsonicError(50, "Guest access denied or token expired"), 403, {
-          "Content-Type": "application/xml; charset=UTF-8",
-        });
+        return authFail(50, "Guest access denied or token expired", 403);
       }
     } else if (GUEST_ALLOWED_PATHS.has(path)) {
       const guestPerm = await db
         .prepare("SELECT enabled FROM user_permissions WHERE level = 0 AND permission = 'browse'")
         .first<{ enabled: number }>();
       if (!guestPerm || !guestPerm.enabled) {
-        return c.text(subsonicError(50, "Guest access is disabled"), 403, {
-          "Content-Type": "application/xml; charset=UTF-8",
-        });
+        return authFail(50, "Guest access is disabled", 403);
       }
     } else {
-      return c.text(subsonicError(50, "Guest access not permitted"), 403, {
-        "Content-Type": "application/xml; charset=UTF-8",
-      });
+      return authFail(50, "Guest access not permitted", 403);
     }
   }
 
@@ -298,15 +377,9 @@ export const authMiddleware = createMiddleware<{
   // demand a web session credential. Inside /rest/* a handful of management-
   // shaped endpoints (changePassword, share/podcast/radio CUD, download) still
   // need the same protection — REST_SESSION_ONLY_PATHS lists those.
-  const isManagement = path.startsWith("/tag/") || path.startsWith("/storage/") || path.startsWith("/edgesonic/");
-  const needsSession = isManagement || REST_SESSION_ONLY_PATHS.has(path);
+  const needsSession = isMgmt || REST_SESSION_ONLY_PATHS.has(path);
   if (needsSession && authMethod !== "session") {
-    if (isManagement) {
-      return c.json({ ok: false, error: "This endpoint requires a web session credential" }, 403);
-    }
-    return c.text(subsonicError(50, "This endpoint requires a web session credential"), 403, {
-      "Content-Type": "application/xml; charset=UTF-8",
-    });
+    return authFail(50, "This endpoint requires a web session credential", 403);
   }
 
   c.set("user", user);

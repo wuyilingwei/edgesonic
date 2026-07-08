@@ -14,6 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { ref, computed } from "vue";
+import { useRouter } from "vue-router";
 
 // 055 — API surface split into 4 buckets. /rest stays Subsonic; everything
 // management-shaped moved to /tag, /storage, /edgesonic.
@@ -66,6 +67,10 @@ const level = ref(parseInt(localStorage.getItem("edgesonic_level") || "0"));
 const salt = ref("");
 
 export function useAuth() {
+  // useRouter() must run inside a component setup; useAuth() is always called
+  // from setup so this is safe. Used by handleAuthError to force /login on
+  // session expiry without every call site re-implementing the redirect.
+  const router = useRouter();
   const isLoggedIn = computed(() => !!token.value);
   const isAdmin = computed(() => level.value >= 2);
   const isSuperAdmin = computed(() => level.value >= 3);
@@ -144,8 +149,17 @@ export function useAuth() {
 
   // 055 — Bucket-aware helpers. Same signature as authFetch/authPost so the
   // call sites only need to swap function names + paths.
+  // Auth failures (401/403) are surfaced as a typed error so the caller can
+  // distinguish "session expired" from "request failed" and toast + redirect
+  // accordingly (see handleAuthError). The body is still text() so XML-shaped
+  // /rest errors keep working for Subsonic callers.
   async function fetchAt(base: string, path: string, params?: Record<string, string>): Promise<string> {
     const resp = await fetch(`${base}/${path}?${signedParams(params).toString()}`);
+    if (resp.status === 401 || resp.status === 403) {
+      const err = new Error("session expired") as Error & { status: number };
+      err.status = resp.status;
+      throw err;
+    }
     return resp.text();
   }
   async function postAt(base: string, path: string, body: unknown): Promise<string> {
@@ -154,7 +168,26 @@ export function useAuth() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (resp.status === 401 || resp.status === 403) {
+      const err = new Error("session expired") as Error & { status: number };
+      err.status = resp.status;
+      throw err;
+    }
     return resp.text();
+  }
+
+  // 401/403 from the management buckets means the web session is gone (expired
+  // server-side or revoked). Centralises the logout + redirect so each call
+  // site only has to toast + bail. Returns true when it handled the error so
+  // callers can `if (handleAuthError(e)) return;`.
+  function handleAuthError(e: unknown): boolean {
+    const status = (e as { status?: number })?.status;
+    if (status === 401 || status === 403) {
+      logout();
+      router.push("/login");
+      return true;
+    }
+    return false;
   }
 
   const tagFetch = (path: string, params?: Record<string, string>) => fetchAt(TAG_BASE, path, params);
@@ -282,7 +315,7 @@ export function useAuth() {
   }
 
   return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
-    login, logout, authFetch, authPost, uploadFile, crossCopy, makeSalt, md5,
+    login, logout, handleAuthError, authFetch, authPost, uploadFile, crossCopy, makeSalt, md5,
     tagFetch, tagPost, storageFetch, storagePost, edgesonicFetch, edgesonicPost,
     readTags, writeTags, batchWriteTags, submitMetadata, tidyFolder,
     signedParams, restUrl, streamUrl, coverArtUrl };

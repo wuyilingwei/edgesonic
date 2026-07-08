@@ -716,6 +716,12 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
 INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
   ('enable_webdav_presign', '1', 'WebDAV presigned URL direct stream (0=off, 1=on; per-credential strategy still applies)', unixepoch());
 
+-- 0034: 103 WebDAV play-through hot cache (default OFF — consumes R2 storage)
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('enable_webdav_hotcache', '0',
+   'Copy WebDAV songs to R2 on first play so later plays stream from R2 (faster). Uses R2 storage.',
+   unixepoch());
+
 -- ============================================================================
 -- 23. External Secrets (0010 — 049 external transcoder shared key)
 -- ============================================================================
