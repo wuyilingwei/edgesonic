@@ -14,6 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { createQueries } from "../../db/queries";
 import { subsonicOK } from "../../utils/xml";
 import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../../types/subsonic";
@@ -28,7 +29,7 @@ export const browsingRoutes = new Hono<{
 // Guest (level 0) bypasses auth on browse paths but still has c.get("user")
 // populated by the middleware; if absent (e.g. unit tests without harness)
 // we fall back to "" which yields an empty annotations Map.
-function currentUserId(c: import("hono").Context): string {
+function currentUserId(c: Context): string {
   return (c.get("user") as User | undefined)?.username ?? "";
 }
 
@@ -50,7 +51,7 @@ const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 // parseXmlAttrs only reads attributes) — every mapped object must be wrapped.
 const attrs = (o: object) => ({ _attributes: o as Record<string, string | number | boolean | undefined> });
 
-browsingRoutes.get("/getArtists", async (c) => {
+const getArtistsHandler = async (c: Context) => {
   const queries = createQueries((c.env as Env).DB);
   const artists = await queries.getArtists();
   const ann = await queries.getAnnotationsMap(currentUserId(c), "artist", artists.map((a) => a.id));
@@ -65,9 +66,9 @@ browsingRoutes.get("/getArtists", async (c) => {
     }),
     200, XML
   );
-});
+};
 
-browsingRoutes.get("/getArtist", async (c) => {
+const getArtistHandler = async (c: Context) => {
   const id = c.req.query("id");
   if (!id) return c.text(subsonicOK({}), 200, XML);
 
@@ -93,9 +94,9 @@ browsingRoutes.get("/getArtist", async (c) => {
     }),
     200, XML
   );
-});
+};
 
-browsingRoutes.get("/getAlbum", async (c) => {
+const getAlbumHandler = async (c: Context) => {
   const id = c.req.query("id");
   if (!id) return c.text(subsonicOK({}), 200, XML);
 
@@ -118,9 +119,9 @@ browsingRoutes.get("/getAlbum", async (c) => {
     }),
     200, XML
   );
-});
+};
 
-browsingRoutes.get("/getSong", async (c) => {
+const getSongHandler = async (c: Context) => {
   const id = c.req.query("id");
   if (!id) return c.text(subsonicOK({}), 200, XML);
 
@@ -133,9 +134,9 @@ browsingRoutes.get("/getSong", async (c) => {
     subsonicOK({ song: attrs(mapSong(song, song.album_id, liteOf(ann.get(`song:${id}`)))) }),
     200, XML
   );
-});
+};
 
-browsingRoutes.get("/getIndexes", async (c) => {
+const getIndexesHandler = async (c: Context) => {
   const queries = createQueries((c.env as Env).DB);
   // Optional musicFolderId filter (038): "default" / "0" / "" → aggregate view.
   const musicFolderId = c.req.query("musicFolderId") || undefined;
@@ -156,9 +157,9 @@ browsingRoutes.get("/getIndexes", async (c) => {
     }),
     200, XML
   );
-});
+};
 
-browsingRoutes.get("/getMusicFolders", async (c) => {
+const getMusicFoldersHandler = async (c: Context) => {
   const queries = createQueries((c.env as Env).DB);
   const sources = await queries.listEnabledSources();
 
@@ -177,9 +178,9 @@ browsingRoutes.get("/getMusicFolders", async (c) => {
     }),
     200, XML
   );
-});
+};
 
-const albumList2Handler = async (c: import("hono").Context, tag: "albumList" | "albumList2") => {
+const albumList2Handler = async (c: Context, tag: "albumList" | "albumList2") => {
   const type = c.req.query("type") || "newest";
   const size = Math.min(parseInt(c.req.query("size") || "10", 10) || 10, 500);
   const offset = parseInt(c.req.query("offset") || "0", 10) || 0;
@@ -211,10 +212,10 @@ const albumList2Handler = async (c: import("hono").Context, tag: "albumList" | "
   );
 };
 
-browsingRoutes.get("/getAlbumList2", (c) => albumList2Handler(c, "albumList2"));
-browsingRoutes.get("/getAlbumList", (c) => albumList2Handler(c, "albumList"));
+const getAlbumList2Handler = (c: Context) => albumList2Handler(c, "albumList2");
+const getAlbumListHandler = (c: Context) => albumList2Handler(c, "albumList");
 
-browsingRoutes.get("/getGenres", async (c) => {
+const getGenresHandler = async (c: Context) => {
   const queries = createQueries((c.env as Env).DB);
   const genres = await queries.getGenres();
 
@@ -229,9 +230,9 @@ browsingRoutes.get("/getGenres", async (c) => {
     }),
     200, XML
   );
-});
+};
 
-browsingRoutes.get("/getSongsByGenre", async (c) => {
+const getSongsByGenreHandler = async (c: Context) => {
   const genre = c.req.query("genre");
   if (!genre) return c.text(subsonicOK({ songsByGenre: {} }), 200, XML);
   const count = Math.min(parseInt(c.req.query("count") || "10", 10) || 10, 500);
@@ -251,9 +252,9 @@ browsingRoutes.get("/getSongsByGenre", async (c) => {
     }),
     200, XML
   );
-});
+};
 
-browsingRoutes.get("/getMusicDirectory", async (c) => {
+const getMusicDirectoryHandler = async (c: Context) => {
   const id = c.req.query("id");
   if (!id) return c.text(subsonicOK({}), 200, XML);
 
@@ -301,7 +302,7 @@ browsingRoutes.get("/getMusicDirectory", async (c) => {
   }
 
   return c.text(subsonicOK({}), 200, XML);
-});
+};
 
 function groupByLetter(items: ReturnType<typeof mapArtist>[]) {
   const groups: Record<string, ReturnType<typeof mapArtist>[]> = {};
@@ -315,3 +316,26 @@ function groupByLetter(items: ReturnType<typeof mapArtist>[]) {
     artist: artists.map((a) => ({ _attributes: a as unknown as Record<string, string | number | boolean | undefined> })),
   }));
 }
+
+// ============================================================================
+// Route registration — Subsonic clients hit both /rest/<name> and the legacy
+// `.view` suffix; both GET and POST are valid per spec.
+// ============================================================================
+function register(path: string, handler: (c: Context) => Promise<Response> | Response) {
+  for (const p of [`/${path}`, `/${path}.view`]) {
+    browsingRoutes.get(p, handler);
+    browsingRoutes.post(p, handler);
+  }
+}
+
+register("getArtists", getArtistsHandler);
+register("getArtist", getArtistHandler);
+register("getAlbum", getAlbumHandler);
+register("getSong", getSongHandler);
+register("getIndexes", getIndexesHandler);
+register("getMusicFolders", getMusicFoldersHandler);
+register("getAlbumList2", getAlbumList2Handler);
+register("getAlbumList", getAlbumListHandler);
+register("getGenres", getGenresHandler);
+register("getSongsByGenre", getSongsByGenreHandler);
+register("getMusicDirectory", getMusicDirectoryHandler);

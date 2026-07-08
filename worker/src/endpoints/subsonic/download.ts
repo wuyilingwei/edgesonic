@@ -17,6 +17,7 @@
 // old endpoints/files.ts so the storage/files.ts file can focus on R2 / WebDAV
 // CRUD without dragging in the Subsonic XML response shape.
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { permissionMiddleware, subsonicError } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
 import { createQueries } from "../../db/queries";
@@ -24,7 +25,7 @@ import { parseStorageUri, getSourceCredentials } from "../../adapters/index";
 
 export const downloadRoutes = new Hono();
 
-downloadRoutes.get("/download", permissionMiddleware("download"), async (c) => {
+const downloadHandler = async (c: Context): Promise<Response> => {
   const id = c.req.query("id");
   if (!id) {
     return c.text(subsonicError(0, "Missing id parameter"), 400, {
@@ -97,9 +98,9 @@ downloadRoutes.get("/download", permissionMiddleware("download"), async (c) => {
       "Content-Length": String(instance.size || 0),
     },
   });
-});
+};
 
-downloadRoutes.get("/downloadMultiple", permissionMiddleware("download"), async (c) => {
+const downloadMultipleHandler = async (c: Context): Promise<Response> => {
   const ids = c.req.query("ids");
   if (!ids) {
     return c.text(subsonicError(0, "Missing ids parameter"), 400, {
@@ -140,4 +141,19 @@ downloadRoutes.get("/downloadMultiple", permissionMiddleware("download"), async 
     200,
     { "Content-Type": "application/xml; charset=UTF-8" }
   );
-});
+};
+
+// ============================================================================
+// Route registration — Subsonic clients hit both /rest/<name> and the legacy
+// `.view` suffix; both GET and POST are valid per spec.
+// ============================================================================
+function register(path: string, handler: (c: Context) => Promise<Response> | Response) {
+  const mw = permissionMiddleware("download");
+  for (const p of [`/${path}`, `/${path}.view`]) {
+    downloadRoutes.get(p, mw, handler);
+    downloadRoutes.post(p, mw, handler);
+  }
+}
+
+register("download", downloadHandler);
+register("downloadMultiple", downloadMultipleHandler);

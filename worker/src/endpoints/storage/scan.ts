@@ -76,7 +76,7 @@ interface ExistingRow {
 // so the HTTP response returns immediately; clients poll /rest/getScanStatus for
 // progress / completion. Each invocation creates one scan_jobs row per source.
 // GET /rest/startScan[?id=<sourceId>]
-scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) => {
+export const startScanHandler = async (c: import("hono").Context): Promise<Response> => {
   const env = c.env as Env;
   const db = env.DB;
   const onlyId = c.req.query("id");
@@ -151,11 +151,11 @@ scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), async (c) 
     200,
     { "Content-Type": "application/xml; charset=UTF-8" }
   );
-});
+};
 
 // Report aggregate scan status across the most recent job per source.
 // GET /rest/getScanStatus -> <scanStatus scanning="true|false" count="N"/>
-scanRoutes.get("/scan/status", async (c) => {
+export const getScanStatusHandler = async (c: import("hono").Context): Promise<Response> => {
   const env = c.env as Env;
   const queries = createQueries(env.DB);
   const latest = await queries.getLatestScanJobs();
@@ -183,7 +183,12 @@ scanRoutes.get("/scan/status", async (c) => {
     200,
     { "Content-Type": "application/xml; charset=UTF-8" }
   );
-});
+};
+
+// Re-register the extracted handlers on the storage Hono router so the
+// /storage/scan/* paths keep working (the web UI uses them).
+scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), startScanHandler);
+scanRoutes.get("/scan/status", getScanStatusHandler);
 
 // 051 — pending list for the BROWSER READ queue. Files.vue polls this so it
 // knows how many tag re-reads remain after an incremental scan flips

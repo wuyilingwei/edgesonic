@@ -14,6 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { createQueries } from "../../db/queries";
 import { parseStorageUri } from "../../adapters/index";
 import { createR2Adapter } from "../../adapters/r2";
@@ -167,7 +168,7 @@ async function openSourceForTranscode(
 // original instance instead of failing. The Subsonic spec calls this out as
 // the correct behaviour ("ignored when the server doesn't support it").
 // ============================================================================
-mediaRoutes.get("/stream", async (c) => {
+const streamHandler = async (c: Context) => {
   const id = c.req.query("id");
   const format = c.req.query("format") || "raw";
   const maxBitRate = parseInt(c.req.query("maxBitRate") || "0", 10) || 0;
@@ -427,7 +428,7 @@ mediaRoutes.get("/stream", async (c) => {
   if (result.contentRange) headers.set("Content-Range", result.contentRange);
 
   return new Response(result.body, { status: result.statusCode, headers });
-});
+};
 
 // Helper for the transcode branch above. Returns a Response on success, null
 // on any fallback signal (engine disabled / unsupported profile / open fail).
@@ -528,7 +529,7 @@ async function tryTranscodeStream(
 //          server does **not** actually resize the image (see findings.md
 //          decision 1) — the underlying bytes are the original.
 // ============================================================================
-mediaRoutes.get("/getCoverArt", async (c) => {
+const getCoverArtHandler = async (c: Context) => {
   const id = c.req.query("id");
   if (!id) return c.body(null, 400 as never);
 
@@ -616,4 +617,18 @@ mediaRoutes.get("/getCoverArt", async (c) => {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   return new Response(object.body, { headers });
-});
+};
+
+// ============================================================================
+// Route registration — Subsonic clients hit both /rest/<name> and the legacy
+// `.view` suffix; both GET and POST are valid per spec.
+// ============================================================================
+function register(path: string, handler: (c: Context) => Promise<Response> | Response) {
+  for (const p of [`/${path}`, `/${path}.view`]) {
+    mediaRoutes.get(p, handler);
+    mediaRoutes.post(p, handler);
+  }
+}
+
+register("stream", streamHandler);
+register("getCoverArt", getCoverArtHandler);

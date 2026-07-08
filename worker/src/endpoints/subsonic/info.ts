@@ -176,9 +176,6 @@ async function artistInfoHandler(
   });
 }
 
-infoRoutes.get("/getArtistInfo", (c) => artistInfoHandler(c, "artistInfo"));
-infoRoutes.get("/getArtistInfo2", (c) => artistInfoHandler(c, "artistInfo2"));
-
 // ---------------------------------------------------------------------------
 // getAlbumInfo / getAlbumInfo2
 // ---------------------------------------------------------------------------
@@ -222,8 +219,7 @@ async function albumInfoHandler(
   });
 }
 
-infoRoutes.get("/getAlbumInfo", albumInfoHandler);
-infoRoutes.get("/getAlbumInfo2", albumInfoHandler);
+// (registration at file bottom)
 
 // ---------------------------------------------------------------------------
 // getSimilarSongs / getSimilarSongs2
@@ -274,8 +270,7 @@ async function similarSongsHandler(
   });
 }
 
-infoRoutes.get("/getSimilarSongs", (c) => similarSongsHandler(c, "similarSongs"));
-infoRoutes.get("/getSimilarSongs2", (c) => similarSongsHandler(c, "similarSongs2"));
+// (registration at file bottom)
 
 // ---------------------------------------------------------------------------
 // getTopSongs (047 — local-first, last.fm fallback)
@@ -291,7 +286,7 @@ infoRoutes.get("/getSimilarSongs2", (c) => similarSongsHandler(c, "similarSongs2
 //      whatever the D1 step produced. Other last.fm fetch failures degrade
 //      the same way — partial result over no result.
 // ---------------------------------------------------------------------------
-infoRoutes.get("/getTopSongs", async (c) => {
+const getTopSongsHandler = async (c: Context): Promise<Response> => {
   const artist = c.req.query("artist");
   if (!artist) return c.text(subsonicError(10, "Required artist parameter is missing"), 200, XML);
 
@@ -344,4 +339,23 @@ infoRoutes.get("/getTopSongs", async (c) => {
     }),
     200, XML,
   );
-});
+};
+
+// ============================================================================
+// Route registration — Subsonic clients hit both /rest/<name> and the legacy
+// `.view` suffix; both GET and POST are valid per spec.
+// ============================================================================
+function register(path: string, handler: (c: Context) => Promise<Response> | Response) {
+  for (const p of [`/${path}`, `/${path}.view`]) {
+    infoRoutes.get(p, handler);
+    infoRoutes.post(p, handler);
+  }
+}
+
+register("getArtistInfo", (c) => artistInfoHandler(c, "artistInfo"));
+register("getArtistInfo2", (c) => artistInfoHandler(c, "artistInfo2"));
+register("getAlbumInfo", albumInfoHandler);
+register("getAlbumInfo2", albumInfoHandler);
+register("getSimilarSongs", (c) => similarSongsHandler(c, "similarSongs"));
+register("getSimilarSongs2", (c) => similarSongsHandler(c, "similarSongs2"));
+register("getTopSongs", getTopSongsHandler);

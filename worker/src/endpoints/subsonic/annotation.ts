@@ -277,14 +277,16 @@ const getStarredHandler = (tag: "starred" | "starred2") =>
     );
   };
 
-annotationRoutes.get("/getStarred",
-  permissionMiddleware("browse"), getStarredHandler("starred"));
-annotationRoutes.get("/getStarred.view",
-  permissionMiddleware("browse"), getStarredHandler("starred"));
-annotationRoutes.get("/getStarred2",
-  permissionMiddleware("browse"), getStarredHandler("starred2"));
-annotationRoutes.get("/getStarred2.view",
-  permissionMiddleware("browse"), getStarredHandler("starred2"));
+// 106 — register helper: both bare + .view, GET + POST.
+function register(path: string, mw: ReturnType<typeof permissionMiddleware>, handler: (c: import("hono").Context) => Promise<Response> | Response) {
+  for (const p of [`/${path}`, `/${path}.view`]) {
+    annotationRoutes.get(p, mw, handler);
+    annotationRoutes.post(p, mw, handler);
+  }
+}
+
+register("getStarred", permissionMiddleware("browse"), getStarredHandler("starred"));
+register("getStarred2", permissionMiddleware("browse"), getStarredHandler("starred2"));
 
 // =============================================================================
 // getRandomSongs
@@ -321,7 +323,4 @@ const getRandomSongsHandler = async (c: import("hono").Context) => {
   );
 };
 
-annotationRoutes.get("/getRandomSongs",
-  permissionMiddleware("browse"), getRandomSongsHandler);
-annotationRoutes.get("/getRandomSongs.view",
-  permissionMiddleware("browse"), getRandomSongsHandler);
+register("getRandomSongs", permissionMiddleware("browse"), getRandomSongsHandler);

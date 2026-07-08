@@ -35,6 +35,8 @@ import { nowPlayingRoutes } from "./now_playing";
 import { lyricsRoutes } from "./lyrics";
 import { accountRoutes } from "./account";
 import { downloadRoutes } from "./download";
+import { subsonicUserRoutes } from "./users";
+import { subsonicScanRoutes } from "./scan";
 
 export const subsonicRoutes = new Hono();
 
@@ -54,3 +56,5 @@ subsonicRoutes.route("/", nowPlayingRoutes);
 subsonicRoutes.route("/", lyricsRoutes);
 subsonicRoutes.route("/", accountRoutes);
 subsonicRoutes.route("/", downloadRoutes);
+subsonicRoutes.route("/", subsonicUserRoutes);
+subsonicRoutes.route("/", subsonicScanRoutes);
