@@ -1,7 +1,8 @@
 import { Hono } from "hono";
-import { authMiddleware } from "./auth";
+import { authMiddleware, subsonicError } from "./auth";
 import { registerRoutes } from "./router";
 import { formPostMiddleware } from "./middleware/form_post";
+import { formatMiddleware, xmlToJson } from "./middleware/format";
 import { crossOriginIsolationMiddleware } from "./middleware/cross_origin_isolation";
 import { refreshAllChannels } from "./utils/podcastSync";
 import { maybeRunScheduledScan } from "./utils/scheduledScan";
@@ -40,6 +41,27 @@ app.route("/", sharePublicRoutes);
 // (/tag /storage /edgesonic) only accept JSON.
 app.use("/rest/*", formPostMiddleware);
 
+// 106 — Subsonic clients (e.g. music-tag-web clones, some mobile clients)
+// occasionally request /rest/ping/ with a trailing slash. Hono's route
+// matching is strict on trailing slashes, so /rest/ping/ would miss the
+// /rest/ping route and fall through to 401 (auth middleware) or 404.
+// Normalize: strip a single trailing slash from /rest/* paths before any
+// auth or route logic runs. Only strips the LAST slash (not path components).
+app.use("/rest/*", async (c, next) => {
+  const url = new URL(c.req.url);
+  if (url.pathname.endsWith("/") && url.pathname !== "/rest/") {
+    url.pathname = url.pathname.replace(/\/$/, "");
+    return app.fetch(new Request(url, c.req.raw), c.env, c.executionCtx);
+  }
+  return next();
+});
+
+// 107 — Subsonic `f=json` / `f=jsonp` format conversion. Mounted AFTER the
+// trailing-slash normalizer (so a re-dispatched request converts exactly
+// once) and BEFORE authMiddleware, so auth-failure XML envelopes are
+// converted too — a JSON client must never receive an XML error body.
+app.use("/rest/*", formatMiddleware);
+
 // 055 — All four buckets share the same auth middleware. The path-prefix
 // strategy inside authMiddleware picks the right policy:
 //   /rest/*       → Subsonic token+salt / apiKey / guestToken
@@ -59,13 +81,19 @@ app.onError((err, c) => {
   // trick a management error into rendering as XML.
   const isSubsonic = new URL(c.req.url).pathname.startsWith("/rest/");
   if (isSubsonic) {
-    return c.text(
-      `<?xml version="1.0" encoding="UTF-8"?>
-<subsonic-response xmlns="http://subsonic.org/restapi" status="failed" version="1.16.1">
-  <error code="0" message="${err.message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}"/>
-</subsonic-response>`,
-      { headers: { "Content-Type": "application/xml; charset=UTF-8" } }
-    );
+    // 107 — thrown errors bypass the format middleware (its `await next()`
+    // rejects before it can transform), so honor f=json/jsonp here directly.
+    const xml = subsonicError(0, err.message);
+    const format = (c.req.query("f") || "xml").toLowerCase();
+    if (format === "json" || format === "jsonp") {
+      const json = JSON.stringify(xmlToJson(xml));
+      return format === "jsonp"
+        ? c.text(`${c.req.query("callback") || "cb"}(${json});`, 200, {
+            "Content-Type": "application/javascript; charset=UTF-8",
+          })
+        : c.text(json, 200, { "Content-Type": "application/json; charset=UTF-8" });
+    }
+    return c.text(xml, 200, { "Content-Type": "application/xml; charset=UTF-8" });
   }
   return c.json({ ok: false, error: err.message }, 500);
 });

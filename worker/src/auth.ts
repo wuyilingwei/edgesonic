@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { md5 } from "./utils/md5";
 import { getFeature, parseChain } from "./utils/features";
+import { SERVER_TYPE, SERVER_VERSION } from "./utils/xml";
 import type { User } from "./types/entities";
 
 export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
@@ -19,8 +20,12 @@ export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 // subsonic_credentials / apiKey cannot reach management surfaces.
 
 const NO_AUTH_PATHS = new Set([
-  "/rest/ping",
-  "/rest/getLicense",
+  // 106 — ping and getLicense moved OUT of NO_AUTH_PATHS so that Subsonic
+  // clients can use /rest/ping to verify credentials. Most Subsonic servers
+  // (including the reference music-tag-web instance) require auth on ping;
+  // clients that ping without credentials to test connectivity will get a
+  // 401 error code, which is the expected behaviour. Only the OpenSubsonic
+  // extension probe stays public (clients check it before authenticating).
   "/rest/getOpenSubsonicExtensions",
   "/rest/getOpenSubsonicExtensions.view",
   // 055 — login bootstraps the very session token the middleware will check
@@ -249,6 +254,9 @@ export const authMiddleware = createMiddleware<{
   // path: XML for /rest/*, JSON for the management buckets. Mirrors the same
   // policy already used by permissionMiddleware below.
   const isMgmt = path.startsWith("/edgesonic/") || path.startsWith("/tag/") || path.startsWith("/storage/");
+  // 107 — always emit XML here; the format middleware (mounted on /rest/*
+  // BEFORE this auth middleware in index.ts) converts to JSON when the
+  // client sends f=json, keeping a single XML→JSON conversion point.
   const authFail = (code: number, message: string, status: 401 | 403) =>
     isMgmt
       ? c.json({ ok: false, error: message }, status)
@@ -331,6 +339,7 @@ export const authMiddleware = createMiddleware<{
   }
 
   if (!authMethod) {
+    console.log(`[auth-fail] path=${path} user=${username} hasApiKey=${!!apiKey} hasToken=${!!(token&&salt)} hasP=${!!q.p} ua=${c.req.header("User-Agent")?.slice(0,60)}`);
     return authFail(40, "Wrong username or password", 401);
   }
 
@@ -451,7 +460,7 @@ export const permissionMiddleware = (requiredPermission: string) =>
 // ============================================================================
 export function subsonicError(code: number, message: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
-<subsonic-response xmlns="http://subsonic.org/restapi" status="failed" version="1.16.1">
+<subsonic-response xmlns="http://subsonic.org/restapi" status="failed" version="1.16.1" type="${SERVER_TYPE}" serverVersion="${SERVER_VERSION}" openSubsonic="true">
   <error code="${code}" message="${escapeXml(message)}"/>
 </subsonic-response>`;
 }
