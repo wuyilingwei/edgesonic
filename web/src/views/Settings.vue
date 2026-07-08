@@ -30,8 +30,8 @@ const { isSuperAdmin, isAdmin, edgesonicFetch, edgesonicPost, logout, username, 
 const workerPool = useWorkerPool();
 
 // === Accordion ===
-type SectionKey = "common" | "sessions" | "clients" | "permissions";
-const open = ref<Record<SectionKey, boolean>>({ common: true, sessions: false, clients: false, permissions: false });
+type SectionKey = "user" | "system" | "sessions" | "clients" | "permissions";
+const open = ref<Record<SectionKey, boolean>>({ user: true, system: false, sessions: false, clients: false, permissions: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
 
 // === Toast ===
@@ -1558,14 +1558,38 @@ onMounted(() => {
       <span v-if="!isSuperAdmin" class="status-badge warning">{{ t("settings.readOnly") }}</span>
     </div>
 
-    <!-- ============ COMMON ============ -->
-    <section class="settings-section card" :class="{ open: open.common }">
-      <button class="section-header" @click="toggleSection('common')">
-        <span class="section-title">{{ t("settings.common.title") }}</span>
-        <span class="section-caret">{{ open.common ? "−" : "+" }}</span>
+    <!-- ============ USER ============ -->
+    <section class="settings-section card" :class="{ open: open.user }">
+      <button class="section-header" @click="toggleSection('user')">
+        <span class="section-title">{{ t("settings.user.title") }}</span>
+        <span class="section-caret">{{ open.user ? "−" : "+" }}</span>
       </button>
 
-      <div v-show="open.common" class="section-body">
+      <div v-show="open.user" class="section-body">
+        <!-- Language -->
+        <div class="sub-block">
+          <div class="sub-header"><span class="mono-label">{{ t("settings.common.language") }}</span></div>
+          <div class="lang-row">
+            <span class="feature-desc">{{ t("settings.common.languageDesc") }}</span>
+            <select class="form-select lang-select" :value="locale" @change="onLocaleChange">
+              <option v-for="l in SUPPORTED_LOCALES" :key="l" :value="l">{{ localeLabels[l] }}</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="corner corner-tl"></div>
+      <div class="corner corner-br"></div>
+    </section>
+
+    <!-- ============ SYSTEM ============ -->
+    <section class="settings-section card" :class="{ open: open.system }">
+      <button class="section-header" @click="toggleSection('system')">
+        <span class="section-title">{{ t("settings.system.title") }}</span>
+        <span class="section-caret">{{ open.system ? "−" : "+" }}</span>
+      </button>
+
+      <div v-show="open.system" class="section-body">
         <!-- Instance ID -->
         <div class="sub-block">
           <div class="sub-header">
@@ -1578,17 +1602,6 @@ onMounted(() => {
             <button class="btn-secondary btn-sm" :disabled="!instanceId" @click="copyInstanceId">
               {{ copied ? t("common.copied") : t("common.copy") }}
             </button>
-          </div>
-        </div>
-
-        <!-- Language -->
-        <div class="sub-block">
-          <div class="sub-header"><span class="mono-label">{{ t("settings.common.language") }}</span></div>
-          <div class="lang-row">
-            <span class="feature-desc">{{ t("settings.common.languageDesc") }}</span>
-            <select class="form-select lang-select" :value="locale" @change="onLocaleChange">
-              <option v-for="l in SUPPORTED_LOCALES" :key="l" :value="l">{{ localeLabels[l] }}</option>
-            </select>
           </div>
         </div>
 

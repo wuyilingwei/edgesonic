@@ -594,6 +594,12 @@
         "saveFailed": "Save failed"
       }
     },
+    "user": {
+      "title": "User"
+    },
+    "system": {
+      "title": "System"
+    },
     "sessions": {
       "title": "Sessions",
       "desc": "Active login sessions for this account",
