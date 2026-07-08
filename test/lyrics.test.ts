@@ -97,6 +97,12 @@ function buildDb() {
       created_at INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT 0
     );
+    -- 107 — getSongMaster now LEFT JOINs albums for Child.album display names.
+    CREATE TABLE albums (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
+    INSERT INTO albums (id, name) VALUES ('al-1', '25');
 
     INSERT INTO artists (id, name) VALUES ('ar-1', 'Adele');
     INSERT INTO song_masters (id, album_id, artist_id, title, lyrics)

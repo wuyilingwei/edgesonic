@@ -108,17 +108,18 @@ const getUserHandler = async (c: C): Promise<Response> => {
 
   return c.text(
     subsonicOK({
-      user: {
-        _attributes: {
-          username: row.username,
-          scrobblingEnabled: "true",
-          adminRole: row.level >= 2 ? "true" : "false",
-          settingsRole: row.level >= 2 ? "true" : "false",
-          downloadRole: "true",
-          uploadRole: "true",
-          playlistRole: "true",
-          coverArtRole: "true",
-          commentRole: "true",
+        user: {
+          _attributes: {
+            username: row.username,
+            email: "",
+            scrobblingEnabled: "true",
+            adminRole: row.level >= 2 ? "true" : "false",
+            settingsRole: row.level >= 2 ? "true" : "false",
+            downloadRole: "true",
+            uploadRole: "true",
+            playlistRole: "true",
+            coverArtRole: "true",
+            commentRole: "true",
           podcastRole: row.level >= 2 ? "true" : "false",
           streamRole: "true",
           jukeboxRole: "false",

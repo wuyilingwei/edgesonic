@@ -164,7 +164,10 @@ async function main() {
     assert(xmlHas(body, 'name="tokenInfo"'), "advertises tokenInfo");
     assert(xmlHas(body, 'name="formPost"'), "advertises formPost");
     assert(!xmlHas(body, 'name="songLyrics"'), "does NOT advertise songLyrics (036 unfinished)");
-    assert(xmlHas(body, 'versions="[1]"'), "versions=[1] emitted as JSON array string");
+    // 107 — versions are <versions>N</versions> CHILD ELEMENTS (Navidrome
+    // shape), so the JSON conversion yields "versions":[1] as a number array.
+    assert(xmlHas(body, "<versions>1</versions>"), "versions emitted as child elements");
+    assert(!xmlHas(body, 'versions="'), "no legacy versions attribute");
 
     // .view alias works
     const r2 = await hit("GET", "/rest/getOpenSubsonicExtensions.view");

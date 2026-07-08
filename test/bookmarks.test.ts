@@ -130,14 +130,17 @@ function makeDb(initial: { song_masters?: Row[] } = {}): {
     }
 
     // -------- song_masters lookup by id list --------
-    const songMastersIn = sql.match(/^SELECT \* FROM song_masters WHERE id IN \(([?,\s]+)\)$/i);
+    // 107 — the queries now LEFT JOIN artists/albums for display names; the
+    // mock has no such tables, so emulate an empty join (names → null).
+    const withNames = (r: Row): Row => ({ ...r, artist_name: null, album_name: null });
+    const songMastersIn = sql.match(/^SELECT sm\.\*.+FROM song_masters sm.+WHERE sm\.id IN \(([?,\s]+)\)$/i);
     if (songMastersIn) {
       const idSet = new Set(binds as string[]);
-      return tables.song_masters.filter((r) => idSet.has(r.id as string)) as T[];
+      return tables.song_masters.filter((r) => idSet.has(r.id as string)).map(withNames) as T[];
     }
-    if (sql === "SELECT * FROM song_masters WHERE id = ?") {
+    if (/^SELECT sm\.\*.+FROM song_masters sm.+WHERE sm\.id = \?$/i.test(sql)) {
       const [id] = binds;
-      return tables.song_masters.filter((r) => r.id === id) as T[];
+      return tables.song_masters.filter((r) => r.id === id).map(withNames) as T[];
     }
 
     throw new Error(`MockD1 unrecognised SQL: ${sql}`);

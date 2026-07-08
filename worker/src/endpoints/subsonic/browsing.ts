@@ -108,10 +108,17 @@ const getAlbumHandler = async (c: Context) => {
   const userId = currentUserId(c);
   const albumAnn = await queries.getAnnotationsMap(userId, "album", [id]);
   const songAnn = await queries.getAnnotationsMap(userId, "song", songs.map((s) => s.id));
+  // 107 — albums have no artist column; derive the display artist from the
+  // first song row (getSongMastersByAlbum joins artist_name). Clients render
+  // AlbumWithSongsID3.artist/artistId prominently, so omit only when empty.
+  const firstSong = songs[0];
   return c.text(
     subsonicOK({
       album: {
-        _attributes: mapAlbum(album, undefined, liteOf(albumAnn.get(`album:${id}`))),
+        _attributes: {
+          ...mapAlbum(album, firstSong?.artist_name ?? undefined, liteOf(albumAnn.get(`album:${id}`))),
+          artistId: firstSong?.artist_id || undefined,
+        },
         song: songs.map((s) =>
           attrs(mapSong(s, album.id, liteOf(songAnn.get(`song:${s.id}`))))
         ),

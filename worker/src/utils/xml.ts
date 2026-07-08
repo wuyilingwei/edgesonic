@@ -82,6 +82,18 @@ export function esc(s: string): string {
     .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
+// ---------------------------------------------------------------------------
+// Subsonic response envelope.
+// 107 — OpenSubsonic requires every subsonic-response to carry, in BOTH the
+// XML and JSON serializations: status, version, type, serverVersion, and
+// openSubsonic=true. Handlers always build XML here; the format middleware
+// (middleware/format.ts) converts to JSON when the client sends f=json, so
+// this stays the single place that shapes the envelope.
+// ---------------------------------------------------------------------------
+
+export const SERVER_TYPE = "edgeSonic";
+export const SERVER_VERSION = "1.0.0";
+
 export function subsonicOK(inner: Record<string, unknown>, version = "1.16.1"): string {
   return toXML({
     "subsonic-response": {
@@ -89,6 +101,9 @@ export function subsonicOK(inner: Record<string, unknown>, version = "1.16.1"): 
         xmlns: "http://subsonic.org/restapi",
         status: "ok",
         version,
+        type: SERVER_TYPE,
+        serverVersion: SERVER_VERSION,
+        openSubsonic: "true",
       },
       ...inner,
     },
