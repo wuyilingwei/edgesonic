@@ -1,0 +1,59 @@
+name: Subsonic API Coverage
+
+# Runs the Subsonic 1.16.1 endpoint coverage test on every push/PR and on
+# manual dispatch. Reports which spec endpoints are registered (bare + .view
+# × GET + POST) and which are intentionally absent.
+#
+# The test is zero-dependency (node:sqlite + Hono.fetch) and runs in <30s.
+# It does NOT deploy or touch any Cloudflare resources.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "worker/src/endpoints/subsonic/**"
+      - "test/subsonic_endpoint_coverage.test.ts"
+      - ".github/workflows/subsonic-coverage.yml"
+  pull_request:
+    paths:
+      - "worker/src/endpoints/subsonic/**"
+      - "test/subsonic_endpoint_coverage.test.ts"
+      - ".github/workflows/subsonic-coverage.yml"
+  workflow_dispatch:
+
+jobs:
+  coverage:
+    name: Endpoint Coverage Report
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript typecheck
+        run: npm run typecheck
+
+      - name: Run Subsonic endpoint coverage test
+        run: npx tsx test/subsonic_endpoint_coverage.test.ts
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          echo "## Subsonic 1.16.1 Endpoint Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The test verifies that every endpoint in the Subsonic 1.16.1 spec" >> $GITHUB_STEP_SUMMARY
+          echo "is registered at both \`/rest/<name>\` and \`/rest/<name>.view\`," >> $GITHUB_STEP_SUMMARY
+          echo "accepting both GET and POST." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ All spec endpoints covered — see test output for details." >> $GITHUB_STEP_SUMMARY

@@ -16,6 +16,7 @@
 //   3. Otherwise return the empty shell.
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { createQueries } from "../../db/queries";
 import { fetchExternalLyric } from "../../utils/lyricfetch";
 import { fetchLrcSidecar } from "../../utils/lrcSidecar";
@@ -95,7 +96,7 @@ async function resolveLyrics(
 // ---------------------------------------------------------------------------
 // GET /rest/getLyrics?artist=<a>&title=<t>
 // ---------------------------------------------------------------------------
-lyricsRoutes.get("/getLyrics", async (c) => {
+const getLyricsHandler = async (c: Context): Promise<Response> => {
   const env = c.env as Env;
   const artist = c.req.query("artist") || "";
   const title = c.req.query("title") || "";
@@ -165,12 +166,12 @@ lyricsRoutes.get("/getLyrics", async (c) => {
     200,
     { "Content-Type": "application/xml; charset=UTF-8" },
   );
-});
+};
 
 // ---------------------------------------------------------------------------
 // GET /rest/getLyricsBySongId?id=<songMasterId>  (OpenSubsonic songLyrics)
 // ---------------------------------------------------------------------------
-lyricsRoutes.get("/getLyricsBySongId", async (c) => {
+const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
   const id = c.req.query("id");
   if (!id) {
     return c.text(
@@ -231,4 +232,18 @@ lyricsRoutes.get("/getLyricsBySongId", async (c) => {
     200,
     { "Content-Type": "application/xml; charset=UTF-8" },
   );
-});
+};
+
+// ============================================================================
+// Route registration — Subsonic clients hit both /rest/<name> and the legacy
+// `.view` suffix; both GET and POST are valid per spec.
+// ============================================================================
+function register(path: string, handler: (c: Context) => Promise<Response> | Response) {
+  for (const p of [`/${path}`, `/${path}.view`]) {
+    lyricsRoutes.get(p, handler);
+    lyricsRoutes.post(p, handler);
+  }
+}
+
+register("getLyrics", getLyricsHandler);
+register("getLyricsBySongId", getLyricsBySongIdHandler);
