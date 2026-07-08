@@ -194,14 +194,10 @@ function handleVisibilityChange() {
 // === Edit modal ===
 const editing = ref<Source | null>(null);
 const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only", region: "us-east-1", presignUsername: "", presignPassword: "" });
-// 097 — controls whether the collapsible presign creds section is expanded
-const showPresignSection = ref(false);
 
 function openEdit(s: Source) {
   editing.value = s;
   editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled, mode: s.mode, region: s.region || "us-east-1", presignUsername: s.presignUsername || "", presignPassword: "" };
-  // Auto-expand the presign section if a read-only account is already configured
-  showPresignSection.value = !!s.presignUsername;
 }
 function closeEdit() { editing.value = null; }
 
@@ -531,7 +527,7 @@ onUnmounted(() => {
     <!-- P5: use class instead of inline style; width matches grid columns -->
     <div v-if="showForm" class="card source-form">
       <div class="card-header"><span class="card-title">{{ t("sources.newSource") }}</span></div>
-      <div class="form-stack">
+      <div class="form-grid-2">
         <div class="form-group">
           <label class="form-label">{{ t("sources.type") }}</label>
           <select v-model="form.type" class="form-select">
@@ -547,19 +543,19 @@ onUnmounted(() => {
         </div>
         <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="form.username" class="form-input" /></div>
         <div class="form-group"><label class="form-label">{{ t("sources.password") }}</label><input v-model="form.password" type="password" class="form-input" /></div>
-        <div class="form-group">
+        <div class="form-group span-all">
           <label class="form-label">{{ t("sources.rootPath") }}</label>
           <input v-model="form.root_path" class="form-input" :placeholder="form.type === 's3' ? 'bucket' : '/music'" />
           <span class="field-hint">{{ form.type === 's3' ? t('sources.s3BucketHint') : t('sources.rootPathHint') }}</span>
         </div>
         <!-- 096: region field (S3 only) -->
-        <div v-if="form.type === 's3'" class="form-group">
+        <div v-if="form.type === 's3'" class="form-group span-all">
           <label class="form-label">{{ t("sources.s3Region") }}</label>
           <input v-model="form.region" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
           <span class="field-hint">{{ t("sources.s3RegionHint") }}</span>
         </div>
         <!-- P4: mode selector -->
-        <div class="form-group">
+        <div class="form-group span-all">
           <label class="form-label">{{ t("sources.mode.label") }}</label>
           <select v-model="form.mode" class="form-select">
             <option value="library">{{ t("sources.mode.library") }}</option>
@@ -568,13 +564,13 @@ onUnmounted(() => {
           <span class="field-hint">{{ t("sources.mode.hint") }}</span>
         </div>
         <!-- 097 — Read-only presign account (WebDAV only, in add form) -->
-        <div v-if="form.type === 'webdav'" class="form-group">
+        <div v-if="form.type === 'webdav'" class="form-group span-all">
           <label class="form-label">{{ t("sources.presignCreds") }} <span class="field-hint-inline">({{ t("common.optional", "可选") }})</span></label>
           <input v-model="form.presign_username" class="form-input" :placeholder="t('sources.presignUsername')" autocomplete="off" />
           <input v-model="form.presign_password" type="password" class="form-input" style="margin-top:0.4rem" :placeholder="t('sources.presignPassword')" autocomplete="new-password" />
           <span class="field-hint">{{ t("sources.presignCredsHint") }}</span>
         </div>
-        <button class="btn-primary" @click="addSource">{{ t("sources.save") }}</button>
+        <button class="btn-primary span-all" @click="addSource">{{ t("sources.save") }}</button>
       </div>
       <div class="corner corner-tl"></div>
       <div class="corner corner-br"></div>
@@ -717,7 +713,7 @@ onUnmounted(() => {
     <div v-if="editing" class="modal-backdrop" @click.self="closeEdit">
       <div class="modal">
         <div class="modal-title">{{ t("sources.editSource") }}</div>
-        <div class="form-stack">
+        <div class="form-grid-2">
           <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="editForm.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
           <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="editForm.base_url" class="form-input" placeholder="https://..." /></div>
           <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="editForm.username" class="form-input" /></div>
@@ -725,13 +721,13 @@ onUnmounted(() => {
             <label class="form-label">{{ t("sources.password") }}</label>
             <input v-model="editForm.password" type="password" class="form-input" :placeholder="t('sources.passwordKeep')" />
           </div>
-          <div class="form-group">
+          <div class="form-group span-all">
             <label class="form-label">{{ t("sources.rootPath") }}</label>
             <input v-model="editForm.root_path" class="form-input" placeholder="/music" />
             <span class="field-hint">{{ t("sources.rootPathHint") }}</span>
           </div>
           <!-- P4: mode selector in edit modal -->
-          <div class="form-group">
+          <div class="form-group span-all">
             <label class="form-label">{{ t("sources.mode.label") }}</label>
             <select v-model="editForm.mode" class="form-select">
               <option value="library">{{ t("sources.mode.library") }}</option>
@@ -740,29 +736,24 @@ onUnmounted(() => {
             <span class="field-hint">{{ t("sources.mode.hint") }}</span>
           </div>
           <!-- 096: region field in edit modal (shown for all types; only meaningful for s3) -->
-          <div v-if="editing?.type === 's3'" class="form-group">
+          <div v-if="editing?.type === 's3'" class="form-group span-all">
             <label class="form-label">{{ t("sources.s3Region") }}</label>
             <input v-model="editForm.region" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
             <span class="field-hint">{{ t("sources.s3RegionHint") }}</span>
           </div>
-          <!-- 097 — Read-only presign account (WebDAV only, collapsible) -->
-          <div v-if="editing?.type === 'webdav'" class="form-group">
-            <button type="button" class="link-button presign-toggle" @click="showPresignSection = !showPresignSection">
-              {{ showPresignSection ? "▾" : "▸" }} {{ t("sources.presignCreds") }} ({{ t("common.optional", "可选") }})
-            </button>
-            <div v-if="showPresignSection" class="presign-section">
-              <div class="form-group">
-                <label class="form-label">{{ t("sources.presignUsername") }}</label>
-                <input v-model="editForm.presignUsername" class="form-input" autocomplete="off" />
-              </div>
-              <div class="form-group">
-                <label class="form-label">{{ t("sources.presignPassword") }}</label>
-                <input v-model="editForm.presignPassword" type="password" class="form-input" :placeholder="editForm.presignUsername ? t('sources.passwordKeep') : ''" autocomplete="new-password" />
-              </div>
-              <span class="field-hint">{{ t("sources.presignCredsHint") }}</span>
+          <!-- 097 — Read-only presign account (WebDAV only, always visible) -->
+          <div v-if="editing?.type === 'webdav'" class="presign-always-section span-all">
+            <div class="form-group">
+              <label class="form-label">{{ t("sources.presignCreds") }} <span class="field-hint-inline">({{ t("common.optional", "可选") }})</span></label>
+              <input v-model="editForm.presignUsername" class="form-input" :placeholder="t('sources.presignUsername')" autocomplete="off" />
             </div>
+            <div class="form-group">
+              <label class="form-label">{{ t("sources.presignPassword") }}</label>
+              <input v-model="editForm.presignPassword" type="password" class="form-input" :placeholder="editForm.presignUsername ? t('sources.passwordKeep') : t('sources.presignPassword')" autocomplete="new-password" />
+            </div>
+            <span class="field-hint">{{ t("sources.presignCredsHint") }}</span>
           </div>
-          <div class="form-group enabled-row">
+          <div class="form-group enabled-row span-all">
             <label class="form-label enabled-label">{{ t("sources.enabled") }}</label>
             <label class="toggle">
               <input type="checkbox" v-model="editForm.enabled" />
@@ -813,10 +804,16 @@ onUnmounted(() => {
   text-align: center;
 }
 
-/* P5: form card — width aligned with grid-2 column max */
+/* P5: form card — wide enough for two-column grid */
 .source-form {
   margin-bottom: 1.25rem;
-  max-width: 560px;
+  max-width: 700px;
+}
+
+/* Widen the edit modal to fit the 2-col form grid */
+.modal {
+  width: 680px;
+  max-width: 90vw;
 }
 
 /* P5: form vertical stack — replaces repeated inline style */
@@ -824,6 +821,21 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 0.8rem;
+}
+
+/* Two-column adaptive form grid (single-column below 640 px) */
+.form-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.8rem;
+}
+@media (max-width: 640px) {
+  .form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+.form-grid-2 .span-all {
+  grid-column: 1 / -1;
 }
 
 .source-card { display: flex; flex-direction: column; gap: 0.55rem; }
@@ -857,10 +869,16 @@ onUnmounted(() => {
 /* Action group: scan/rescan/retry + edit + delete */
 .source-actions {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 0.35rem;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+/* Ensure every button in the action row has equal height and centered text */
+.source-actions .btn-sm {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
 }
 
 /* 093f — Mirror to R2 progress */
@@ -1063,13 +1081,8 @@ onUnmounted(() => {
   border-color: rgba(6, 182, 212, 0.35);
 }
 
-/* 097 — collapsible presign section inside edit modal */
-.presign-toggle {
-  font-size: var(--fs-sm);
-  letter-spacing: 0.04em;
-  margin-bottom: 0.35rem;
-}
-.presign-section {
+/* 097 — presign section inside edit modal (always visible) */
+.presign-always-section {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
@@ -1077,7 +1090,6 @@ onUnmounted(() => {
   border: 1px dashed rgba(6, 182, 212, 0.3);
   border-radius: 4px;
   background: rgba(6, 182, 212, 0.04);
-  margin-top: 0.3rem;
 }
 .field-hint-inline {
   font-family: var(--font-mono);
