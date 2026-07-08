@@ -161,7 +161,9 @@
     "selectPlaylist": "Pick a playlist",
     "noPlaylists": "No playlists yet — create one first",
     "songsHint": "💡 Hover song row to edit (✎) · Multi-select for batch edit",
-    "batchHint": "Check rows to batch (edit tags / playlist / share)"
+    "batchHint": "Check rows to batch (edit tags / playlist / share)",
+    "editModeOn": "✎ Edit",
+    "editModeOff": "✕ Exit Edit"
   },
   "tagEditor": {
     "singleTitle": "Edit Track Info",
