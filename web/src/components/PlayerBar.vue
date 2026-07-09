@@ -16,12 +16,18 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRouter } from "vue-router";
 import { usePlayerStore } from "../stores/player";
 import { useAuth, formatDuration } from "../api";
 
 const { t } = useI18n();
+const router = useRouter();
 const player = usePlayerStore();
 const { coverArtUrl } = useAuth();
+
+function goNowPlaying() {
+  router.push("/now-playing");
+}
 
 // 102: size must come from the backend allow-list (64/96/128/…): 80 was
 // silently ignored, so the sized cache never engaged. On 404 (album without
@@ -83,11 +89,11 @@ function onVolume(e: Event) {
   <footer class="player-bar">
     <!-- Track info -->
     <div class="pb-track">
-      <div class="pb-cover">
+      <div class="pb-cover" @click="goNowPlaying" :class="{ clickable: player.hasTrack }">
         <img v-if="coverSrc && !coverFailed" :src="coverSrc" alt="" @error="coverFailed = true" />
         <span v-else class="pb-cover-placeholder">♪</span>
       </div>
-      <div v-if="player.current" class="pb-meta">
+      <div v-if="player.current" class="pb-meta" @click="goNowPlaying" :class="{ clickable: player.hasTrack }">
         <div class="pb-title" :title="player.current.title">{{ player.current.title }}</div>
         <div class="pb-artist">{{ player.current.artist || t("player.unknownArtist") }}</div>
       </div>
@@ -100,11 +106,15 @@ function onVolume(e: Event) {
     <!-- Controls + progress -->
     <div class="pb-center">
       <div class="pb-controls">
+        <button class="pb-btn" :class="{ active: player.shuffle }" :disabled="!player.hasTrack" :title="t('player.shuffle')" @click="player.toggleShuffle()">🔀</button>
         <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.previous')" @click="player.prev()">⏮</button>
         <button class="pb-btn pb-play" :disabled="!player.hasTrack" :title="player.playing ? t('player.pause') : t('player.play')" @click="player.toggle()">
           {{ player.playing ? "⏸" : "▶" }}
         </button>
         <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.next')" @click="player.next()">⏭</button>
+        <button class="pb-btn" :class="{ active: player.repeatMode !== 'off' }" :disabled="!player.hasTrack" :title="t('player.repeat')" @click="player.toggleRepeat()">
+          {{ player.repeatMode === "one" ? "🔂" : "🔁" }}
+        </button>
       </div>
       <div class="pb-progress-row">
         <span class="pb-time">{{ formatDuration(Math.floor(player.currentTime)) }}</span>
@@ -160,6 +170,9 @@ function onVolume(e: Event) {
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
 }
+.pb-cover.clickable, .pb-meta.clickable { cursor: pointer; }
+.pb-cover.clickable:hover { border-color: var(--color-accent-dim); }
+.pb-meta.clickable:hover .pb-title { color: var(--color-accent-primary); }
 .pb-cover img { width: 100%; height: 100%; object-fit: cover; }
 .pb-cover-placeholder { color: var(--color-text-muted); font-size: 1.2rem; }
 .pb-meta { min-width: 0; }
@@ -190,6 +203,7 @@ function onVolume(e: Event) {
 }
 .pb-btn:hover:not(:disabled) { color: var(--color-accent-primary); }
 .pb-btn:disabled { color: var(--color-text-muted); opacity: 0.4; cursor: not-allowed; }
+.pb-btn.active { color: var(--color-accent-primary); border-color: var(--color-accent-dim); }
 .pb-play {
   width: 34px; height: 34px;
   border: 1px solid var(--color-border-strong);

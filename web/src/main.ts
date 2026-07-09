@@ -48,6 +48,8 @@ const routes = [
   // 069 — Playlist CRUD UI. Lazy loaded; no nested detail route — the view
   // owns its detail state inline so back-nav doesn't re-pick a playlist.
   { path: "/playlists", component: () => import("./views/Playlists.vue"), meta: { title: "Playlists" } },
+  // 110 — Full-screen Now Playing page: cover + lyrics + controls.
+  { path: "/now-playing", component: () => import("./views/NowPlaying.vue"), meta: { title: "Now Playing" } },
 ];
 
 const router = createRouter({ history: createWebHashHistory(), routes });
