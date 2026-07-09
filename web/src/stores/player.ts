@@ -35,6 +35,16 @@ export const usePlayerStore = defineStore("player", () => {
   // events from the active <audio> element (fires ~4×/s during download).
   const bufferedRanges = ref<[number, number][]>([]);
 
+  // 110 — Playback modes: 'off' | 'one' | 'all' (repeat), shuffle boolean.
+  type RepeatMode = "off" | "one" | "all";
+  const repeatMode = ref<RepeatMode>(
+    (localStorage.getItem("edgesonic:repeatMode") as RepeatMode) || "off"
+  );
+  const shuffle = ref(localStorage.getItem("edgesonic:shuffle") === "true");
+  // Internal shuffle order — the actual queue array is never shuffled; instead
+  // we maintain a parallel index order for shuffle playback.
+  let _shuffleOrder: number[] = [];
+
   const current = computed<Track | null>(() => queue.value[index.value] || null);
   const hasTrack = computed(() => index.value >= 0 && index.value < queue.value.length);
 
@@ -195,8 +205,45 @@ export const usePlayerStore = defineStore("player", () => {
     else active!.pause();
   }
 
+  function _regenShuffleOrder() {
+    const indices = queue.value.map((_, i) => i);
+    for (let i = indices.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [indices[i], indices[j]] = [indices[j], indices[i]];
+    }
+    _shuffleOrder = indices;
+  }
+
+  function _shuffleNextIndex(currentIdx: number): number {
+    if (_shuffleOrder.length === 0 || !_shuffleOrder.includes(currentIdx)) {
+      _regenShuffleOrder();
+      // Move current to front so it doesn't replay immediately.
+      const pos = _shuffleOrder.indexOf(currentIdx);
+      if (pos > 0) { _shuffleOrder.splice(pos, 1); _shuffleOrder.unshift(currentIdx); }
+    }
+    const pos = _shuffleOrder.indexOf(currentIdx);
+    if (pos < 0) return currentIdx;
+    if (pos + 1 < _shuffleOrder.length) return _shuffleOrder[pos + 1];
+    return repeatMode.value === "all" ? _shuffleOrder[0] : -1;
+  }
+
   function next() {
+    if (repeatMode.value === "one") {
+      // Repeat current track
+      if (active) { active.currentTime = 0; void active.play().catch(() => {}); }
+      return;
+    }
+    if (shuffle.value) {
+      const ni = _shuffleNextIndex(index.value);
+      if (ni >= 0) playAt(ni);
+      else if (repeatMode.value === "all" && queue.value.length > 0) {
+        _regenShuffleOrder();
+        playAt(_shuffleOrder[0]);
+      } else playing.value = false;
+      return;
+    }
     if (index.value < queue.value.length - 1) playAt(index.value + 1);
+    else if (repeatMode.value === "all" && queue.value.length > 0) playAt(0);
     else playing.value = false;
   }
 
@@ -204,6 +251,11 @@ export const usePlayerStore = defineStore("player", () => {
     if (!active) return;
     // Restart current track if more than 3s in, like most players.
     if (active.currentTime > 3) { active.currentTime = 0; return; }
+    if (shuffle.value) {
+      const pos = _shuffleOrder.indexOf(index.value);
+      if (pos > 0) { playAt(_shuffleOrder[pos - 1]); return; }
+      active.currentTime = 0; return;
+    }
     if (index.value > 0) playAt(index.value - 1);
     else active.currentTime = 0;
   }
@@ -219,6 +271,18 @@ export const usePlayerStore = defineStore("player", () => {
     if (elA) elA.volume = volume.value;
     if (elB) elB.volume = volume.value;
     localStorage.setItem("edgesonic:volume", String(volume.value));
+  }
+
+  function toggleRepeat() {
+    repeatMode.value = repeatMode.value === "off" ? "all" : repeatMode.value === "all" ? "one" : "off";
+    localStorage.setItem("edgesonic:repeatMode", repeatMode.value);
+  }
+
+  function toggleShuffle() {
+    shuffle.value = !shuffle.value;
+    localStorage.setItem("edgesonic:shuffle", String(shuffle.value));
+    if (shuffle.value && queue.value.length > 0) _regenShuffleOrder();
+    else _shuffleOrder = [];
   }
 
   /** Stop playback and clear queue (e.g. on logout). */
@@ -238,6 +302,8 @@ export const usePlayerStore = defineStore("player", () => {
     localStorage.removeItem("edgesonic:queue");
     localStorage.removeItem("edgesonic:currentIndex");
     localStorage.removeItem("edgesonic:currentTime");
+    localStorage.removeItem("edgesonic:repeatMode");
+    localStorage.removeItem("edgesonic:shuffle");
   }
 
   // ---- localStorage persistence ----
@@ -293,7 +359,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   return {
     queue, index, playing, currentTime, duration, volume, bufferedRanges,
-    current, hasTrack,
-    setQueue, playAt, toggle, next, prev, seek, setVolume, clear,
+    current, hasTrack, repeatMode, shuffle,
+    setQueue, playAt, toggle, next, prev, seek, setVolume,
+    toggleRepeat, toggleShuffle, clear,
   };
 });
