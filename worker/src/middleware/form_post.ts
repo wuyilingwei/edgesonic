@@ -1,5 +1,4 @@
 // ============================================================================
-// Task 047 — formPost OpenSubsonic extension.
 //
 // Real Subsonic clients (DSub, Symfonium, Navidrome web …) often POST with
 // Content-Type: application/x-www-form-urlencoded for endpoints that mutate

@@ -1,4 +1,3 @@
-// Task 076 — work_queue dedup via deterministic id + INSERT OR IGNORE.
 //
 // Two back-to-back dispatchWorkBatch calls with the same instanceId (same
 // dedupKey) must result in exactly one work_queue row, not two. Mixed batches

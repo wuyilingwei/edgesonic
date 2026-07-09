@@ -1,5 +1,4 @@
 // ============================================================================
-// 046 — Podcast RSS sync helpers
 // ----------------------------------------------------------------------------
 //   refreshChannel(db, channelId)   — fetch RSS, update channel meta + episodes
 //   refreshAllChannels(db)          — invoked by the hourly Cron Trigger

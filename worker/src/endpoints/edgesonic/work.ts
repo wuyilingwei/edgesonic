@@ -1,4 +1,3 @@
-// 052 — Browser worker pool endpoints.
 //
 // All endpoints are JSON-shaped (the /edgesonic/* bucket is web-session only,
 // the web frontend consumes JSON). Authorisation matrix:
@@ -157,7 +156,6 @@ workRoutes.post("/work/submit", async (c) => {
   }
   if (!body.id) return c.json({ ok: false, error: "Missing id" }, 400);
 
-  // 077 — pull task_type + payload alongside the auth fields so the success
   // path knows whether to cascade the result into song_masters/song_instances.
   // Before 077 we only ever stored result_json against work_queue and called it
   // done; admins saw rows pile up as "completed" while song_instances stayed
@@ -196,7 +194,6 @@ workRoutes.post("/work/submit", async (c) => {
   }
 
   // Success path.
-  // 077 — for task_type='metadata' we apply the worker's parse result against
   // the business tables BEFORE flipping work_queue.status. The apply is best-
   // effort: a failure (e.g. instance row got deleted between dispatch and
   // submit) is recorded in result_json's "apply" annotation, but we still
@@ -346,7 +343,6 @@ workRoutes.post("/work/dispatch", permissionMiddleware("dispatch_work"), async (
 // ---------------------------------------------------------------------------
 // GET /edgesonic/work/status — admin overview.
 // ---------------------------------------------------------------------------
-// One D1 aggregate + one per-user load + the last 100 rows. 087 — gated by
 // dispatch_work permission (super-admin by default per 052a); pre-087 used a
 // hardcoded `if (user.level < 3)` which violated the permission-model rule.
 workRoutes.get("/work/status", permissionMiddleware("dispatch_work"), async (c) => {
@@ -359,14 +355,26 @@ workRoutes.get("/work/status", permissionMiddleware("dispatch_work"), async (c) 
   const byStatus: Record<string, number> = { queued: 0, claimed: 0, completed: 0, failed: 0, canceled: 0 };
   for (const r of counts) byStatus[r.status] = r.n;
 
-  // Per-user active load (claimed tasks only — completed/failed don't count
-  // towards live workload).
+  // Per-user active load — claimed tasks OR recently completed (last 60s)
+  // so the "active workers" list doesn't flicker to empty between poll cycles
+  // when a task finishes but the next hasn't been claimed yet.
+  const nowSec = Math.floor(Date.now() / 1000);
   const load = (await env.DB.prepare(
     `SELECT claimed_by AS username, COUNT(*) AS n
      FROM work_queue
      WHERE status = 'claimed' AND claimed_by IS NOT NULL
+     GROUP BY claimed_by
+     UNION ALL
+     SELECT claimed_by AS username, COUNT(*) AS n
+     FROM work_queue
+     WHERE status = 'completed' AND claimed_by IS NOT NULL
+       AND heartbeat_at IS NOT NULL AND heartbeat_at > ?
      GROUP BY claimed_by`,
-  ).all<{ username: string; n: number }>()).results;
+  ).bind(nowSec - 60).all<{ username: string; n: number }>()).results;
+  // Merge duplicate usernames from the UNION
+  const merged = new Map<string, number>();
+  for (const r of load) merged.set(r.username, (merged.get(r.username) ?? 0) + r.n);
+  const loadMerged = Array.from(merged.entries()).map(([username, n]) => ({ username, n }));
 
   // Recent 100 rows (newest first) — surfaces stuck tasks at a glance.
   const recent = (await env.DB.prepare(
@@ -391,7 +399,7 @@ workRoutes.get("/work/status", permissionMiddleware("dispatch_work"), async (c) 
   return c.json({
     ok: true,
     counts: byStatus,
-    load,
+    load: loadMerged,
     recent,
   });
 });
@@ -399,7 +407,6 @@ workRoutes.get("/work/status", permissionMiddleware("dispatch_work"), async (c) 
 // ---------------------------------------------------------------------------
 // POST /edgesonic/work/cancel { id }
 // ---------------------------------------------------------------------------
-// Force-cancel a task regardless of state. 087 — gated by dispatch_work
 // permission (super-admin default per 052a). A regular worker can't drop
 // somebody else's queued metadata batch because they don't hold the
 // permission row; the previous level<3 check was a violation of the
@@ -426,7 +433,6 @@ workRoutes.post("/work/cancel", permissionMiddleware("dispatch_work"), async (c)
 // ---------------------------------------------------------------------------
 // POST /edgesonic/work/backfillCompleted
 // ---------------------------------------------------------------------------
-// 077 — Replays applyMetadataResult against every work_queue row that finished
 // before the cascade was wired in (status='completed', task_type='metadata',
 // result_json IS NOT NULL). The fix to /work/submit means new rows land
 // correctly; this endpoint is the migration path for the ~82 historical rows
@@ -499,7 +505,6 @@ workRoutes.post("/work/backfillCompleted",
 // ---------------------------------------------------------------------------
 // POST /edgesonic/work/recheckMetadataNow
 // ---------------------------------------------------------------------------
-// 110 — Manual trigger for the same selection+dispatch the cron tick runs
 // (maybeRunMetadataRecheck / utils/metadataRecheck.ts), bypassing the
 // metadata_recheck_interval_hours cadence gate so an admin can kick off a
 // re-check immediately instead of waiting up to 24h. Same permission gate as
@@ -524,7 +529,6 @@ export interface DispatchInput {
   requiredCaps?: string[];
   maxAttempts?: number;
   expiresAt?: number;
-  // 076 — When set, the row id becomes deterministic ("wt-<taskType>-<dedupKey>")
   // and the INSERT is INSERT OR IGNORE — re-dispatching the same logical task
   // (e.g. same song_instances.id metadata parse) is a no-op instead of piling
   // up duplicate rows in work_queue. Scan.ts uses this with the instanceId.
@@ -532,7 +536,6 @@ export interface DispatchInput {
 }
 
 export async function dispatchWork(db: D1Database, input: DispatchInput): Promise<string> {
-  // 076 — deterministic id when dedupKey provided. We use INSERT OR IGNORE so
   // a re-dispatch becomes a no-op; the caller still gets the canonical id back
   // and can look it up regardless of whether the INSERT actually inserted.
   const id = input.dedupKey
@@ -572,7 +575,6 @@ export async function dispatchWorkBatch(
 
   const stmts: D1PreparedStatement[] = [];
   for (const input of inputs) {
-    // 076 — same deterministic-id + INSERT OR IGNORE story as dispatchWork.
     // Per-row decision so the same batch can mix deduped + non-deduped rows.
     const id = input.dedupKey
       ? `wt-${input.taskType}-${input.dedupKey}`

@@ -1,4 +1,3 @@
-// 087 — Permission-model compliance test suite.
 //
 // Verifies that the formerly level-checked endpoints now flow through the
 // user_permissions table (permissionMiddleware or hasPermission helper), and

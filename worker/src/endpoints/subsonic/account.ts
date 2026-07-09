@@ -1,4 +1,3 @@
-// 055 — Account-level Subsonic protocol endpoints (changePassword, getAvatar).
 // Lives in the subsonic bucket because they are part of the Subsonic 1.16.1 /
 // OpenSubsonic surface and must remain at /rest/*.
 //
@@ -32,7 +31,6 @@ const changePasswordHandler = async (c: import("hono").Context<{ Bindings: Env; 
 
   const caller = c.get("user");
   const isSelf = caller.username === username;
-  // 087 — cross-user rotation gated by manage_users (the same permission used
   // by /edgesonic/users/{create,update,delete}). Pre-087 used a hardcoded
   // `caller.level < 3` which violated the permission-model rule.
   if (!isSelf) {

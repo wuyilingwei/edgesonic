@@ -1,4 +1,3 @@
-// 049 — Profile catalogue + ffmpeg arg builder.
 //
 // Profiles are the only thing engines, the Settings UI, and the
 // transcode_jobs table agree on. New profiles must be added here and

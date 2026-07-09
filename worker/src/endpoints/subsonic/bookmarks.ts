@@ -1,5 +1,4 @@
 // ============================================================================
-// 037 — Bookmarks + PlayQueue Subsonic endpoints
 // ----------------------------------------------------------------------------
 //   GET/POST /rest/getBookmarks(.view)        → list current user's bookmarks
 //   GET/POST /rest/createBookmark(.view)      → upsert (id, position, comment?)

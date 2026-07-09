@@ -11,7 +11,6 @@ export interface SongTags {
   track?: number;
   disc?: number;
   year?: number;
-  // 109 — embedded lyrics: ID3v2 USLT frame / FLAC VORBIS_COMMENT
   // LYRICS|UNSYNCEDLYRICS|SYNCEDLYRICS key. Callers (endpoints/tag/read.ts)
   // persist this to song_masters.lyrics, guarded so it never overwrites an
   // existing value (a NetEase fetch or user edit outranks an embedded tag).
@@ -69,7 +68,6 @@ function parseID3v2(buf: Uint8Array): SongTags | null {
       case "TRCK": { const n = parseInt(text(), 10); if (n) tags.track = n; found = true; break; }
       case "TPOS": { const n = parseInt(text(), 10); if (n) tags.disc = n; found = true; break; }
       case "TYER": case "TDRC": { const y = parseInt(text().substring(0, 4), 10); if (y) tags.year = y; found = true; break; }
-      // 109 — USLT (unsynchronized lyrics/text transcription): encoding(1) +
       // language(3, ignored) + short content descriptor (null-terminated per
       // the same encoding) + the actual lyrics text. First USLT frame wins.
       case "USLT": { if (!tags.lyrics) { const t = decodeUslt(body); if (t) tags.lyrics = t; } found = true; break; }
@@ -184,7 +182,6 @@ function parseVorbisComment(buf: Uint8Array): SongTags | null {
       case "TRACKNUMBER": { const n = parseInt(val, 10); if (n) tags.track = n; found = true; break; }
       case "DISCNUMBER": { const n = parseInt(val, 10); if (n) tags.disc = n; found = true; break; }
       case "DATE": case "YEAR": { const y = parseInt(val.substring(0, 4), 10); if (y) tags.year = y; found = true; break; }
-      // 109 — Mp3tag/foobar2000 write LYRICS or UNSYNCEDLYRICS; SYNCEDLYRICS
       // holds genuine LRC (with [mm:ss.xx] tags) when present, which is
       // strictly better — prefer it, then LYRICS, then UNSYNCEDLYRICS.
       case "SYNCEDLYRICS": tags.lyrics = val; found = true; break;
@@ -222,12 +219,27 @@ function parseWAV(buf: Uint8Array, fromTail = false): SongTags | null {
     }
     return null;
   }
-  // tail: search for embedded ID3 or LIST INFO markers
-  for (let i = 0; i + 10 < buf.length; i++) {
+  // tail: search for 'id3 ' chunk header or embedded ID3/LIST INFO markers.
+  // RIFF chunk header 'id3 ' (4 bytes) + size (4 bytes) to find the start
+  // of the ID3v2 data, not just the raw ID3 signature which may be at an
+  // offset inside the chunk.
+  for (let i = 0; i + 12 < buf.length; i++) {
+    // RIFF 'id3 ' chunk: 4-byte id + 4-byte size + ID3v2 data
+    if (buf[i] === 0x69 && buf[i + 1] === 0x64 && buf[i + 2] === 0x33 && buf[i + 3] === 0x20) {
+      const chunkSize = buf[i + 4] | (buf[i + 5] << 8) | (buf[i + 6] << 16) | (buf[i + 7] << 24);
+      const id3Start = i + 8;
+      const id3End = Math.min(id3Start + chunkSize, buf.length);
+      if (id3Start + 10 <= buf.length && buf[id3Start] === 0x49 && buf[id3Start + 1] === 0x44 && buf[id3Start + 2] === 0x33) {
+        const t = parseID3v2(buf.subarray(id3Start, id3End));
+        if (t) return t;
+      }
+    }
+    // Raw ID3v2 signature (without RIFF wrapper)
     if (buf[i] === 0x49 && buf[i + 1] === 0x44 && buf[i + 2] === 0x33 && buf[i + 3] <= 4 && buf[i + 4] === 0) {
       const t = parseID3v2(buf.subarray(i));
       if (t) return t;
     }
+    // LIST INFO
     if (buf[i] === 0x4c && buf[i + 1] === 0x49 && buf[i + 2] === 0x53 && buf[i + 3] === 0x54 &&
         buf[i + 8] === 0x49 && buf[i + 9] === 0x4e && buf[i + 10] === 0x46 && buf[i + 11] === 0x4f) {
       const size = buf[i + 4] | (buf[i + 5] << 8) | (buf[i + 6] << 16) | (buf[i + 7] << 24);
@@ -278,14 +290,12 @@ export interface PictureLocation {
   offset: number;
   length: number;
   mime: string;
-  // 111 — which buffer `offset` is relative to. Absent/"head" for every
   // pre-111 caller (offsets were always head-relative); "tail" only when the
   // picture was found via the WAV tail-scan fallback, so callers know they
   // must index into the TAIL slice they fetched, not the head.
   source?: "head" | "tail";
 }
 
-// 111 — head-only lookup never found WAV covers: a WAV file starts with
 // "RIFF", which matched neither of the two branches below, so any embedded
 // APIC art in a WAV's "id3 "/"ID3 " sub-chunk was silently never located.
 // `tail` mirrors parseTags' dual head/tail design (many WAV rippers append

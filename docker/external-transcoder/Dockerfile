@@ -1,4 +1,3 @@
-# 049 — EdgeSonic external transcoder container.
 #
 # Self-host this image behind any container platform (Fly.io, Hetzner,
 # Docker Compose). The Worker calls POST /transcode with

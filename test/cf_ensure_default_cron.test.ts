@@ -1,4 +1,3 @@
-// 067 — /edgesonic/cf/ensureDefaultCron unit tests.
 //
 // Coverage:
 //   1. Empty live schedules → PUT default, returns applied=true with the

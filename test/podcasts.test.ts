@@ -1,5 +1,4 @@
 // ============================================================================
-// 046 — Podcast endpoints + RSS sync round-trip
 // Run: npx tsx test/podcasts.test.ts
 // ----------------------------------------------------------------------------
 // Strategy mirrors test/lastfm_proxy.test.ts:

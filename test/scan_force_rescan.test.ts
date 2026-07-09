@@ -1,4 +1,3 @@
-// Task 076 — force=1 disables the ETag short-circuit so every existing
 // instance lands on path 2 (UPDATE + tag_scanned=0). Default scans should
 // still skip unchanged files (the 051 behaviour).
 //

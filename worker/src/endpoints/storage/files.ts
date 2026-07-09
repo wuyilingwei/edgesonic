@@ -361,6 +361,5 @@ filesRoutes.post("/files/crossCopy", permissionMiddleware("upload"), async (c) =
   return c.json({ ok: true, destUri, ...(instanceId ? { instanceId } : {}) });
 });
 
-// 055 — download / downloadMultiple moved to subsonic/download.ts (they remain
 // part of the Subsonic protocol surface at /rest/*; storage/files.ts owns the
 // non-Subsonic R2 / WebDAV management endpoints only).

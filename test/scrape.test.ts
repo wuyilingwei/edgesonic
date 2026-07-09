@@ -1,4 +1,3 @@
-// Tests for task 040 — /rest/scrapeMetadata, /rest/submitScrapeResult,
 // /tag/scrapeHistory.
 //
 // Strategy mirrors test/batch_write_tags.test.ts:

@@ -1,4 +1,3 @@
-// 055 — Permission matrix CRUD. Split out of the old endpoints/admin.ts.
 import { Hono } from "hono";
 import { permissionMiddleware, subsonicError } from "../../auth";
 import { subsonicOK } from "../../utils/xml";

@@ -1,4 +1,3 @@
-// Tests for task 092 — WebDAV presigned URL + per-credential 302 strategy.
 //
 // Coverage:
 //   1. WebDAV presign URL shape (UserInfo embedded, path encoded)
@@ -21,7 +20,6 @@ import { Hono } from "hono";
 import { mediaRoutes } from "../worker/src/endpoints/subsonic/media";
 import { createWebDAVAdapter } from "../worker/src/adapters/webdav";
 
-// 092 — stub global fetch so the WebDAV proxy path (in-Worker stream) doesn't
 // hit the real network. Returns a 200 with dummy bytes + Range support.
 const origFetch = globalThis.fetch;
 function installFetchStub() {
@@ -160,7 +158,6 @@ function makeApp(sqlite: DatabaseSync, envOverrides: Partial<Env> = {}, strategy
   const app = new Hono<{ Bindings: any; Variables: any }>();
   app.use("*", async (c, next) => {
     c.set("user", { username: "alice", level: 2, enabled: 1, password: "x" });
-    // 093 — WebDAV presign only fires for native Subsonic credentials (browsers
     // block cross-origin redirects with embedded user:password). Tests that
     // assert 302 use subsonic_cred; tests that need session behavior override
     // this explicitly.

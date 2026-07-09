@@ -1,4 +1,3 @@
-// 051 — Incremental scan unit test.
 //
 // Validates the four decision branches in asyncScanSource:
 //   1. unchanged file        → no UPDATE / no INSERT, only tag_scanned stays

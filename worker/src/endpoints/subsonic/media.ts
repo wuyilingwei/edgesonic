@@ -27,7 +27,6 @@ export const mediaRoutes = new Hono<{
 }>();
 
 // ============================================================================
-// 036 — Cover size cache.
 //
 // Workers has no Canvas API; bundling @cf-wasm/photon would add ~1.5 MB of
 // cold-start cost for an end user benefit (sub-200 KB thumbnails) we can
@@ -52,7 +51,6 @@ function parseCoverSize(raw: string | null | undefined): number | null {
 }
 
 // ============================================================================
-// 036 — Stream parameter helpers.
 // ============================================================================
 
 // Pick the best profile for a (format, maxBitRate) tuple. format is the codec
@@ -121,7 +119,6 @@ async function openSourceForTranscode(
       return r.body ? { body: r.body, contentType: r.contentType } : null;
     }
     case "s3": {
-      // 096 — S3-compatible proxy stream for transcoding
       const { getS3Config } = await import("../../adapters/index");
       const { createS3Adapter } = await import("../../adapters/s3");
       const config = await getS3Config(env.DB, parsed.sourceId);
@@ -184,7 +181,6 @@ const streamHandler = async (c: Context) => {
     if (format !== "raw" && inst.suffix === format) { selected = inst; break; }
     if (inst.suffix === selected.suffix && (inst.bit_rate || 0) > (selected.bit_rate || 0)) selected = inst;
     if (inst.suffix === "flac" && selected.suffix !== "flac") selected = inst;
-    // 093 — prefer R2 instances (Worker binding fast path + R2 presign
     // eligible). Pre-093 checked source_id === 'local' which never matched
     // the actual R2 source_id 'r2-local', so R2 copies were never preferred.
     if (inst.storage_uri.startsWith("r2://") && !selected.storage_uri.startsWith("r2://")) selected = inst;
@@ -200,7 +196,6 @@ const streamHandler = async (c: Context) => {
   const needsTranscode = formatMismatch || bitRateMismatch;
 
   if (needsTranscode) {
-    // 058 — Pre-baked instance short-circuit.
     // Before we ask the engine to do work, check whether the browser pool
     // (or any future pre-bake job) has already produced a song_instances
     // row matching the profile the client wants. When it has, we just
@@ -215,7 +210,6 @@ const streamHandler = async (c: Context) => {
         // storage_uri is r2://cache/transcoded/... so the r2 adapter handles
         // it directly, identical to serving an original.
       } else {
-    // 053 — Build a self-referential origin so the browser-pool engine can
     // hand its workers a same-origin /rest/stream URL to fetch from (the
     // session cookie carries through). Synthesise once here so both
     // browser_pool and any future engine that wants a raw URL share it.
@@ -254,7 +248,6 @@ const streamHandler = async (c: Context) => {
   const range = c.req.header("Range") || undefined;
   let result: StreamResult;
 
-  // 091/092 — Presigned URL short-circuit (R2 + WebDAV).
   //
   // When the chosen instance is on a presign-capable scheme AND the request
   // is raw (no transcode), try to 302 the browser to a direct-fetch URL so
@@ -274,7 +267,6 @@ const streamHandler = async (c: Context) => {
   // url/subsonic schemes never presign. Transcode branch never presigns.
   // Falls through to in-Worker stream on any failure / disabled path.
   if (!needsTranscode) {
-    // 103 — WebDAV hot cache: schedule a background copy to R2 so the next
     // play of this master rides the r2:// fast path instead of the proxied
     // (bandwidth-pool-throttled) WebDAV stream. Fire-and-forget; dedupe and
     // rollback live in utils/hotcache.ts. Runs before the presign 302 so the
@@ -292,7 +284,6 @@ const streamHandler = async (c: Context) => {
     }
 
     const strategy = (c.get("streamProxyStrategy") as string | undefined) || "always";
-    // 093 — WebDAV UserInfo presign embeds credentials in the redirect URL
     // (user:password@host). Browsers block cross-origin redirects with
     // embedded userinfo (CORS policy: "Redirect location contains a username
     // and password, which is disallowed for cross-origin requests"), so the
@@ -320,7 +311,6 @@ const streamHandler = async (c: Context) => {
             ttlSec: 300,
             rangeHeader: range,
           });
-          // 093 — use Hono's c.redirect() (mutable Response) instead of
           // Response.redirect() (immutable headers — the COI middleware
           // after-next stamps headers and 500s on immutable). Also stop the
           // COI/CORP stamping entirely on presign redirects: the browser
@@ -347,7 +337,6 @@ const streamHandler = async (c: Context) => {
       if (isBrowserSession) {
         // fall through to in-Worker stream
       } else {
-        // 108 — default OFF. The userinfo redirect (user:pass@host) is
         // rejected by ExoPlayer/AVFoundation/okhttp-based Subsonic clients
         // too, not just browsers — external players got a 302 they couldn't
         // follow and reported "unable to load media". It also hands the
@@ -384,7 +373,6 @@ const streamHandler = async (c: Context) => {
       result = await createWebDAVAdapter(env.DB, env).stream(selected.storage_uri, range);
       break;
     case "s3": {
-      // 096 — S3-compatible proxy stream (always proxied in v1; presign is v2)
       const { getS3Config } = await import("../../adapters/index");
       const { createS3Adapter } = await import("../../adapters/s3");
       const s3config = await getS3Config(env.DB, parsed.sourceId);
@@ -433,7 +421,6 @@ async function tryTranscodeStream(
   // Pass the instance only when the caller asked for Content-Length estimation
   // — keeps the calc opt-in and avoids broadcasting bit_rate noise.
   estimateInstance: { bit_rate: number | null; duration: number | null } | null,
-  // 053 — Pre-bake context for engines that can't synchronously transcode
   // (browser_pool). When provided, an unsupported engine call falls back to
   // a queued pre-bake instead of straight raw.
   ctx?: { instanceId: string; executionCtx: ExecutionContext<unknown>; origin: string },
@@ -444,7 +431,6 @@ async function tryTranscodeStream(
   const built = await buildTranscodeEngine(env);
   if (!built) return null;
 
-  // 053 — Browser pool can't run inline; instead schedule a pre-bake task and
   // return null so the caller serves raw. The next identical request will
   // see the pre-baked instance once song_instances registration lands.
   if (built.kind === "browser_pool" && built.engine instanceof BrowserPoolEngine && ctx) {
@@ -540,7 +526,6 @@ const getCoverArtHandler = async (c: Context) => {
     if (!album) { albumId = id; album = await queries.getAlbum(albumId); }
     if (!album) return c.body(null, 404 as never);
     coverKey = album.cover_r2_key ?? null;
-    // 102 — on-demand EMBEDDED-ART resolution. 076 dropped the on-demand path
     // entirely because its directory-image fallback assigned a shared parent
     // dir cover.jpg to every album under it; but mapAlbum/mapSong kept
     // advertising coverArt unconditionally, so every uncurated album 404'd.

@@ -1,4 +1,3 @@
-// 103 — WebDAV play-through hot cache.
 //
 // Browser sessions can never use the WebDAV presign 302 (UserInfo URLs are
 // blocked on cross-origin redirects), so their WebDAV playback is stuck on

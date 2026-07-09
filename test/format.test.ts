@@ -1,4 +1,3 @@
-// 107 — Subsonic XML/JSON 行为对齐测试
 //
 // Verifies the f=json conversion pipeline (middleware/format.ts) against the
 // OpenSubsonic spec + reference-server behaviour observed on

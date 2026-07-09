@@ -1,4 +1,3 @@
-// 049 — Transcode endpoints.
 //
 // POST /rest/transcodeFile?id=<song>&profile=<id>
 //   Manually trigger a transcode. Writes a transcode_jobs row, asks the
@@ -100,7 +99,6 @@ transcodeRoutes.post("/transcode/start", permissionMiddleware("manage_sources"),
   }
   const { engine, kind } = built;
 
-  // 053 — Browser-pool engine is async-only: instead of opening the source
   // stream here and synchronously transcoding, we hand the source URI to
   // the browser worker via the work_queue. Tested in
   // test/browser_pool_engine.test.ts. The signed /stream URL the browser

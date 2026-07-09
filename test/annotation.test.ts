@@ -1,4 +1,3 @@
-// Tests for task 033 — Subsonic Annotation endpoints.
 //
 // Strategy:
 //   * Spin up an in-memory SQLite via Node's built-in node:sqlite.

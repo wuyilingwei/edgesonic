@@ -1,4 +1,3 @@
-// 049 — External transcoder.
 //
 // Express server with three routes:
 //   GET    /health

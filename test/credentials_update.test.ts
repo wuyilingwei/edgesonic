@@ -1,4 +1,3 @@
-// 082 — POST /edgesonic/auth/credentials/update
 //
 // Inline label-rename for an existing Subsonic credential. Authorisation is
 // pinned to the session user (UPDATE WHERE id=? AND username=?), so the

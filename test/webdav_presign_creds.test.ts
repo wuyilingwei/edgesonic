@@ -1,4 +1,3 @@
-// Tests for task 097 — WebDAV read-only presign credentials.
 //
 // Coverage:
 //   1. presign_username set → presign URL uses presign_username:presign_password (not main creds)

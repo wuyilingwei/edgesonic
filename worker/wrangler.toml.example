@@ -28,7 +28,6 @@ routes = [
 # 每个实例应唯一，可用 `uuidgen` 生成
 INSTANCE_ID = "<GENERATE_A_UUID>"
 MAX_PROXY_DEPTH = "3"
-# 081 — GET /edgesonic/version 暴露此值，长时间打开的 SPA 据此检测新部署并提示刷新。
 # 每次部署前 bump（或用 `wrangler deploy --var WORKER_VERSION:$(date +%s)` 覆盖）。
 WORKER_VERSION = "1"
 
@@ -42,7 +41,6 @@ binding = "DB"
 database_name = "edgesonic-db"
 database_id = "<YOUR_D1_DATABASE_ID>"
 
-# 110 — KV namespace removed (all usage migrated to D1 in task 090).
 # To clean up: delete the KV namespace from the Cloudflare dashboard if it
 # still exists from a previous deployment.
 
@@ -54,7 +52,6 @@ bucket_name = "<YOUR_R2_BUCKET_NAME>"
 [observability]
 enabled = true
 
-# 049 — 服务端转码引擎（Sandbox SDK 容器）。默认引擎 disabled，容器在管理员启用
 # sandbox 引擎前不会构建/启动。只要线上 Worker 仍注册着 Sandbox DO，就必须保留
 # 下面的 DO 绑定，否则 wrangler deploy 会因 DO 被孤立而报错（CF error 10064）。
 [[containers]]

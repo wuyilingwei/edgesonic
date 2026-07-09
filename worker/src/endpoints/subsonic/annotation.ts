@@ -24,7 +24,6 @@ import { subsonicOK } from "../../utils/xml";
 import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../../types/subsonic";
 import type { User, Annotation } from "../../types/entities";
 
-// 035 — local helper (mirrors browsing.ts / searching.ts).
 function liteOf(row: Annotation | undefined): AnnotationLite | undefined {
   if (!row) return undefined;
   return {
@@ -177,7 +176,6 @@ const scrobbleHandler = async (c: import("hono").Context) => {
   const queries = createQueries(env.DB);
   const nowSec = Math.floor(Date.now() / 1000);
 
-  // 090 — now_playing moved from KV to D1 `now_playing` table.
   // The *last* id in the request is the currently-playing track. The
   // Subsonic protocol allows batched scrobbles but the now-playing notion is
   // singular per user → take the last entry as the "now" track.
@@ -230,7 +228,6 @@ const getStarredHandler = (tag: "starred" | "starred2") =>
       queries.getStarredSongs(user.username),
     ]);
 
-    // 035 — back-fill starred/userRating/playCount via batch annotation lookup.
     const [artistAnn, albumAnn, songAnn] = await Promise.all([
       queries.getAnnotationsMap(user.username, "artist", artists.map((a) => a.id)),
       queries.getAnnotationsMap(user.username, "album", albums.map((a) => a.id)),
@@ -262,7 +259,6 @@ const getStarredHandler = (tag: "starred" | "starred2") =>
     );
   };
 
-// 106 — register helper: both bare + .view, GET + POST.
 function register(path: string, mw: ReturnType<typeof permissionMiddleware>, handler: (c: import("hono").Context) => Promise<Response> | Response) {
   for (const p of [`/${path}`, `/${path}.view`]) {
     annotationRoutes.get(p, mw, handler);

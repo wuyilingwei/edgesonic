@@ -20,7 +20,6 @@ export interface DavEntry {
   isDir: boolean;
   size: number;
   contentType: string | null;
-  // 051 — Incremental scan signals. Both come from PROPFIND, both are nullable
   // because not every WebDAV server is honest about them (iCloud, Nextcloud,
   // generic Apache mod_dav all behave differently).
   etag: string | null;
@@ -37,7 +36,6 @@ interface SourceRow {
   mode?: string | null;
 }
 
-// 096 — S3 source row (includes region for SigV4)
 interface S3ScanSourceRow {
   id: string;
   base_url: string;
@@ -48,7 +46,6 @@ interface S3ScanSourceRow {
   mode?: string | null;
 }
 
-// 051 — Existing-instance snapshot used by asyncScanSource to decide skip/UPDATE/INSERT.
 interface ExistingRow {
   id: string;
   etag: string | null;
@@ -72,7 +69,6 @@ export const startScanHandler = async (c: import("hono").Context): Promise<Respo
      WHERE type = 'webdav' AND enabled = 1 ${onlyId ? "AND id = ?" : ""}`
   ).bind(...(onlyId ? [onlyId] : [])).all<SourceRow>()).results;
 
-  // 096 — Query S3-compatible sources
   const s3Sources = (await db.prepare(
     `SELECT id, base_url, username, password, root_path, region, mode FROM storage_sources
      WHERE type = 's3' AND enabled = 1 ${onlyId ? "AND id = ?" : ""}`
@@ -95,16 +91,13 @@ export const startScanHandler = async (c: import("hono").Context): Promise<Respo
     jobs.push({ id: jobId, source_id: src.id });
   }
 
-  // 051 — read scan_etag_check once so each background scan sees a coherent
   // snapshot; KV-fronted feature_strings makes this cheap.
-  // 076 — `?force=1` query param overrides the feature flag and disables the
   // ETag short-circuit so every existing instance hits path 2 (UPDATE +
   // tag_scanned=0). UX: scan button Shift+click → user feels work happening
   // when an otherwise-identical second scan would have skipped every row.
   const forceQuery = (c.req.query("force") || "").toLowerCase();
   const force = forceQuery === "1" || forceQuery === "true";
   const etagCheck = force ? false : (await getFeatureString(env, "scan_etag_check", "1")) !== "0";
-  // 052 — when the browser worker pool is enabled, every changed/new file
   // gets a `metadata` task pushed into work_queue so opted-in browsers will
   // parse the tags. The scan job itself is unchanged — the dispatch happens
   // after asyncScanSource finishes flushing its INSERT/UPDATE batch.
@@ -118,7 +111,6 @@ export const startScanHandler = async (c: import("hono").Context): Promise<Respo
     const job = jobs[jobIdx++];
     exec.waitUntil(asyncScanSource(db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled, env }));
   }
-  // 096 — S3 sources
   for (const src of s3Sources) {
     const job = jobs[jobIdx++];
     exec.waitUntil(asyncScanS3Source(env, db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled }));
@@ -175,7 +167,6 @@ export const getScanStatusHandler = async (c: import("hono").Context): Promise<R
 scanRoutes.get("/scan/start", permissionMiddleware("manage_sources"), startScanHandler);
 scanRoutes.get("/scan/status", getScanStatusHandler);
 
-// 051 — pending list for the BROWSER READ queue. Files.vue polls this so it
 // knows how many tag re-reads remain after an incremental scan flips
 // tag_scanned back to 0. JSON response (the whole /storage/* bucket is JSON-
 // shaped, unlike /rest/* which is XML).
@@ -296,7 +287,6 @@ scanRoutes.get("/scan/listForMirror", permissionMiddleware("manage_sources"), as
 // Run the actual WebDAV scan for a single source. Updates scan_jobs progress
 // every SCAN_PROGRESS_CHUNK files; sets status=completed | failed on exit.
 //
-// 051 — Incremental: each remote file is matched against its previous
 // (source_etag, source_last_modified, size). When all three agree we skip the
 // row entirely; when any differ we UPDATE the meta + reset tag_scanned=0 so
 // the BROWSER READ queue (or Worker tag parser) re-reads the new bytes.
@@ -312,7 +302,6 @@ export async function asyncScanSource(
   const queries = createQueries(db);
   const now = Math.floor(Date.now() / 1000);
   const etagCheck = opts.etagCheck !== false;            // default true
-  // 052 — opt-in: when true and the row has tag_scanned=0 after the scan,
   // enqueue a `metadata` task. Off by default so existing callers
   // (scheduledScan etc) don't accidentally double-dispatch.
   const dispatchToWorkerPool = opts.dispatchToWorkerPool === true;
@@ -320,7 +309,6 @@ export async function asyncScanSource(
   // UPDATEs). We dispatch in one batch after the scan loop so the work_queue
   // INSERTs don't compete with the scan's UPDATE/INSERT batches.
   const dispatchTargets: Array<{ instanceId: string; uri: string; suffix: string; size: number }> = [];
-  // 094 — Track brand-new INSERTs (instance uri + master_id) so we can pull
   // sibling .lrc sidecars after the row flush. We deliberately scope sidecar
   // import to new rows only: a re-scan of an unchanged file implies the
   // lyrics are already in D1 (or were absent the first time and still are).
@@ -329,7 +317,6 @@ export async function asyncScanSource(
     const { entries, complete } = await listWebdav(src);
     const audio = entries.filter((e) => !e.isDir && AUDIO_EXT.has(extOf(e.path)));
 
-    // 051 — pull the prior snapshot (etag/lm/size/tag_scanned) for each
     // existing instance keyed by storage_uri. One query instead of N per-file
     // lookups so D1 reads stay bounded by the source's row count.
     const existingMap = new Map<string, ExistingRow>();
@@ -506,7 +493,6 @@ export async function asyncScanSource(
     await db.prepare("UPDATE storage_sources SET last_sync = ? WHERE id = ?")
       .bind(now, src.id).run();
 
-    // 052 — fan out metadata work to the browser worker pool. We do this
     // after the scan finishes writing rows so the work_queue inserts don't
     // contend with the source-of-truth UPSERTs. Failure is logged but does
     // not flip the scan_job to 'failed' — the queue is best-effort.
@@ -522,7 +508,6 @@ export async function asyncScanSource(
           },
           requiredCaps: ["music-metadata"],
           priority: 5,
-          // 076 — deterministic dedup key per instance. Re-running scan twice
           // (or hitting the existing-instance-with-tag_scanned=0 path on a
           // skipped row) now resolves to the same work_queue row instead of
           // piling up duplicates. Cleared once the task reaches a terminal
@@ -534,7 +519,6 @@ export async function asyncScanSource(
       }
     }
 
-    // 094 — Import sibling .lrc sidecars for every newly-inserted instance.
     // Best-effort: a per-file fetch failure is logged and skipped; we never
     // flip the scan_job to 'failed' because of a missing/oversized .lrc.
     // We only run when env is available (callers that don't pass env — e.g.
@@ -566,7 +550,6 @@ export async function asyncScanSource(
   }
 }
 
-// 096 — S3 scanner. Mirrors asyncScanSource but uses ListObjectsV2 pagination
 // instead of WebDAV PROPFIND. S3 objects are always flat (no isDir); we
 // paginate until nextToken is null or MAX_S3_PAGES is reached.
 const MAX_S3_PAGES = 50; // 50 × 1000 = 50k objects max per invocation
@@ -823,7 +806,6 @@ async function listWebdav(
     return fetch(url, {
       method: "PROPFIND",
       headers: { Authorization: auth, Depth: depth, "Content-Type": "application/xml" },
-      // 051 — request getetag + getlastmodified so the incremental scanner can
       // decide whether to skip the row. Servers that don't support these props
       // still return the rest in the multistatus; parseMultistatus tolerates
       // missing tags by emitting null.
@@ -891,7 +873,6 @@ export function parseMultistatus(xml: string, basePath: string): DavEntry[] {
     const isDir = /<(?:[A-Za-z][\w-]*:)?collection\b/.test(block);
     const sizeM = /<(?:[A-Za-z][\w-]*:)?getcontentlength[^>]*>(\d+)</.exec(block);
     const typeM = /<(?:[A-Za-z][\w-]*:)?getcontenttype[^>]*>([^<]+)</.exec(block);
-    // 051 — getetag is usually quoted (`"abc-123"`). Strip the wrapping quotes
     // so equality compares the raw tag instead of `"x"` vs `x`.
     const etagM = /<(?:[A-Za-z][\w-]*:)?getetag[^>]*>([^<]+)</.exec(block);
     const lmM = /<(?:[A-Za-z][\w-]*:)?getlastmodified[^>]*>([^<]+)</.exec(block);

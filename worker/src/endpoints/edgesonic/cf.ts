@@ -1,4 +1,3 @@
-// 054 — Cloudflare API integration.
 //
 // All endpoints live under /edgesonic/cf/* (web-session-only via the
 // /edgesonic prefix in auth.ts). Authorisation:
@@ -32,7 +31,6 @@ export const cfRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-// 087 — unified permission model. Every endpoint here used to call the local
 // `requireSuper(user)` helper which checked `user.level < 3` directly. That
 // hardcoded level check violated the project rule that authorisation lives in
 // the user_permissions table, not in the level integer. We now mount a route-
@@ -47,7 +45,6 @@ export const cfRoutes = new Hono<{
 // Scoping to this file's /cf/* prefix keeps the protection without the leak.
 cfRoutes.use("/cf/*", permissionMiddleware("manage_cloudflare"));
 
-// Script name must match wrangler.toml `name = "edgesonic"`. 093 — read from
 // env.WORKER_NAME (wrangler.toml [vars]) so a renamed deployment picks up the
 // new name without a code change. Falls back to "edgesonic" for deployments
 // that haven't yet added WORKER_NAME to their [vars].
@@ -285,7 +282,6 @@ cfRoutes.get("/cf/getCron", async (c) => {
 // ---------------------------------------------------------------------------
 // GET /edgesonic/cf/ensureDefaultCron
 // ---------------------------------------------------------------------------
-// 067 — wrangler deploy clears the Worker's schedules list (the static
 // [triggers] block was removed from wrangler.toml so the runtime CF API is
 // the single source of truth). After every deploy a super admin opens
 // Settings → Cloudflare integration and clicks "Ensure default cron"; this

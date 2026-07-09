@@ -1,4 +1,3 @@
-// 055 — Storage management bucket. Mounted at /storage/* by router.ts. All
 // endpoints require a web-session credential (enforced at auth.ts prefix level).
 import { Hono } from "hono";
 import { sourcesRoutes } from "./sources";

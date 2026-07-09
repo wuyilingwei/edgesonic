@@ -1,4 +1,3 @@
-// 036 — Lyrics endpoints (Subsonic getLyrics + OpenSubsonic songLyrics ext).
 //
 // GET /rest/getLyrics?artist=<a>&title=<t>
 //   Subsonic v1.2+ classic endpoint. Returns:
@@ -28,7 +27,6 @@ export const lyricsRoutes = new Hono();
 // Reused by both endpoints: given a master row, return existing lyrics or
 // fetch externally + persist. Never throws — fetch failures return null.
 //
-// 094 — Resolution order is now:
 //   1. song_masters.lyrics (D1) — populated by writeTags / prior fetch /
 //      scan-time .lrc sidecar import.
 //   2. Sibling .lrc sidecar (R2 / WebDAV only). Local-first beats a round-trip
@@ -47,7 +45,6 @@ async function resolveLyrics(
 ): Promise<string | null> {
   if (existing && existing.trim().length > 0) return existing;
 
-  // 094 — Try a sibling .lrc sidecar next, before hitting NetEase. The
   // sidecar lookup needs a song_instances.storage_uri; pick the first
   // eligible instance (R2 preferred by getSongInstances' ordering). Only
   // r2:// and webdav:// URIs are eligible — url/subsonic short-circuit
@@ -202,7 +199,6 @@ const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
 
   const lyrics = await resolveLyrics(env, env.DB, master.id, artistName, master.title, master.lyrics);
 
-  // OpenSubsonic `songLyrics` shape (108 — aligned with the spec clients
   // actually parse):
   //   <lyricsList>
   //     <structuredLyrics displayArtist="..." displayTitle="..." lang="xxx" synced="true|false">
@@ -241,7 +237,6 @@ const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
 };
 
 // ---------------------------------------------------------------------------
-// 108 — LRC → structured lines.
 // Timestamped lines ("[mm:ss.xx]text", repeated timestamps allowed) become
 // {start: ms, value} entries sorted by start; pure metadata tag lines
 // ("[ti:..]", "[ar:..]", "[by:..]", "[offset:..]"...) are dropped; if the

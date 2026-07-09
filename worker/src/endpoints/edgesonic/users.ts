@@ -1,6 +1,4 @@
-// 055 — User CRUD. Originally split out of endpoints/admin.ts with XML envelopes
 // kept verbatim during the bucket refactor.
-// 072 — JSON-ified to match the rest of the /edgesonic bucket (work/*, cf/*,
 // features/*, users/setAvatar all return JSON). The Subsonic-XML shape was a
 // historical leftover and forced Users.vue / Dashboard.vue to lean on a
 // hand-rolled `parseXmlAttrs` regex that was easy to break.
@@ -160,10 +158,8 @@ usersRoutes.post("/users/delete", permissionMiddleware("manage_users"), async (c
 });
 
 // ============================================================================
-// 064 — POST /edgesonic/users/setAvatar
 // ----------------------------------------------------------------------------
 // Body (JSON): { username, imageBase64, mimeType }
-//   • imageBase64 — raw base64 OR data: URL form. Leading "data:image/..;base64,"
 //     prefix is stripped.
 //   • mimeType    — must be 'image/jpeg' or 'image/png'. Other mimes (webp / gif
 //     / avif) are rejected to keep the getAvatar fallback path simple and to
@@ -199,7 +195,6 @@ usersRoutes.post("/users/setAvatar", async (c) => {
   }
 
   // ---- Auth: self or manage_users -----------------------------------------
-  // 087 — cross-user write gated by manage_users (matches the list/create/
   // update/delete endpoints in this file). Pre-087 used a hardcoded
   // `caller.level < 2` which violated the permission-model rule.
   const caller = c.get("user");

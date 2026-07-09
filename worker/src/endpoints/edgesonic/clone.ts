@@ -1,4 +1,3 @@
-// 094 — Subsonic server clone: write-side endpoints.
 //
 // The browser drives the clone (see web/src/views/Settings.vue "Clone
 // Subsonic server" sub-block): it fetches metadata + bytes directly from
@@ -15,6 +14,7 @@
 // users / credentials use UPSERT so re-cloning refreshes the local copy.
 
 import { Hono } from "hono";
+import { md5 } from "../../utils/md5";
 import { permissionMiddleware, sha256 } from "../../auth";
 import type { User } from "../../types/entities";
 
@@ -22,6 +22,58 @@ export const cloneRoutes = new Hono<{
   Bindings: Env;
   Variables: { user: User };
 }>();
+
+function signedUpstreamUrl(baseUrl: string, username: string, password: string, path: string, params?: Record<string, string>): string {
+  const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
+  const q = new URLSearchParams({
+    u: username,
+    t: md5(password + s),
+    s,
+    v: "1.16.1",
+    c: "EdgeSonicCloneProxy",
+    f: "json",
+    ...(params || {}),
+  });
+  return `${baseUrl.replace(/\/+$/, "")}/rest/${path}?${q.toString()}`;
+}
+
+// 110 — CORS-safe clone proxy. The browser POSTs upstream credentials to the
+// EdgeSonic worker; the worker performs the upstream fetch server-side and
+// returns the raw response. This avoids browser CORS restrictions when the
+// upstream Subsonic server doesn't emit Access-Control-Allow-Origin.
+cloneRoutes.post("/clone/proxy", permissionMiddleware("manage_users"), async (c) => {
+  const body = await c.req.json<{
+    upstreamUrl?: string;
+    username?: string;
+    password?: string;
+    path?: string;
+    params?: Record<string, string>;
+    binary?: boolean;
+  }>().catch(() => ({} as {
+    upstreamUrl?: string; username?: string; password?: string; path?: string; params?: Record<string, string>; binary?: boolean;
+  }));
+  if (!body.upstreamUrl || !body.username || !body.password || !body.path) {
+    return c.json({ ok: false, error: "Missing upstreamUrl / username / password / path" }, 400);
+  }
+  const url = signedUpstreamUrl(body.upstreamUrl, body.username, body.password, body.path, body.params);
+  const resp = await fetch(url);
+  if (body.binary) {
+    const ab = await resp.arrayBuffer();
+    return new Response(ab, {
+      status: resp.status,
+      headers: {
+        "Content-Type": resp.headers.get("Content-Type") || "application/octet-stream",
+      },
+    });
+  }
+  const text = await resp.text();
+  return new Response(text, {
+    status: resp.status,
+    headers: {
+      "Content-Type": resp.headers.get("Content-Type") || "application/json; charset=UTF-8",
+    },
+  });
+});
 
 // ---------------------------------------------------------------------------
 // POST /edgesonic/clone/upsertMaster

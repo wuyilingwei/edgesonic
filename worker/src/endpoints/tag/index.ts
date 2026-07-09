@@ -1,4 +1,3 @@
-// 055 — Tag management bucket. Mounted at /tag/* by router.ts. Every endpoint
 // requires a web-session credential (auth.ts prefix check) plus the relevant
 // permission (edit_tags / manage_sources / manage_files).
 import { Hono } from "hono";

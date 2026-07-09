@@ -1,4 +1,3 @@
-// 035 — OpenSubsonic protocol declaration.
 //
 // Routes:
 //   - GET/POST /rest/getOpenSubsonicExtensions  (no auth — declared in auth.ts NO_AUTH_PATHS)

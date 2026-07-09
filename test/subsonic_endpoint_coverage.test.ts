@@ -1,4 +1,3 @@
-// 106 — Subsonic 1.16.1 endpoint coverage test.
 //
 // Verifies that every endpoint defined in the Subsonic 1.16.1 spec is
 // registered at /rest/<name> AND /rest/<name>.view, accepting both GET and

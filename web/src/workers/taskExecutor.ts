@@ -1,4 +1,3 @@
-// 052 — Browser worker pool: task executor (Web Worker entry).
 // ---------------------------------------------------------------------------
 // Runs as a dedicated Worker (module type) instantiated by stores/workerPool.ts
 // for each claimed task. Receives one task via postMessage, runs it, posts
@@ -15,7 +14,7 @@
 // player UI MUST stay responsive; offloading is the cheap insurance.
 
 import { parseBuffer } from "music-metadata";
-import { lyricsTagsToText } from "../lib/metadata";
+import { lyricsTagsToText, nativeLyricsFallback } from "../lib/metadata";
 
 // Wire shape — matches the `tasks[]` returned by /edgesonic/work/poll. Kept
 // minimal here because the worker can only trust what the Worker handed it
@@ -26,7 +25,6 @@ interface Task {
   payload: Record<string, unknown>;
 }
 
-// 078 — keep worker error reporting short and informative. The main thread
 // truncates again to 500 in workerPool.ts → /work/submit truncates again to
 // 500 in work.ts. Doing it here too keeps each postMessage cheap.
 const ERR_LIMIT = 500;
@@ -60,7 +58,6 @@ self.addEventListener("message", async (e: MessageEvent<Task>) => {
   }
 });
 
-// 078 — top-level safety nets. Before this, a syntax error in the dynamic
 // import (e.g. @ffmpeg/ffmpeg) or an unhandled rejection inside a then-chain
 // that escapes the handler above would only surface as an `ErrorEvent` on the
 // main thread — which Chromium often delivers with an empty `.message` for
@@ -100,43 +97,82 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
   const streamUrl = String(payload.streamUrl || "");
   if (!streamUrl) throw new Error("metadata task missing streamUrl (main thread should populate)");
 
-  // 512KB window — large enough for an ID3v2 header with embedded artwork
-  // plus the first frame, small enough not to pull a 100MB FLAC end-to-end.
-  // music-metadata handles partial inputs by reporting whatever tags it could
-  // extract from the available bytes.
+  // anywhere in the file — often AFTER the data chunk (which can be 70+ MB).
+  // A 512KB head only covers the start; the ID3 block at the tail is missed.
+  // Strategy: fetch head (2MB for large ID3v2 headers with artwork) + tail
+  // (512KB for trailing id3/INFO chunks). Concatenate with a gap so
+  // music-metadata sees both regions. For non-WAV the tail fetch is skipped
+  // (FLAC/MP3/M4A tags are at the head).
+  const isWav = (payload.suffix || "").toLowerCase() === "wav";
+  const HEAD_BYTES = 2 * 1024 * 1024; // 2MB — covers large ID3v2 + APIC
+  const TAIL_BYTES = 512 * 1024;      // 512KB — trailing id3/INFO chunk
+
   const headResp = await fetch(streamUrl, {
-    headers: { Range: "bytes=0-524287" },
+    headers: { Range: `bytes=0-${HEAD_BYTES - 1}` },
   });
   if (!headResp.ok && headResp.status !== 206 && headResp.status !== 200) {
     throw new Error(`stream fetch failed: HTTP ${headResp.status}`);
   }
-  const buf = new Uint8Array(await headResp.arrayBuffer());
+  let buf = new Uint8Array(await headResp.arrayBuffer());
 
-  // 111 — WAV duration was coming back as ~3 seconds for multi-minute files.
-  // Root cause: music-metadata's WaveParser clamps the "data" chunk length to
-  // `tokenizer.fileInfo.size - position` when the declared chunk is bigger
-  // than what's available — and parseBuffer(), given nothing but this 512KB
-  // slice, sets fileInfo.size to the SLICE'S length (512KB), not the true
-  // remote file size. It then computes duration from that clamped (tiny)
-  // chunk length, landing on "however many seconds of PCM fit in 512KB"
-  // (~3s at CD quality) regardless of the file's real length. Passing the
-  // true size (Content-Range's total, falling back to the dispatch payload's
-  // `size`) fixes this at the source for WAV and any other format whose
-  // duration/bitrate math depends on tokenizer.fileInfo.size.
   const contentRange = headResp.headers.get("content-range");
   const rangeTotalMatch = contentRange ? /\/(\d+)\s*$/.exec(contentRange) : null;
   const totalSize = rangeTotalMatch
     ? parseInt(rangeTotalMatch[1], 10)
     : (Number(payload.size) || 0);
 
+  // music-metadata's WaveParser only reads from the head buffer, but the
+  // ID3v2 parser inside it scans for "id3 " chunks which can be at the end.
+  // We append the tail bytes to the head buffer with a zero gap so the parser
+  // can find trailing chunks via offset arithmetic.
+  if (isWav && totalSize > buf.length + TAIL_BYTES) {
+    try {
+      const tailStart = totalSize - TAIL_BYTES;
+      const tailResp = await fetch(streamUrl, {
+        headers: { Range: `bytes=${tailStart}-${totalSize - 1}` },
+      });
+      if (tailResp.ok || tailResp.status === 206) {
+        const tailBuf = new Uint8Array(await tailResp.arrayBuffer());
+        // Concatenate: head + gap (zeros) + tail. The gap is filled with zeros
+        // so the WAV parser sees a valid (if padded) stream. music-metadata's
+        // tokenizer will read chunk headers from both regions.
+        const gap = totalSize - buf.length - tailBuf.length;
+        if (gap > 0 && gap < 100 * 1024 * 1024) { // sanity: don't alloc >100MB
+          const combined = new Uint8Array(buf.length + gap + tailBuf.length);
+          combined.set(buf, 0);
+          // gap region stays zero-filled
+          combined.set(tailBuf, buf.length + gap);
+          buf = combined;
+        }
+      }
+    } catch { /* tail fetch optional — head alone still works for duration */ }
+  }
+
   // 093e — parse WITH covers so we can extract the embedded album art and
   // ship it back to the worker for R2 storage + album.cover_r2_key update.
   // skipCovers was previously true, which left every album with cover_r2_key
   // NULL → getCoverArt 404 for the whole library.
-  const meta = await parseBuffer(buf, {
-    mimeType: headResp.headers.get("content-type") || undefined,
-    size: totalSize > buf.length ? totalSize : undefined,
-  }, { duration: true, skipCovers: false });
+  // and no defaultSampleDuration in track fragment header" when the moof
+  // fragment is incomplete (we only fetched a head slice). Wrap in try/catch
+  // and fallback to basic atom parsing for the title/artist/album tags.
+  let meta;
+  try {
+    meta = await parseBuffer(buf, {
+      mimeType: headResp.headers.get("content-type") || undefined,
+      size: totalSize > buf.length ? totalSize : undefined,
+    }, { duration: true, skipCovers: false });
+  } catch (parseErr) {
+    // fMP4 crash — try without duration (avoids reading sample tables)
+    try {
+      meta = await parseBuffer(buf, {
+        mimeType: headResp.headers.get("content-type") || undefined,
+        size: totalSize > buf.length ? totalSize : undefined,
+      }, { duration: false, skipCovers: false });
+    } catch {
+      // Total failure — return minimal result with just the error
+      throw new Error(`metadata parse failed: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
+    }
+  }
 
   // Extract first embedded picture (APIC for ID3, PICTURE for FLAC, etc).
   // Cap at 200KB so result_json stays under the column cap. If the picture is
@@ -173,11 +209,10 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
       year:        meta.common.year ? String(meta.common.year) : "",
       track:       meta.common.track?.no ? String(meta.common.track.no) : "",
       disc:        meta.common.disk?.no ? String(meta.common.disk.no) : "",
-      // 109 — the browser worker pool never read common.lyrics at all before
       // this; songs scanned via work_queue (the primary multi-format path,
       // 052a/052b) never got embedded lyrics into D1. lyricsTagsToText is
       // shared with the 041 local-scan path (web/src/lib/metadata.ts).
-      lyrics:      lyricsTagsToText(meta.common.lyrics) || "",
+      lyrics:      lyricsTagsToText(meta.common.lyrics) || nativeLyricsFallback(meta.native) || "",
       duration:    meta.format.duration ? Math.round(meta.format.duration) : 0,
       bitrate:     meta.format.bitrate ? Math.round(meta.format.bitrate / 1000) : 0,
       sampleRate:  meta.format.sampleRate || 0,

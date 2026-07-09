@@ -14,13 +14,10 @@ function goNowPlaying() {
   router.push("/now-playing");
 }
 
-// 102: size must come from the backend allow-list (64/96/128/…): 80 was
-// silently ignored, so the sized cache never engaged. On 404 (album without
-// embedded/curated art) fall back to the ♪ placeholder instead of a broken img.
 const coverFailed = ref(false);
 const coverSrc = computed(() => {
-  const t = player.current;
-  return t?.coverArt ? coverArtUrl(t.coverArt, 96) : "";
+  const tr = player.current;
+  return tr?.coverArt ? coverArtUrl(tr.coverArt, 96) : "";
 });
 watch(coverSrc, () => { coverFailed.value = false; });
 
@@ -28,10 +25,6 @@ const progressPct = computed(() =>
   player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0,
 );
 
-// 093d — buffered range segments rendered as a light bar behind the
-// play-progress fill. Each tuple is [startSec, endSec]; we map to % of
-// duration. Browsers usually return one continuous range [0, N] for
-// streaming media but may return multiple ranges after seeks.
 const bufferedSegments = computed(() => {
   if (player.duration <= 0) return [] as { left: number; width: number }[];
   return player.bufferedRanges.map(([s, e]) => ({
@@ -68,6 +61,15 @@ function onProgressDown(e: MouseEvent) {
 function onVolume(e: Event) {
   player.setVolume(parseFloat((e.target as HTMLInputElement).value));
 }
+
+// ---- Queue panel (in player bar) ----
+const queueOpen = ref(false);
+function playFromQueue(i: number) { player.playAt(i); }
+function removeFromQueue(i: number) {
+  if (i === player.index) return;
+  player.queue.splice(i, 1);
+  if (i < player.index) player.index--;
+}
 </script>
 
 <template>
@@ -76,7 +78,7 @@ function onVolume(e: Event) {
     <div class="pb-track">
       <div class="pb-cover" @click="goNowPlaying" :class="{ clickable: player.hasTrack }">
         <img v-if="coverSrc && !coverFailed" :src="coverSrc" alt="" @error="coverFailed = true" />
-        <span v-else class="pb-cover-placeholder">♪</span>
+        <svg v-else viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
       </div>
       <div v-if="player.current" class="pb-meta" @click="goNowPlaying" :class="{ clickable: player.hasTrack }">
         <div class="pb-title" :title="player.current.title">{{ player.current.title }}</div>
@@ -91,20 +93,26 @@ function onVolume(e: Event) {
     <!-- Controls + progress -->
     <div class="pb-center">
       <div class="pb-controls">
-        <button class="pb-btn" :class="{ active: player.shuffle }" :disabled="!player.hasTrack" :title="t('player.shuffle')" @click="player.toggleShuffle()">🔀</button>
-        <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.previous')" @click="player.prev()">⏮</button>
-        <button class="pb-btn pb-play" :disabled="!player.hasTrack" :title="player.playing ? t('player.pause') : t('player.play')" @click="player.toggle()">
-          {{ player.playing ? "⏸" : "▶" }}
+        <button class="pb-btn" :class="{ active: player.shuffle }" :disabled="!player.hasTrack" :title="t('player.shuffle')" @click="player.toggleShuffle()">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17L10.59 9.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.92 7.41-1.42 1.42 3.54 3.54L20 14.5V20h-5.5l2.04-2.04-3.12-3.12z"/></svg>
         </button>
-        <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.next')" @click="player.next()">⏭</button>
-        <button class="pb-btn" :class="{ active: player.repeatMode !== 'off' }" :disabled="!player.hasTrack" :title="t('player.repeat')" @click="player.toggleRepeat()">
-          {{ player.repeatMode === "one" ? "🔂" : "🔁" }}
+        <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.previous')" @click="player.prev()">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z"/></svg>
+        </button>
+        <button class="pb-btn pb-play" :disabled="!player.hasTrack" :title="player.playing ? t('player.pause') : t('player.play')" @click="player.toggle()">
+          <svg v-if="player.playing" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
+          <svg v-else viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M8 5v14l11-7L8 5z"/></svg>
+        </button>
+        <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.next')" @click="player.next()">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+        </button>
+        <button class="pb-btn" :class="{ active: player.repeatMode !== 'off' }" :disabled="!player.hasTrack" :title="player.repeatMode === 'one' ? '单曲循环' : player.repeatMode === 'all' ? '列表循环' : '关闭循环'" @click="player.toggleRepeat()">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
         </button>
       </div>
       <div class="pb-progress-row">
         <span class="pb-time">{{ formatDuration(Math.floor(player.currentTime)) }}</span>
         <div ref="progressEl" class="pb-progress" :class="{ disabled: !player.hasTrack }" @mousedown="onProgressDown">
-          <!-- 093d — buffered ranges (light bar behind the play fill) -->
           <div
             v-for="(seg, i) in bufferedSegments"
             :key="i"
@@ -118,16 +126,52 @@ function onVolume(e: Event) {
       </div>
     </div>
 
-    <!-- Volume -->
+    <!-- Volume + Queue toggle -->
     <div class="pb-right">
-      <span class="pb-vol-icon">{{ player.volume === 0 ? "🔇" : "🔊" }}</span>
       <input
         class="pb-volume"
         type="range" min="0" max="1" step="0.02"
         :value="player.volume"
         @input="onVolume"
+        title="音量"
       />
+      <button class="pb-queue-btn" :class="{ active: queueOpen }" @click="queueOpen = !queueOpen" title="播放列表">
+        <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M3 6h13v2H3V6zm0 5h13v2H3v-2zm0 5h9v2H3v-2zm15 0v-6l5 3-5 3z"/></svg>
+        <span class="pb-queue-count" v-if="player.queue.length">{{ player.queue.length }}</span>
+      </button>
     </div>
+
+    <!-- Queue panel (slides up from player bar) -->
+    <transition name="queue-up">
+      <div v-if="queueOpen" class="pb-queue-panel">
+        <div class="pb-queue-header">
+          <span>播放列表 ({{ player.queue.length }})</span>
+          <button class="pb-queue-close" @click="queueOpen = false">
+            <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+        <div class="pb-queue-list">
+          <div
+            v-for="(tr, i) in player.queue"
+            :key="tr.id + '-' + i"
+            class="pb-queue-item"
+            :class="{ playing: i === player.index }"
+            @click="playFromQueue(i)"
+          >
+            <span class="pb-queue-idx">{{ String(i + 1).padStart(2, "0") }}</span>
+            <div class="pb-queue-meta">
+              <div class="pb-queue-title">{{ tr.title }}</div>
+              <div class="pb-queue-artist">{{ tr.artist }}</div>
+            </div>
+            <span class="pb-queue-dur">{{ formatDuration(Math.floor(tr.duration)) }}</span>
+            <button v-if="i !== player.index" class="pb-queue-rm" @click.stop="removeFromQueue(i)">
+              <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+          </div>
+          <div v-if="player.queue.length === 0" class="pb-queue-empty">播放列表为空</div>
+        </div>
+      </div>
+    </transition>
   </footer>
 </template>
 
@@ -147,19 +191,19 @@ function onVolume(e: Event) {
 }
 
 /* --- track info --- */
-.pb-track { display: flex; align-items: center; gap: 0.8rem; width: 260px; min-width: 0; flex-shrink: 0; }
+.pb-track { display: flex; align-items: center; gap: 0.8rem; width: 240px; min-width: 0; flex-shrink: 0; }
 .pb-cover {
-  width: 48px; height: 48px; flex-shrink: 0;
+  width: 44px; height: 44px; flex-shrink: 0;
   background: var(--color-bg-tertiary);
   border: 1px solid var(--color-border-subtle);
   display: flex; align-items: center; justify-content: center;
   overflow: hidden;
+  color: var(--color-text-muted);
 }
 .pb-cover.clickable, .pb-meta.clickable { cursor: pointer; }
 .pb-cover.clickable:hover { border-color: var(--color-accent-dim); }
 .pb-meta.clickable:hover .pb-title { color: var(--color-accent-primary); }
 .pb-cover img { width: 100%; height: 100%; object-fit: cover; }
-.pb-cover-placeholder { color: var(--color-text-muted); font-size: 1.2rem; }
 .pb-meta { min-width: 0; }
 .pb-title {
   font-size: var(--fs-md); color: var(--color-text-primary); font-weight: 700;
@@ -178,24 +222,26 @@ function onVolume(e: Event) {
 
 /* --- center controls --- */
 .pb-center { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 0.15rem; }
-.pb-controls { display: flex; align-items: center; gap: 0.8rem; }
+.pb-controls { display: flex; align-items: center; gap: 0.6rem; }
 .pb-btn {
+  background: none; border: none;
   color: var(--color-text-secondary);
-  font-size: 0.9rem;
   width: 28px; height: 28px;
   display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
   transition: color 0.2s;
+  padding: 0;
 }
 .pb-btn:hover:not(:disabled) { color: var(--color-accent-primary); }
 .pb-btn:disabled { color: var(--color-text-muted); opacity: 0.4; cursor: not-allowed; }
-.pb-btn.active { color: var(--color-accent-primary); border-color: var(--color-accent-dim); }
+.pb-btn.active { color: var(--color-accent-primary); }
 .pb-play {
   width: 34px; height: 34px;
   border: 1px solid var(--color-border-strong);
   border-radius: 2px;
   color: var(--color-text-primary);
 }
-.pb-play:hover:not(:disabled) { background: var(--color-accent-dim); box-shadow: var(--glow); }
+.pb-play:hover:not(:disabled) { background: var(--color-accent-dim); }
 
 .pb-progress-row { display: flex; align-items: center; gap: 0.6rem; width: 100%; max-width: 560px; }
 .pb-time {
@@ -227,15 +273,117 @@ function onVolume(e: Event) {
 }
 .pb-progress:hover .pb-progress-thumb, .pb-progress-thumb.active { opacity: 1; }
 
-/* --- volume --- */
-.pb-right { display: flex; align-items: center; gap: 0.5rem; width: 150px; flex-shrink: 0; justify-content: flex-end; }
-.pb-vol-icon { font-size: 0.8rem; opacity: 0.7; }
-.pb-volume { width: 90px; accent-color: var(--color-accent-primary); cursor: pointer; }
+/* --- right: volume + queue --- */
+.pb-right { display: flex; align-items: center; gap: 0.6rem; width: 180px; flex-shrink: 0; justify-content: flex-end; }
+.pb-volume { width: 80px; accent-color: var(--color-accent-primary); cursor: pointer; }
+.pb-queue-btn {
+  position: relative;
+  background: none; border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.pb-queue-btn:hover, .pb-queue-btn.active { color: var(--color-accent-primary); border-color: var(--color-accent-dim); }
+.pb-queue-count {
+  position: absolute;
+  top: -6px; right: -6px;
+  background: var(--color-accent-dim);
+  color: var(--color-text-primary);
+  border-radius: 8px;
+  padding: 0 0.3rem;
+  font-size: var(--fs-xs);
+  font-family: var(--font-mono);
+  min-width: 14px;
+  text-align: center;
+}
+
+/* --- queue panel --- */
+.pb-queue-panel {
+  position: absolute;
+  bottom: var(--player-h);
+  right: 0;
+  width: 380px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  box-shadow: 0 -4px 24px rgba(0,0,0,0.3);
+  overflow: hidden;
+  z-index: 200;
+}
+.pb-queue-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.7rem 1rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--fs-sm);
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+.pb-queue-close {
+  background: none; border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+}
+.pb-queue-close:hover { color: var(--color-text-primary); }
+.pb-queue-list { overflow-y: auto; flex: 1; }
+.pb-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 1rem;
+  font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border-subtle);
+  cursor: pointer;
+}
+.pb-queue-item:hover { background: var(--color-bg-tertiary); }
+.pb-queue-item.playing { color: var(--color-accent-primary); background: var(--color-bg-tertiary); }
+.pb-queue-idx { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); min-width: 24px; }
+.pb-queue-item.playing .pb-queue-idx { color: var(--color-accent-primary); }
+.pb-queue-meta { flex: 1; min-width: 0; }
+.pb-queue-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pb-queue-artist { font-size: var(--fs-xs); color: var(--color-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pb-queue-dur { font-family: var(--font-mono); font-size: var(--fs-xs); flex-shrink: 0; }
+.pb-queue-rm {
+  background: none; border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  opacity: 0.5;
+}
+.pb-queue-rm:hover { opacity: 1; background: var(--color-accent-dim); color: var(--color-text-primary); }
+.pb-queue-empty { text-align: center; padding: 2rem; color: var(--color-text-muted); }
+
+/* Transition */
+.queue-up-enter-active, .queue-up-leave-active {
+  transition: opacity 0.2s, transform 0.2s;
+}
+.queue-up-enter-from, .queue-up-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
 
 @media (max-width: 768px) {
-  .player-bar { gap: 0.8rem; padding: 0 0.8rem; }
+  .player-bar { gap: 0.5rem; padding: 0 0.5rem; }
   .pb-track { width: auto; flex: 1; }
-  .pb-right, .pb-progress-row { display: none; }
+  .pb-right { width: auto; gap: 0.3rem; }
+  .pb-volume { display: none; }
+  .pb-progress-row { display: none; }
   .pb-center { flex: 0 0 auto; }
+  .pb-queue-panel { width: calc(100vw - 1rem); }
 }
 </style>

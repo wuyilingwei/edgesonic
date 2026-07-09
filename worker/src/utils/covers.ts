@@ -74,7 +74,6 @@ async function extractEmbedded(
   const head = await fetchRange({ offset: 0, length: HEAD_BYTES });
   if (!head || head.length === 0) return null;
 
-  // 111 — many WAV rippers append their "id3 "/"ID3 " chunk (which may carry
   // an APIC picture) AFTER the audio "data" payload, well past a head-only
   // window on anything but a tiny file. Fetch a tail slice too whenever we
   // know the file is bigger than one head window (a smaller file's "tail"

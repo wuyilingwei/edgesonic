@@ -1,4 +1,3 @@
-// Tests for task 036 — /rest/getCoverArt size parameter.
 //
 // Strategy:
 //   * In-memory SQLite D1 shim with an `albums` row pre-baked.

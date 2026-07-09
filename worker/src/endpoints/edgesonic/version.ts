@@ -1,4 +1,3 @@
-// 081 — Public version endpoint for SPA freshness detection.
 //
 // Long-lived browser tabs run a stale bundle after we deploy fixes that touch
 // the work-queue executor (078 error propagation, 080 reclaim). When the frontend
@@ -16,7 +15,6 @@
 // curl probe could already infer from response timing.
 import { Hono } from "hono";
 
-// 110 — EdgeSonic semantic version. Bumped with each release.
 const EDGESONIC_VERSION = "1.0.0";
 
 const STARTED_AT = new Date().toISOString();

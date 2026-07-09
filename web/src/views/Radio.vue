@@ -1,5 +1,4 @@
 <script setup lang="ts">
-// 062 — Internet Radio management UI. Thin shell over 045 backend:
 //   GET    /rest/getInternetRadioStations         (any authed user)
 //   GET/POST /rest/createInternetRadioStation     (manage_radio)
 //   GET/POST /rest/updateInternetRadioStation     (manage_radio)

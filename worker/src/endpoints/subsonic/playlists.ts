@@ -95,7 +95,6 @@ const getPlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; Var
   const playlist = await queries.getPlaylistById(id);
   if (!playlist) return c.text(subsonicError(70, "Playlist not found"), 404, XML);
 
-  // Visibility: owner OR public OR view_all_users_items (087 — replaces the
   // pre-existing `user.level !== 3` check).
   if (playlist.owner !== user.username && !playlist.public) {
     const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
@@ -133,7 +132,6 @@ const createPlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
   if (playlistId) {
     const existing = await queries.getPlaylistById(playlistId);
     if (!existing) return c.text(subsonicError(70, "Playlist not found"), 404, XML);
-    // 087 — cross-user write gated by view_all_users_items.
     if (existing.owner !== user.username) {
       const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
       if (!canAll) {
@@ -191,7 +189,6 @@ const updatePlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
   const queries = createQueries(c.env.DB);
   const existing = await queries.getPlaylistById(playlistId);
   if (!existing) return c.text(subsonicError(70, "Playlist not found"), 404, XML);
-  // 087 — cross-user update gated by view_all_users_items.
   if (existing.owner !== user.username) {
     const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
     if (!canAll) {
@@ -234,7 +231,6 @@ const deletePlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
   const queries = createQueries(c.env.DB);
   const existing = await queries.getPlaylistById(id);
   if (!existing) return c.text(subsonicError(70, "Playlist not found"), 404, XML);
-  // 087 — cross-user delete gated by view_all_users_items.
   if (existing.owner !== user.username) {
     const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
     if (!canAll) {

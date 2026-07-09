@@ -1,4 +1,3 @@
-// Tests for task 039 — POST /rest/batchWriteTags.
 //
 // Strategy (same shape as test/annotation.test.ts):
 //   * In-memory SQLite shimmed as D1, real createQueries + real handlers.

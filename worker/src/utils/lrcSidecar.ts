@@ -1,4 +1,3 @@
-// 094 — LRC sidecar lyrics fallback.
 //
 // Two entry points:
 //   - fetchLrcSidecar(env, storageUri): read the bytes of a sibling .lrc file

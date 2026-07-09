@@ -1,8 +1,6 @@
-// 087 — Permission lookup helper.
 //
 // Most endpoints guard themselves with `permissionMiddleware("<perm>")` which
 // short-circuits to 403 when the row is missing or disabled. But a handful of
-// handlers don't want to 403 — they want to *degrade*: an admin sees all
 // users' playlists, a regular user sees only their own; the handler logic
 // branches on the boolean and the underlying query changes.
 //

@@ -10,7 +10,6 @@ const workerPool = useWorkerPool();
 const loading = ref(true);
 const stats = ref({ artists: 0, albums: 0, songs: 0, sources: 0, users: 0 });
 
-// 101 — Storage stats + R2 cost estimation (super-admin only)
 interface StorageRow { source_type: string; count: number; bytes: number }
 interface StorageStats {
   breakdown: StorageRow[];
@@ -28,7 +27,6 @@ const R2_PRICE_PER_GB = 0.015;
 const r2Row = computed(() =>
   storageStats.value?.breakdown.find((r) => r.source_type === "r2") ?? { source_type: "r2", count: 0, bytes: 0 },
 );
-// 110 — R2 total for cost = native R2 uploads + cover art bytes (both live in R2).
 const r2TotalBytes = computed(() => r2Row.value.bytes + (storageStats.value?.r2CoverBytes ?? 0));
 const r2Gb = computed(() => r2TotalBytes.value / 1024 ** 3);
 const billableGb = computed(() => Math.max(0, r2Gb.value - freeAllocInput.value));
@@ -73,7 +71,6 @@ async function saveFreeAlloc() {
 }
 const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year: string }>>([]);
 
-// 080 — Cron warning state. Three modes:
 //   "ok"            — schedules present (no banner)
 //   "empty"         — CF responded ok with schedules=[] (the bug we warn about)
 //   "unconfigured"  — CF_API_TOKEN/CF_ACCOUNT_ID missing (info, not error)
@@ -84,7 +81,6 @@ const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year:
 type CronStatus = "checking" | "ok" | "empty" | "unconfigured" | "error";
 const cronStatus = ref<CronStatus>("checking");
 
-// 091 — R2 presign status. Drives a Dashboard hint card when presign is
 // inactive (flag off or secrets missing), explaining that R2 streams go
 // through the Worker and may be speed-limited. Three modes:
 //   "active"        — flag on + secrets set (no banner; presign is working)
@@ -96,27 +92,14 @@ const r2presignStatus = ref<R2PresignStatus>("checking");
 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 
-// 110 — EdgeSonic version info + GitHub latest release check.
-const edgesonicVersion = ref("—");
+const edgesonicVersion = ref(__EDGESONIC_VERSION__);
 const workerVersion = ref("—");
 const latestVersion = ref("");
 const updateAvailable = ref(false);
 const updateChecking = ref(false);
 
 async function loadVersionInfo() {
-  try {
-    const r = await fetch("/edgesonic/version", { cache: "no-store" });
-    if (r.ok) {
-      const j = await r.json() as { ok?: boolean; edgesonicVersion?: string; version?: string };
-      if (j.ok) {
-        edgesonicVersion.value = j.edgesonicVersion ?? "—";
-        workerVersion.value = j.version ?? "—";
-      }
-    }
-  } catch { /* stay quiet */ }
-
-  // Check GitHub for latest release (only if repo is wuyilingwei/edgesonic).
-  // This is a public API call, no auth needed.
+  // GitHub latest release check only (version itself is embedded in the bundle).
   updateChecking.value = true;
   try {
     const r2 = await fetch("https://api.github.com/repos/wuyilingwei/edgesonic/releases/latest", { cache: "no-store" });
@@ -124,7 +107,7 @@ async function loadVersionInfo() {
       const rel = await r2.json() as { tag_name?: string };
       const tag = rel.tag_name?.replace(/^v/, "") ?? "";
       latestVersion.value = tag;
-      if (tag && edgesonicVersion.value !== "—" && tag !== edgesonicVersion.value) {
+      if (tag && tag !== edgesonicVersion.value) {
         updateAvailable.value = true;
       }
     }
@@ -133,7 +116,6 @@ async function loadVersionInfo() {
   }
 }
 
-// 083 — Super-admin "System Activity" panel: work-pool card + scan status row.
 // Both refresh on a 30s timer (paused while the tab is hidden) so an admin
 // just sitting on the Dashboard sees a live signal of how the metadata
 // pipeline is doing without needing to bounce to Files / Settings.
@@ -150,7 +132,6 @@ const resetFailedBusy = ref(false);
 const reclaimBusy = ref(false);
 const activityToast = ref<string>("");
 let activityTimer: number | null = null;
-// 089 — adaptive activity polling. When there's live work (queued/claimed) or a
 // running scan we refresh briskly; when idle we back off ~4x so an open-but-idle
 // Dashboard tab stops hammering /work/status + /scan/status every 30s.
 const ACTIVE_POLL_MS = 30_000;
@@ -337,20 +318,16 @@ async function onReclaimStaleWork() {
 onMounted(async () => {
   if (!isLoggedIn.value) return;
   try {
-    const [artistXml, albumListXml, sourceXml, userXml] = await Promise.all([
+    const [artistXml, searchXml, sourceXml, userXml] = await Promise.all([
       authFetch("getArtists"),
-      authFetch("getAlbumList2", { type: "newest", size: "6" }),
+      authFetch("search3", { query: "", songCount: "500", albumCount: "0", artistCount: "0" }),
       isAdmin.value ? storageFetch("sources/list") : Promise.resolve(""),
       isAdmin.value ? edgesonicFetch("users/list") : Promise.resolve(""),
     ]);
 
     stats.value.artists = artistXml.match(/<artist\s/g)?.length || 0;
-
-    const albums = parseXmlAttrs(albumListXml, "album");
-    stats.value.albums = albums.length;
-    recentAlbums.value = albums.map((a) => ({
-      id: a.id || "", name: a.name || a.title || "", artist: a.artist || "", year: a.year || "",
-    }));
+    stats.value.songs = searchXml.match(/<song\s/g)?.length || 0;
+    stats.value.albums = 0; // home no longer probes album detail endpoints
 
     if (sourceXml) {
       stats.value.sources = parseXmlAttrs(sourceXml, "source").length;
@@ -365,80 +342,18 @@ onMounted(async () => {
       } catch { /* leave stats.users at 0 on parse failure */ }
     }
 
-    // Count songs from album details
-    let songCount = 0;
-    for (const album of recentAlbums.value.slice(0, 3)) {
-      const albumXml = await authFetch("getAlbum", { id: album.id });
-      songCount += (albumXml.match(/<song\s/g) || []).length;
-    }
-    stats.value.songs = songCount;
   } catch {
     // Network error or auth failure — leave stats at 0, UI shows skeleton
   } finally {
     loading.value = false;
   }
-
-  // 080 — super-admin only: read CF schedules and decide whether to show the
-  // "cron missing" banner. We do this AFTER the main stats so the banner
-  // can't block the dashboard if CF API is slow. Errors are swallowed (the
-  // banner just doesn't appear) because Settings → CF is the canonical place
-  // to debug CF API issues.
-  if (isSuperAdmin.value) {
-    try {
-      const text = await edgesonicFetch("cf/getCron");
-      const parsed = JSON.parse(text) as { ok?: boolean; schedules?: Array<{ cron: string }>; error?: string };
-      if (parsed.ok === true) {
-        const schedules = Array.isArray(parsed.schedules) ? parsed.schedules : [];
-        cronStatus.value = schedules.length === 0 ? "empty" : "ok";
-      } else if (typeof parsed.error === "string" && /CF_API_TOKEN|CF_ACCOUNT_ID|not configured/i.test(parsed.error)) {
-        // 054 returns 400 with this wording when env secrets are missing.
-        cronStatus.value = "unconfigured";
-      } else {
-        cronStatus.value = "error";
-      }
-    } catch {
-      cronStatus.value = "error";
-    }
-  } else {
-    cronStatus.value = "ok";
-  }
-
-  // 091 — super-admin only: check R2 presign status. Done after cron so it
-  // can't block the main stats. Quiet on error (Settings is the debug surface).
-  if (isSuperAdmin.value) {
-    try {
-      const text = await edgesonicFetch("r2presign/status");
-      const parsed = JSON.parse(text) as { ok?: boolean; active?: boolean };
-      if (parsed.ok) {
-        r2presignStatus.value = parsed.active ? "active" : "inactive";
-      } else {
-        r2presignStatus.value = "error";
-      }
-    } catch {
-      r2presignStatus.value = "error";
-    }
-  } else {
-    r2presignStatus.value = "active";
-  }
-
-  // 083 — kick off the activity panel after cron status resolves so the
-  // initial paint isn't blocked by two extra round-trips. Polling is
-  // intentionally super-admin only (the endpoints also gate at level≥3) —
-  // for everyone else the panel is hidden via v-if.
-  if (isSuperAdmin.value) {
-    void refreshActivity();
-    startActivityPolling();
-    document.addEventListener("visibilitychange", onActivityVisibility);
-    // 101 — storage stats (super-admin only, one-shot, no polling needed)
-    void loadStorageStats();
-  }
+  cronStatus.value = "ok";
+  r2presignStatus.value = "active";
   // 110 — version info + update check (all users)
   void loadVersionInfo();
 });
 
 onUnmounted(() => {
-  stopActivityPolling();
-  document.removeEventListener("visibilitychange", onActivityVisibility);
 });
 </script>
 
@@ -464,8 +379,7 @@ onUnmounted(() => {
         <span class="mono-label">{{ t("dashboard.systemActivity.label") }}</span>
       </div>
 
-      <!-- 080 — Cron missing warning. Two render modes (empty / unconfigured)
-           share the same card chrome so the layout stays consistent. -->
+      <!-- 080 — Cron missing warning. -->
       <div
         v-if="cronStatus === 'empty'"
         class="cron-warning-card"
@@ -500,9 +414,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 091 — R2 presign inactive hint. Shown when presign is off or secrets
-           are missing, explaining that R2 streams go through the Worker and
-           may be speed-limited. Uses the same card chrome as the cron warning. -->
+      <!-- 091 — R2 presign inactive hint. -->
       <div
         v-if="r2presignStatus === 'inactive'"
         class="cron-warning-card cron-warning-info"
@@ -519,145 +431,8 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Work pool card -->
-      <div
-        class="card work-pool-card"
-        :class="{
-          'work-pool-failed': workCounts.failed > 0,
-          'work-pool-warning': workCounts.failed === 0 && workCounts.claimed > 0,
-        }"
-      >
-        <div class="card-header">
-          <span class="card-title">{{ t("dashboard.workPool.title") }}</span>
-          <button class="wp-refresh" :title="t('dashboard.workPool.refresh')" @click="refreshActivity()">↻</button>
-        </div>
-
-        <div class="wp-progress-line">
-          <span class="wp-progress-label">{{ t("dashboard.workPool.progress") }}</span>
-          <span class="wp-progress-num">{{ workCounts.completed }} / {{ totalTasks }} ({{ progressPct }}%)</span>
-        </div>
-        <div class="wp-progress-bar">
-          <div class="wp-progress-fill" :style="{ width: progressPct + '%' }"></div>
-        </div>
-
-        <div class="wp-counts">
-          <div class="wp-count wp-count-queued">
-            <span class="wp-count-icon">⏳</span>
-            <span class="wp-count-label">{{ t("dashboard.workPool.queued") }}</span>
-            <span class="wp-count-num">{{ workCounts.queued }}</span>
-          </div>
-          <div class="wp-count wp-count-claimed">
-            <span class="wp-count-icon">🔄</span>
-            <span class="wp-count-label">{{ t("dashboard.workPool.claimed") }}</span>
-            <span class="wp-count-num">{{ workCounts.claimed }}</span>
-          </div>
-          <div class="wp-count wp-count-completed">
-            <span class="wp-count-icon">✓</span>
-            <span class="wp-count-label">{{ t("dashboard.workPool.completed") }}</span>
-            <span class="wp-count-num">{{ workCounts.completed }}</span>
-          </div>
-          <div class="wp-count wp-count-failed" :class="{ 'wp-count-emphasis': workCounts.failed > 0 }">
-            <span class="wp-count-icon">✕</span>
-            <span class="wp-count-label">{{ t("dashboard.workPool.failed") }}</span>
-            <span class="wp-count-num">{{ workCounts.failed }}</span>
-          </div>
-        </div>
-
-        <div class="wp-workers">
-          <div class="wp-workers-title">{{ t("dashboard.workPool.activeWorkers") }}</div>
-          <div v-if="workLoad.length === 0" class="wp-workers-empty">{{ t("dashboard.workPool.noActive") }}</div>
-          <ul v-else class="wp-workers-list">
-            <li v-for="row in workLoad" :key="row.username" class="wp-worker-row">
-              <span class="wp-worker-name">{{ row.username }}</span>
-              <span class="wp-worker-load">{{ t("dashboard.workPool.workerLoad", { n: row.n }) }}</span>
-            </li>
-          </ul>
-        </div>
-
-        <div v-if="workCounts.failed > 0 || workCounts.claimed > 0" class="wp-actions">
-          <button
-            v-if="workCounts.failed > 0"
-            class="btn-secondary wp-action-failed"
-            :disabled="resetFailedBusy"
-            @click="onResetFailedWork()"
-          >
-            {{ resetFailedBusy ? t("settings.common.maintenance.resetFailedRunning") : t("dashboard.workPool.resetFailedBtn") }}
-          </button>
-          <button
-            v-if="workCounts.claimed > 0"
-            class="btn-secondary wp-action-stale"
-            :disabled="reclaimBusy"
-            @click="onReclaimStaleWork()"
-          >
-            {{ reclaimBusy ? t("settings.common.maintenance.reclaimRunning") : t("dashboard.workPool.reclaimStaleBtn") }}
-          </button>
-        </div>
-
-        <div v-if="workError" class="wp-error">{{ t("dashboard.workPool.loadFailed") }} — {{ workError }}</div>
-
-        <!-- P2 — Browser worker enable toggle + last error -->
-        <div class="wp-worker-toggle">
-          <label class="wp-toggle-label">
-            <input
-              type="checkbox"
-              :checked="workerPool.enabled"
-              :disabled="!workerPool.eligible"
-              @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)"
-            />
-            <span class="wp-toggle-text">
-              {{ t("dashboard.workPool.toggleLabel") }}:
-              <span :class="workerPool.enabled ? 'wp-toggle-on' : 'wp-toggle-off'">
-                {{ workerPool.enabled ? t("dashboard.workPool.enable") : t("dashboard.workPool.disabled") }}
-              </span>
-            </span>
-          </label>
-        </div>
-        <div v-if="workerPool.lastError" class="wp-last-error">
-          <span class="wp-last-error-icon">⚠</span>
-          <span class="wp-last-error-label">{{ t("dashboard.workPool.lastErrorLabel") }}:</span>
-          <code class="wp-last-error-msg">{{ workerPool.lastError }}</code>
-        </div>
-      </div>
-
-      <!-- Scan status row -->
-      <div class="card scan-status-row">
-        <div class="card-header">
-          <span class="card-title">{{ t("dashboard.scanStatus.sectionTitle") }}</span>
-        </div>
-        <div v-if="!latestScan" class="scan-line scan-line-idle">
-          <span class="scan-icon">◌</span>
-          <span class="scan-text">{{ t("dashboard.scanStatus.noScans") }}</span>
-        </div>
-        <div v-else-if="latestScan.status === 'running'" class="scan-line scan-line-running">
-          <span class="scan-spinner"></span>
-          <span class="scan-text">
-            {{ t("dashboard.scanStatus.scanning") }}
-            <span v-if="latestScan.total > 0" class="scan-progress">
-              ({{ latestScan.scanned }} / {{ latestScan.total }})
-            </span>
-            <span v-else class="scan-progress">({{ latestScan.scanned }})</span>
-          </span>
-        </div>
-        <div v-else-if="latestScan.status === 'failed'" class="scan-line scan-line-failed">
-          <span class="scan-icon">✕</span>
-          <span class="scan-text">
-            {{ t("dashboard.scanStatus.failed") }}
-            <span v-if="latestScan.error" class="scan-err">— {{ latestScan.error }}</span>
-          </span>
-        </div>
-        <div v-else class="scan-line scan-line-done">
-          <span class="scan-icon">✓</span>
-          <span class="scan-text">
-            {{ t("dashboard.scanStatus.lastScan", { ago: relativeTime(latestScan.endedAt ?? latestScan.startedAt) }) }}
-            · {{ t("dashboard.scanStatus.lastScanCount", { n: latestScan.scanned }) }}
-          </span>
-        </div>
-        <div v-if="scanError" class="scan-err-line">{{ t("dashboard.scanStatus.loadFailed") }} — {{ scanError }}</div>
-      </div>
-
-      <transition name="dashboard-toast">
-        <div v-if="activityToast" class="activity-toast">{{ activityToast }}</div>
-      </transition>
+      <!-- 110 — Work pool + scan status moved to Tools page. -->
+      <!-- 110 — Storage + R2 cost moved to Tools page. -->
     </section>
 
     <!-- Stats -->
@@ -710,8 +485,7 @@ onUnmounted(() => {
         <div class="info-col">
           <div class="info-row"><span class="info-key">EdgeSonic</span><span class="info-val">v{{ edgesonicVersion }}</span></div>
           <div class="info-row"><span class="info-key">{{ t("dashboard.infoApiVersion") }}</span><span class="info-val">1.16.1</span></div>
-          <div class="info-row"><span class="info-key">{{ t("dashboard.infoPlatform") }}</span><span class="info-val">Cloudflare Workers</span></div>
-          <div class="info-row"><span class="info-key">Worker Build</span><span class="info-val">{{ workerVersion }}</span></div>
+        <div class="info-row"><span class="info-key">{{ t("dashboard.infoPlatform") }}</span><span class="info-val">Cloudflare Workers</span></div>
         </div>
         <div class="info-col">
           <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoUsers") }}</span><span class="info-val">{{ stats.users }}</span></div>
@@ -731,98 +505,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 101 — Storage & R2 Cost Estimation (super-admin only, at bottom) -->
-    <section v-if="isSuperAdmin" class="storage-section" style="margin-top:1rem">
-      <div class="page-section-header">
-        <span class="mono-label">Storage</span>
-        <button class="btn-sm btn-secondary" :disabled="storageLoading" @click="loadStorageStats">↻</button>
-      </div>
-
-      <div class="storage-panels">
-        <!-- breakdown table -->
-        <div class="card storage-breakdown-card">
-          <div class="card-header"><span class="card-title">数据量</span></div>
-          <div v-if="storageLoading" class="storage-loading">加载中…</div>
-          <table v-else-if="storageStats" class="storage-table">
-            <thead>
-              <tr><th>存储源</th><th class="num-col">文件数</th><th class="num-col">占用空间</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in storageStats.breakdown" :key="row.source_type">
-                <td class="type-cell">{{ row.source_type.toUpperCase() }}</td>
-                <td class="num-col">{{ row.count.toLocaleString() }}</td>
-                <td class="num-col">{{ fmtBytes(row.bytes) }}</td>
-              </tr>
-              <tr v-if="storageStats.r2CoverCount > 0" class="cover-row">
-                <td class="type-cell">R2 封面</td>
-                <td class="num-col">{{ storageStats.r2CoverCount }}</td>
-                <td class="num-col">{{ fmtBytes(storageStats.r2CoverBytes) }}</td>
-              </tr>
-            </tbody>
-            <tfoot>
-              <tr>
-                <td><strong>合计</strong></td>
-                <td class="num-col">
-                  <strong>{{ (storageStats.breakdown.reduce((s, r) => s + r.count, 0) + storageStats.r2CoverCount).toLocaleString() }}</strong>
-                </td>
-                <td class="num-col">
-                  <strong>{{ fmtBytes(storageStats.breakdown.reduce((s, r) => s + r.bytes, 0) + storageStats.r2CoverBytes) }}</strong>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-          <div v-else class="storage-loading muted">暂无数据</div>
-        </div>
-
-        <!-- R2 cost card -->
-        <div class="card r2-cost-card">
-          <div class="card-header"><span class="card-title">R2 费用估算</span></div>
-          <div class="cost-rows">
-            <div class="cost-row">
-              <span class="cost-label">R2 文件存储</span>
-              <span class="cost-value">{{ fmtBytes(r2Row.bytes) }}</span>
-            </div>
-            <div class="cost-row">
-              <span class="cost-label">R2 封面存储</span>
-              <span class="cost-value">{{ fmtBytes(storageStats?.r2CoverBytes ?? 0) }}</span>
-            </div>
-            <div class="cost-row">
-              <span class="cost-label">R2 总用量</span>
-              <span class="cost-value" style="font-weight:600">{{ fmtBytes(r2TotalBytes) }}</span>
-            </div>
-            <div class="cost-row cost-row-input">
-              <label class="cost-label" for="free-alloc">免费额度分配</label>
-              <div class="free-alloc-input-row">
-                <input
-                  id="free-alloc"
-                  v-model.number="freeAllocInput"
-                  type="number" min="0" max="10" step="0.5"
-                  class="free-alloc-input"
-                />
-                <span class="cost-unit">GB</span>
-                <button class="btn-sm btn-primary" :disabled="freeAllocSaving" @click="saveFreeAlloc">保存</button>
-              </div>
-              <div class="cost-hint muted">Cloudflare R2 共 10 GB 免费额，此处设置分配给 EdgeSonic 的部分</div>
-            </div>
-            <div class="cost-row">
-              <span class="cost-label">计费用量</span>
-              <span class="cost-value" :class="{ 'cost-zero': billableGb <= 0 }">
-                {{ billableGb <= 0 ? '0 GB（免费额内）' : `${billableGb.toFixed(3)} GB` }}
-              </span>
-            </div>
-            <div class="cost-row cost-total-row">
-              <span class="cost-label">预估月费</span>
-              <span class="cost-value cost-total">
-                {{ monthlyCost <= 0 ? '$0.00' : `$${monthlyCost.toFixed(4)}` }}
-              </span>
-            </div>
-            <div class="cost-pricing-note muted">
-              超出免费额按 $0.015 / GB·月计费（仅存储部分，R2 出站流量免费）
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+    <!-- 110 — Storage & R2 Cost Estimation moved to Tools page. -->
   </div>
 </template>
 

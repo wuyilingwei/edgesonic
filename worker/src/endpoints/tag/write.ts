@@ -11,7 +11,6 @@ import type { SongTags } from "../../utils/tags";
 
 export const tagEditRoutes = new Hono();
 
-// 095 — batch tag keyword semantics. The frontend forwards these literal
 // strings verbatim; the worker interprets them. They are matched exactly
 // (case-sensitive, no surrounding whitespace) so real tag values that happen
 // to contain these tokens are unaffected.
@@ -30,7 +29,7 @@ function isLyricsKeyword(v: unknown): boolean {
 
 const HEAD_FETCH = 512 * 1024;
 const MAX_REWRITE_BYTES = 80 * 1024 * 1024; // whole file is buffered for the rewrite
-const MAX_COVER_BYTES = 500 * 1024;          // 042 — front cover ceiling; the web canvas compressor honours this
+const MAX_COVER_BYTES = 500 * 1024;
 const BATCH_MAX = 50; // Workers single-request CPU budget bounds batch fan-out (see findings.md)
 
 interface SourceRow {
@@ -70,7 +69,6 @@ tagEditRoutes.post("/write", permissionMiddleware("edit_tags"), async (c) => {
   if (!body?.id || !body.tags) return c.json({ ok: false, error: "Missing id or tags" }, 400);
 
   const tags = cleanInput(body.tags);
-  // 095 — cover keyword (`{write}` / `{export}`) is a literal string carried in
   // `coverData` instead of base64 image bytes. Detected here so parseCover never
   // sees it (it would fail base64 decoding and 400 the request).
   const coverKeyword = (body.coverData === KW_WRITE || body.coverData === KW_EXPORT) ? body.coverData : undefined;
@@ -159,7 +157,6 @@ tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) =
 // Core: apply a tag patch to a single song (D1 relink + per-instance file write).
 // Used by both writeTags (single) and batchWriteTags (loop).
 //
-// 095 — `coverKeyword` carries a literal `{write}` / `{export}` that targets
 // the cover field; `tags.lyrics` may carry the same keywords for the lyrics
 // field. The keyword detection happens here (worker-side), the frontend just
 // forwards whatever string the user typed.
@@ -181,14 +178,12 @@ async function applyTagsToSong(
   }
   if (!master) return { ok: false, error: "Song not found" };
 
-  // 095 — lyrics keyword extraction. cleanInput preserved the literal token in
   // tags.lyrics; we pull it out here so the downstream D1 UPDATE / file write
   // branches can distinguish "write the D1 value back into the file" from a
   // normal lyric string edit.
   const lyricsKeyword = isLyricsKeyword(tags.lyrics) ? tags.lyrics : undefined;
   if (lyricsKeyword) delete tags.lyrics;
 
-  // 095 — lyrics `{write}`: the file write-back path needs the current D1
   // lyrics string so buildUSLTFrame / buildVorbisComment emit it. We re-inject
   // it into `tags.lyrics` (a real string, not a keyword) right before the
   // rewriteInstance loop. The D1 row is already current (no UPDATE needed for
@@ -198,7 +193,6 @@ async function applyTagsToSong(
     tags.lyrics = master.lyrics;
   }
 
-  // 095 — lyrics `{export}` and cover `{export}`: write a sidecar file to the
   // same directory as each instance. These are best-effort; read-only sources
   // (url://, subsonic://) are silently skipped. D1 is untouched by export.
   if (lyricsKeyword === KW_EXPORT || coverKeyword === KW_EXPORT) {
@@ -230,7 +224,6 @@ async function applyTagsToSong(
     }
   }
 
-  // 095 — cover `{write}`: pull the album's R2 cover bytes and feed them into
   // rewriteInstance as a TagWriteCover so buildAPICFrame / buildFLACPictureBlock
   // embed them into each instance.
   if (coverKeyword === KW_WRITE && !cover) {
@@ -274,7 +267,6 @@ async function applyTagsToSong(
   const curAlbum = await db.prepare("SELECT name FROM albums WHERE id = ?")
     .bind(master.album_id).first<{ name: string }>();
 
-  // 095 — `{null}` keyword: clear the field. For string fields (title/artist/
   // album/albumArtist/genre) the keyword has already been preserved by
   // cleanInput as the literal token; we translate it to an empty string here
   // so the relink + UPDATE path writes '' into D1. For lyrics, `{null}` means
@@ -291,7 +283,6 @@ async function applyTagsToSong(
   const now = Math.floor(Date.now() / 1000);
   const oldAlbumId = master.album_id;
 
-  // 095 — lyrics keyword → D1 mapping:
   //   `{null}` → explicit UPDATE lyrics = NULL (separate stmt below)
   //   `{write}` → D1 unchanged; tags.lyrics now holds master.lyrics so the
   //               COALESCE path writes the same value back (no-op effectively)
@@ -315,7 +306,6 @@ async function applyTagsToSong(
     db.prepare("UPDATE song_instances SET tag_scanned = 1 WHERE master_id = ?").bind(master.id),
   ]);
   if (lyricsNull) {
-    // 095 — `{null}` on lyrics: COALESCE can't write NULL, so issue an
     // explicit UPDATE. This is the only field whose "clear" semantics map
     // to SQL NULL (string fields use '' via the relink path above).
     await db.prepare("UPDATE song_masters SET lyrics = NULL, updated_at = ? WHERE id = ?")
@@ -399,14 +389,12 @@ function decodeBase64(s: string): Uint8Array | null {
   }
 }
 
-// 036 — D1 lyric payload ceiling. A reasonable LRC is < 8 KB; we leave plenty
 // of headroom for plain-text translations / annotations while keeping a single
 // row well under D1's per-row limit.
 const MAX_LYRICS_BYTES = 50 * 1024;
 
 function cleanInput(t: SongTags): SongTags {
   const out: SongTags = {};
-  // 095 — keyword literals (`{null}`) are preserved verbatim so applyTagsToSong
   // can detect them. Only lyrics supports `{write}` / `{export}`; other fields
   // accept just `{null}` (clear). Normal non-keyword values go through the
   // existing trim-non-empty path.
@@ -423,10 +411,8 @@ function cleanInput(t: SongTags): SongTags {
   const track = Number(t.track), year = Number(t.year);
   if (Number.isInteger(track) && track > 0) out.track = track;
   if (Number.isInteger(year) && year > 0) out.year = year;
-  // 036/089 — lyrics: trim, cap, drop silently if oversized. File-level write-back
   // (USLT / VORBIS LYRICS) is handled via rewriteInstance when the instance is
   // mp3/flac and the source is writable (r2/webdav). D1 sync is always kept.
-  // 095 — lyrics keywords are preserved verbatim (no trim/cap).
   if (typeof t.lyrics === "string") {
     if (isLyricsKeyword(t.lyrics)) {
       out.lyrics = t.lyrics;
@@ -525,7 +511,6 @@ async function rewriteInstance(
   return { written: false, reason: "read-only source" };
 }
 
-// 095 — sidecar export helpers. Best-effort: read-only sources (url://,
 // subsonic://) are silently skipped. Errors are swallowed by the caller.
 
 /** Derive the sidecar path for a given song instance: same directory, same

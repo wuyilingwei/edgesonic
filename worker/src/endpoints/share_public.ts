@@ -1,9 +1,7 @@
-// 044 — Public share route, extracted out of subsonic/shares.ts during the 055
 // API refactor. It sits OUTSIDE /rest/* so authMiddleware can't intercept it,
 // and outside the new /tag /storage /edgesonic buckets too — anonymous visitors
 // must be able to press play without any credentials.
 //
-// 075 — Default response is now a simple HTML page (title, audio control,
 // metadata) so that opening the link in a browser shows context instead of a
 // raw byte stream. The actual audio bytes moved to `?stream=1` so the inline
 // <audio src> still works. Audio-only clients (VLC etc.) hit `?stream=1`
@@ -277,5 +275,4 @@ sharePublicRoutes.get("/share/:id", async (c) => {
   return new Response(result.body, { status: result.statusCode, headers });
 });
 
-// Exported for tests in 075 — pure render fn keeps unit testing trivial.
 export const __internals = { escapeHtml, renderShareHtml };

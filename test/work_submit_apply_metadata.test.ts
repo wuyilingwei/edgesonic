@@ -1,4 +1,3 @@
-// 077 — /edgesonic/work/submit must cascade metadata results into the business
 // tables (song_masters / song_instances), and a backfill endpoint must replay
 // older completed rows that were finished before the fix landed.
 //
@@ -131,7 +130,6 @@ function buildDb() {
       created_at INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT 0
     );
-    -- 087 — /work/backfillCompleted now goes through permissionMiddleware
     -- ("dispatch_work"). Seed L3=enabled / L2=disabled to keep both the happy
     -- path and the "non-admin rejected" assertion behaving as before.
     CREATE TABLE user_permissions (

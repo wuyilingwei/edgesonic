@@ -1,4 +1,3 @@
-// Tests for task 041 — POST /rest/submitMetadata + GET /tag/findInstanceByUri.
 //
 // Same shape as test/batch_write_tags.test.ts:
 //   * In-memory SQLite shimmed as D1 + real metadataRoutes
@@ -192,7 +191,7 @@ console.log("happy path: existing instance + full tags:");
       bitrate: 256,
       sampleRate: 44100,
       channels: 2,
-      lyrics: "la la la",      // 109 — now persisted (COALESCE-guarded)
+      lyrics: "la la la",
       container: "MPEG 4",     // still diagnostic-only
       codec: "ALAC",           // ditto
     },
@@ -290,7 +289,6 @@ console.log("missing body / missing tags → 400:");
   const b3 = await r3.json() as any;
   assert(/no usable/i.test(b3.error), `error: "No usable tag fields" (got ${b3.error})`);
 
-  // 109 — lyrics alone now counts as usable: a re-scan that only turned up an
   // embedded LYRICS/USLT tag (no title/artist change) must not 400 either, or
   // the lyrics never reach applyMetadataResult at all.
   const r4 = await post("/tag/submit", {

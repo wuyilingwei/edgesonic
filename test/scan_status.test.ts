@@ -1,4 +1,3 @@
-// 038 — scan_jobs state-machine smoke test for queries.ts + getScanStatus aggregation.
 // Run: npx tsx test/scan_status.test.ts
 
 import { createQueries } from "../worker/src/db/queries";

@@ -1,6 +1,4 @@
-// Tests for task 047 — getNowPlaying + scrobble D1 write.
 //
-// 090 — Migrated from KV to D1 `now_playing` table.
 // Strategy:
 //   * In-memory SQLite shimmed as D1 (same shape as annotation.test.ts).
 //   * Hono harness that injects user/authMethod so we skip real auth.
@@ -111,7 +109,6 @@ function buildDb() {
     INSERT INTO user_permissions VALUES (2, 'browse', 1, 0);
     INSERT INTO user_permissions VALUES (3, 'edit_annotations', 1, 0);
     INSERT INTO user_permissions VALUES (3, 'browse', 1, 0);
-    -- 087 — handler reads view_all_users_items to decide cross-user visibility.
     INSERT INTO user_permissions VALUES (2, 'view_all_users_items', 0, 0);
     INSERT INTO user_permissions VALUES (3, 'view_all_users_items', 1, 0);
 

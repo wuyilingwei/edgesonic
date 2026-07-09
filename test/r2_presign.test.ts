@@ -1,4 +1,3 @@
-// Tests for task 091 — R2 presigned URL short-circuit for /rest/stream.
 //
 // Strategy:
 //   * In-memory SQLite D1 shim with song_masters + song_instances rows.

@@ -1,4 +1,3 @@
-// 077 — Shared metadata-apply helper + 041 relinkArtistAlbum primitive.
 // ----------------------------------------------------------------------------
 // Three call sites funnel through here:
 //   1. 041 POST /tag/submit — the legacy "Files browser parsed locally" path.
@@ -43,7 +42,7 @@ export interface SubmittedMetadata {
   bitrate?: number;      // kbps
   sampleRate?: number;   // Hz
   channels?: number;
-  lyrics?: string;       // 109 — persisted to song_masters.lyrics (COALESCE-guarded, see applyMetadataResult)
+  lyrics?: string;
   container?: string;
   codec?: string;
 }
@@ -129,7 +128,6 @@ export async function applyMetadataResult(
     masterId = inst.master_id;
   }
 
-  // 109 — lyrics is not a "logical" field for the relink gate above (relink
   // decides artist/album linkage; lyrics never should), so it needs its own
   // write independent of hasLogical — a submission carrying ONLY lyrics (no
   // title/artist/etc, e.g. a re-scan that only turned up an embedded LYRICS
@@ -141,6 +139,26 @@ export async function applyMetadataResult(
     await db.prepare(
       "UPDATE song_masters SET lyrics = COALESCE(NULLIF(lyrics, ''), ?), updated_at = ? WHERE id = ?",
     ).bind(tags.lyrics, Math.floor(Date.now() / 1000), inst.master_id).run();
+  }
+
+  // Subsonic getSong/getAlbum reads duration from song_masters, so a null
+  // there means the UI shows "0:00:02" (falls back to instance or just 0).
+  const masterSets: string[] = [];
+  const masterBinds: unknown[] = [];
+  if (typeof tags.duration === "number" && tags.duration > 0) {
+    masterSets.push("duration = ?");
+    masterBinds.push(tags.duration);
+  }
+  if (tags.genre) {
+    masterSets.push("genre = COALESCE(genre, ?)");
+    masterBinds.push(tags.genre);
+  }
+  if (masterSets.length > 0) {
+    masterSets.push("updated_at = ?");
+    masterBinds.push(Math.floor(Date.now() / 1000));
+    masterBinds.push(inst.master_id);
+    await db.prepare(`UPDATE song_masters SET ${masterSets.join(", ")} WHERE id = ?`)
+      .bind(...masterBinds).run();
   }
 
   // Update physical params on the instance row (only fields the payload had).

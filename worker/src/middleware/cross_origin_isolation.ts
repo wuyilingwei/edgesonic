@@ -1,4 +1,3 @@
-// 065 — Cross-Origin Isolation response middleware.
 //
 // To unlock SharedArrayBuffer (required for ffmpeg.wasm multi-threading in
 // the browser work pool) we have to flip `crossOriginIsolated = true` in every
@@ -40,7 +39,6 @@ export const crossOriginIsolationMiddleware = async (
     enabled = value !== "0";
   } catch { enabled = true; }
   if (!enabled) return;
-  // 093 — Defensive: some handlers return Response.redirect() / fetch() passthroughs
   // whose headers are immutable. Setting on them throws "Can't modify immutable
   // headers" and 500s the whole response. Clone into a mutable copy when needed
   // so the cross-origin headers still land without breaking the redirect.

@@ -1,4 +1,3 @@
-// Tests for task 096 — S3-compatible storage adapter.
 //
 // Coverage:
 //   1. parseS3RootPath: bucket-only / bucket/prefix / deep prefix

@@ -1,4 +1,3 @@
-// 055 — Four-bucket API surface:
 //   /rest/*       Subsonic 1.16.1 + OpenSubsonic protocol
 //   /tag/*        Tag management   (web-session, edit_tags etc.)
 //   /storage/*    Storage management (web-session, manage_sources/files)

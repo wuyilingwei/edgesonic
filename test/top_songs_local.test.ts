@@ -1,4 +1,3 @@
-// Tests for task 047 — getTopSongs local-first ordering with last.fm fallback.
 //
 // Strategy:
 //   * In-memory SQLite shimmed as D1.
