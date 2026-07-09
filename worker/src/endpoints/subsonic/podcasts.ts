@@ -1,5 +1,4 @@
 // ============================================================================
-// 046 — Podcast Subsonic endpoints
 // ----------------------------------------------------------------------------
 //   GET           /rest/getPodcasts(.view)            [id?, includeEpisodes?]
 //   GET           /rest/getNewestPodcasts(.view)      [count?]

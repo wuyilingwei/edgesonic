@@ -1,4 +1,3 @@
-// 110 — Auto-recheck tick handler invoked from the Cron Trigger.
 // ---------------------------------------------------------------------------
 // Two problems this closes:
 //
@@ -107,7 +106,6 @@ export async function runMetadataRecheck(db: D1Database): Promise<RecheckResult>
       ).bind(remainingAfterA).all<CandidateRow>()).results
     : [];
 
-  // C) 111 — a WAV several MB in size "lasting" under 10 real seconds is
   // implausible at any realistic bitrate (a 5MB CD-quality WAV alone decodes
   // to ~28s minimum) and is almost certainly a pre-111 truncated-buffer scan.
   const remainingAfterB = Math.max(0, BATCH_LIMIT - unsupported.length - incomplete.length);

@@ -1,4 +1,3 @@
-// 042 — POST /rest/tidyFolder tests.
 //
 // Uses the same in-memory D1 shim as test/batch_write_tags.test.ts but also
 // stubs `env.MUSIC_BUCKET` so we can observe put + delete calls. WebDAV is

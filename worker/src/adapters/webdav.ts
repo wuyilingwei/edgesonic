@@ -1,7 +1,6 @@
 import type { StorageAdapter, StreamResult } from "./index";
 import { parseStorageUri, getSourceCredentials, getWebDAVPresignCredentials } from "./index";
 
-// 092 — Optional presign capability for WebDAV. Returns a UserInfo-embedded
 // URL (`https://user:pass@host/path`) so the browser can fetch bytes
 // directly from the WebDAV server, bypassing the Worker sub-request
 // bandwidth pool. The browser's Range header is preserved across the 302.
@@ -74,7 +73,6 @@ export function createWebDAVAdapter(
       };
     },
 
-    // 092 — Build a UserInfo-embedded WebDAV URL for browser-direct 302.
     // Returns null when the WebDAV source has no configured credentials
     // (caller falls back to in-Worker stream). The Range header is NOT
     // encoded into the URL — the browser carries it on the redirected

@@ -1,4 +1,3 @@
-# 049 — Sandbox SDK transcoder image.
 #
 # jrottenberg/ffmpeg:4.1-alpine ships precompiled ffmpeg 4.1 with libmp3lame,
 # libopus, libvorbis and aac, which covers every entry in DEFAULT_PROFILES.

@@ -1,4 +1,3 @@
-// 049 — Sandbox container entrypoint.
 //
 // Minimal http server that the Worker reaches through Sandbox SDK
 // exposePort(). One request → one ffmpeg child → streamed response.

@@ -1,4 +1,3 @@
-// 081 — Tests for the public /edgesonic/version endpoint.
 //
 // Coverage:
 //   1. GET /edgesonic/version → 200 + ok:true + version=WORKER_VERSION value

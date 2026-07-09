@@ -1,4 +1,3 @@
-// 053 — BrowserPoolEngine.
 //
 // Unlike SandboxTranscodeEngine / ExternalTranscodeEngine, this backend does
 // NOT run ffmpeg itself — it just turns a transcode request into a

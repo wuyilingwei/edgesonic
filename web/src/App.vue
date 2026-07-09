@@ -13,7 +13,6 @@ const route = useRoute();
 const { t } = useI18n();
 const { isLoggedIn, username, level, logout } = useAuth();
 const player = usePlayerStore();
-// 052 — browser worker pool. Auto-start once the user logs in (level >= 2
 // AND opt-in flag stored locally); the store itself gates non-eligible users.
 const workerPool = useWorkerPool();
 watch(isLoggedIn, (now) => {
@@ -72,7 +71,6 @@ function doLogout() {
 </script>
 
 <template>
-  <!-- 081 — Update banner sits above every other surface (including Login). -->
   <UpdateBanner />
 
   <!-- 未登录：全屏渲染（Login） -->

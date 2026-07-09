@@ -1,4 +1,3 @@
-// 096 — Generic SigV4 primitives shared by r2presign.ts (presigned URLs)
 // and the s3.ts adapter (Authorization header signing).
 //
 // Both modes use the same canonical-request / string-to-sign format;

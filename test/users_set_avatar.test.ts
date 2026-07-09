@@ -1,5 +1,3 @@
-// 064 — POST /edgesonic/users/setAvatar tests.
-// 072 — Extended with list/get JSON-shape assertions after the bucket-wide
 // XML→JSON conversion (XML envelope removed, all 5 CRUD endpoints now emit
 // `{ ok: true, ... }` / `{ ok: false, error }`).
 //
@@ -107,7 +105,6 @@ function buildDb() {
     INSERT INTO users (username, master_password, level) VALUES ('admin', 'x', 2);
     INSERT INTO users (username, master_password, level) VALUES ('root',  'x', 3);
 
-    -- 072 — list/create/update/delete go through permissionMiddleware('manage_users'),
     -- which reads from user_permissions. Seed the rows the middleware expects.
     -- Level 2 (admin) and 3 (root) get manage_users enabled with no rph cap.
     CREATE TABLE user_permissions (
@@ -351,7 +348,6 @@ console.log("\nunknown target user → 404:");
 }
 
 // ---------------------------------------------------------------------------
-// 072 — list / get JSON shape
 // ---------------------------------------------------------------------------
 
 console.log("\n[072] users/list returns JSON {ok, users}:");

@@ -1,6 +1,4 @@
-// 051 — Scheduled scan cadence test.
 //
-// 090 — cron:last_scan_ts moved from KV to D1 `kv_store` table. Tests updated
 // accordingly: makeDb now handles kv_store queries and exposes a kvStore Map.
 //
 // Asserts maybeRunScheduledScan honours scan_interval_hours:
@@ -77,7 +75,6 @@ function makeDb(
         return null as unknown as T;
       },
       async all<T = unknown>() {
-        // 089 — features util loads the whole feature_strings table as one merged blob.
         if (trimmed.startsWith("SELECT key, value FROM feature_strings")) {
           return {
             results: Object.entries(featureStrings).map(

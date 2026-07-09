@@ -1,4 +1,3 @@
-// 053 — Browser-pool one-shot upload endpoint.
 //
 // POST /edgesonic/work/upload?id=<workQueueId>&token=<hmac>
 //

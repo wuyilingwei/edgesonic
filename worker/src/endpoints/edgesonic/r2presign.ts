@@ -1,4 +1,3 @@
-// 091 — R2 presigned URL status endpoint.
 //
 // Super-admin only. Reports whether the two R2 S3 secrets (R2_ACCESS_KEY_ID,
 // R2_SECRET_ACCESS_KEY) are configured and the feature flag is on, so the

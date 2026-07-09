@@ -1,4 +1,3 @@
-// 042 — cover write-back byte tests.
 // Build synthetic mp3/flac files → rewrite with a fake JPEG/PNG payload →
 // use the production reader (tags.ts) to locate the embedded picture and
 // assert the bytes survived intact, and that prior non-front-cover frames

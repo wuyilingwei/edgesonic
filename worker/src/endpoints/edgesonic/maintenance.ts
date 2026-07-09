@@ -1,4 +1,3 @@
-// 078 — Operational maintenance endpoints.
 //
 // These are one-shot admin tools for tidying up the database state, not part
 // of any user-facing protocol. Each endpoint is super-admin only (level >= 3)
@@ -29,7 +28,6 @@ export const maintenanceRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-// 087 — Maintenance endpoints previously gated by `if (user.level < 3)`. The
 // hardcoded level check was replaced by permissionMiddleware against three
 // new permission rows (maintenance_cleanup / maintenance_reclaim /
 // maintenance_reset, see migration 0024) so operators can delegate the
@@ -113,7 +111,6 @@ maintenanceRoutes.post("/maintenance/cleanupDuplicateCovers",
 // ---------------------------------------------------------------------------
 // POST /edgesonic/maintenance/reclaimStaleWork
 // ---------------------------------------------------------------------------
-// 080 — Manual trigger of the same logic 052a's workReclaim runs from the
 // scheduled handler. Useful when the CF Worker has no cron schedules (the
 // 067 dynamic-cron path was never run with ensureDefaultCron after a deploy)
 // and browser workers have left rows stuck in 'claimed' with stale heartbeats.
@@ -187,7 +184,6 @@ maintenanceRoutes.post("/maintenance/reclaimStaleWork",
 // ---------------------------------------------------------------------------
 // POST /edgesonic/maintenance/resetFailedWork
 // ---------------------------------------------------------------------------
-// 082 — Recovery hatch for the "permanently failed" trap:
 //   When a browser worker shipped a buggy bundle, every task it picked up
 //   would burn through attempts (default max=3) and end up at status='failed'.
 //   Subsequent scans INSERT OR IGNORE the same deterministic id, so the
@@ -248,7 +244,6 @@ maintenanceRoutes.post("/maintenance/resetFailedWork",
 // ---------------------------------------------------------------------------
 // GET /edgesonic/maintenance/webdavThroughput?id=<sm-...>&bytes=N
 // ---------------------------------------------------------------------------
-// 103 — Diagnose "WebDAV playback is slow": measures the Worker→WebDAV-origin
 // leg in isolation. Fetches up to N bytes (default 4 MiB, max 32 MiB) of the
 // song's webdav instance inside the Worker and discards them.
 //

@@ -55,8 +55,6 @@ const props = withDefaults(
 );
 
 const emit = defineEmits<{
-  // 042 — `cover` is the optional new front-cover, base64-encoded JPEG/PNG ≤500KB.
-  // 095 — `cover.data` may also carry a keyword literal (`{write}` / `{export}`)
   // instead of base64 bytes; the worker detects and routes accordingly. Callers
   // that don't care about cover writeback can ignore the second arg.
   (e: "submit", patch: Record<string, string | number>, cover?: { data: string; mime: string }): void;
@@ -92,7 +90,6 @@ const coverError = ref<string>("");
 const coverBusy = ref(false);
 const coverInputEl = ref<HTMLInputElement | null>(null);
 
-// 095 — cover keyword (`{write}` / `{export}`). Mutually exclusive with a
 // picked image: choosing a keyword clears any picked cover, and picking an
 // image clears the keyword. Empty string means "no cover op".
 const coverKeyword = ref<"" | typeof KW_WRITE | typeof KW_EXPORT>("");
@@ -125,7 +122,6 @@ watch(() => props.open, (v) => { if (v) resetFromProps(); }, { immediate: true }
 
 const isBatch = computed(() => props.mode === "batch");
 
-// 095 — batch tag keyword semantics. These literal strings are forwarded
 // verbatim to the worker, which interprets them. The UI just passes them
 // through like any other string value (subject to the apply checkbox in
 // batch mode).
@@ -140,7 +136,6 @@ function isKeyword(v: string): boolean {
 function buildPatch(): Record<string, string | number> {
   const patch: Record<string, string | number> = {};
   const wantField = (k: keyof typeof apply, value: string): boolean => {
-    // 095 — keyword literals always pass through (even when "empty" by trim).
     const kw = isKeyword(value.trim());
     if (!kw && !value.trim()) return false;
     if (isBatch.value) return apply[k];
@@ -162,7 +157,6 @@ function buildPatch(): Record<string, string | number> {
       if (Number.isInteger(n) && n > 0) patch.year = n;
     }
   } else if (isBatch.value ? apply.year : true) {
-    // 095 — `{null}` on year clears it (worker maps to NULL via the lyrics
     // keyword path? no — year is numeric, worker cleanInput only keyword-enables
     // lyrics + string fields). We forward the literal only for lyrics; for
     // numeric fields we skip (UI doesn't advertise {null} on year/track).
@@ -184,8 +178,6 @@ const hasCover = computed(() => coverData.value.length > 0 || coverKeyword.value
 
 function onSubmit() {
   const patch = buildPatch();
-  // 042 — cover-only submissions are valid (the worker accepts an empty patch
-  // when a cover is supplied). 095 — cover keyword (`{write}`/`{export}`)
   // rides on the cover arg's `data` field as a literal string. Block the click
   // only when nothing is pending.
   if (Object.keys(patch).length === 0 && !hasCover.value) return;
@@ -215,7 +207,6 @@ function onCoverPick(e: Event) {
 function triggerCoverPick() {
   coverInputEl.value?.click();
 }
-// 095 — picking an image clears any active cover keyword (mutual exclusivity).
 function clearCover() {
   if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value);
   coverData.value = "";
@@ -225,7 +216,6 @@ function clearCover() {
   coverKeyword.value = "";
   if (coverInputEl.value) coverInputEl.value.value = "";
 }
-// 095 — clear only the picked image, preserving any active keyword (used when
 // a keyword button is toggled on).
 function clearCoverImageOnly() {
   if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value);
@@ -242,7 +232,6 @@ async function handleCoverFile(file: File) {
     coverError.value = t("tagEditor.cover.errInvalidType");
     return;
   }
-  // 095 — picking an image clears any active cover keyword.
   coverKeyword.value = "";
   coverBusy.value = true;
   try {
@@ -373,7 +362,7 @@ function blobToBase64(blob: Blob): Promise<string> {
           </div>
         </div>
         <p v-if="coverError" class="cover-error mono-label">{{ coverError }}</p>
-        <!-- 095 — cover keyword picker: {write} embeds the album's R2 cover into
+        <!-- cover keyword picker: {write} embeds the album's R2 cover into
              the file; {export} writes cover.jpg sidecar. Mutually exclusive with
              a picked image (choosing one clears the other). -->
         <div class="cover-keyword-row">
@@ -581,7 +570,6 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 .te-msg.error { color: var(--color-status-error); }
 .form-input:disabled, .form-textarea:disabled { opacity: 0.45; cursor: not-allowed; }
-/* 095 — cover keyword buttons + lyrics keyword hint */
 .cover-keyword-row {
   display: flex; gap: 0.4rem;
   margin: 0.4rem 0 0;

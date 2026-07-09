@@ -1,4 +1,3 @@
-// 049 + 036 — Shared transcode-engine factory.
 //
 // Both /rest/transcodeFile (manual trigger, in endpoints/transcode.ts) and
 // /rest/stream (on-demand transcoding for format / maxBitRate, in endpoints/
@@ -69,7 +68,6 @@ export async function buildTranscodeEngine(env: Env): Promise<ResolvedEngine | n
     };
   }
 
-  // 053 — Browser-pool engine. No bindings to verify beyond DB / MUSIC_BUCKET
   // which are required by every other code path already; the queue is the
   // contract, and an empty pool of browser workers just means rows sit
   // queued until somebody opens the web UI.

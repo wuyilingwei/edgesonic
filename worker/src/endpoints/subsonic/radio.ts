@@ -1,4 +1,3 @@
-// 045 — Internet Radio (Subsonic standard).
 //
 // Endpoints:
 //   GET    /rest/getInternetRadioStations

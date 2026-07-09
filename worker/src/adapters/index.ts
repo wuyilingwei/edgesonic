@@ -72,7 +72,6 @@ export async function getSourceCredentials(
 }
 
 // ---------------------------------------------------------------------------
-// 097 — WebDAV presign credential resolver
 // ---------------------------------------------------------------------------
 
 // For WebDAV presign: prefer presign_username/presign_password (read-only account)
@@ -104,7 +103,6 @@ export async function getWebDAVPresignCredentials(
 }
 
 // ---------------------------------------------------------------------------
-// 096 — S3 config resolver
 // ---------------------------------------------------------------------------
 
 interface S3SourceRow {

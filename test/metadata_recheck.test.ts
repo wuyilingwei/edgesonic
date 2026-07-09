@@ -1,4 +1,3 @@
-// 110/111 — Coverage for worker/src/utils/metadataRecheck.ts: the periodic
 // browser-pool re-check that (A) hands song_instances the worker's embedded
 // parser couldn't read (tag_scanned=2 — unsupported container format or a
 // broken file) to the browser pool, (B) backfills lyrics/disc on already
@@ -98,7 +97,6 @@ function buildDb(): DatabaseSync {
     INSERT INTO song_instances (id, master_id, storage_uri, suffix, size, missing, tag_scanned)
       VALUES ('si-gone', 'sm-5', 'r2://music/e.m4a', 'm4a', 5000, 1, 2);
 
-    -- (C) 111 — a 33.6MB WAV "lasting" 3 seconds: the exact reported bug
     -- pattern (pre-111 truncated-buffer scan). lyrics/disc filled so it must
     -- NOT also match criterion B — only C.
     INSERT INTO albums (id, cover_r2_key) VALUES ('al-6', 'al-6-cover.jpg');

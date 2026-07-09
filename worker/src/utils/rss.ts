@@ -1,5 +1,4 @@
 // ============================================================================
-// 046 — Minimal RSS 2.0 parser for Podcast feeds.
 // ----------------------------------------------------------------------------
 // Self-contained regex parser (no fast-xml-parser dep) — covers the fields
 // Subsonic needs for getPodcasts / getPodcastEpisode:

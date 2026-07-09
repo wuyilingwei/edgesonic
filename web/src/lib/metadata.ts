@@ -88,7 +88,7 @@ export async function extractMetadata(file: File): Promise<ExtractedMetadata> {
   if (typeof format.sampleRate === "number") out.sampleRate = format.sampleRate;
   if (typeof format.numberOfChannels === "number") out.channels = format.numberOfChannels;
 
-  const ly = lyricsTagsToText(common.lyrics);
+  const ly = lyricsTagsToText(common.lyrics) || nativeLyricsFallback(meta.native);
   if (ly) out.lyrics = ly;
 
   if (format.container) out.container = format.container;
@@ -134,4 +134,40 @@ function msToLrcTimestamp(ms: number): string {
   const s = Math.floor((cs % 6000) / 100);
   const c = cs % 100;
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(c).padStart(2, "0")}`;
+}
+
+// ============================================================================
+// nativeLyricsFallback — 116. music-metadata's per-format tag mapper only
+// promotes specific field names into `common.lyrics`. For Vorbis/FLAC
+// (node_modules/music-metadata/lib/ogg/vorbis/VorbisTagMapper.js) that's the
+// bare `LYRICS` key only — `SYNCEDLYRICS`/`UNSYNCEDLYRICS` (common output of
+// Mp3tag/MusicBee/foobar2000-style taggers) never reach `common.lyrics` and
+// silently vanish. worker/src/utils/tags.ts (the server-side embedded-tag
+// scanner, 109) already recognises all three with priority
+// SYNCEDLYRICS > LYRICS > UNSYNCEDLYRICS; this mirrors that priority by
+// reading music-metadata's raw `native` tag dump (always populated,
+// format-independent — no extra parse option needed) as a fallback when
+// `common.lyrics` comes back empty.
+// ============================================================================
+export function nativeLyricsFallback(
+  native: Record<string, Array<{ id: string; value: unknown }>> | undefined,
+): string | undefined {
+  if (!native) return undefined;
+  let synced: string | undefined;
+  let plain: string | undefined;
+  let unsynced: string | undefined;
+  for (const group of Object.values(native)) {
+    if (!Array.isArray(group)) continue;
+    for (const tag of group) {
+      if (!tag || typeof tag.id !== "string") continue;
+      const val = typeof tag.value === "string" ? tag.value.trim() : "";
+      if (!val) continue;
+      switch (tag.id.toUpperCase()) {
+        case "SYNCEDLYRICS": if (!synced) synced = val; break;
+        case "LYRICS": if (!plain) plain = val; break;
+        case "UNSYNCEDLYRICS": if (!unsynced) unsynced = val; break;
+      }
+    }
+  }
+  return synced || plain || unsynced;
 }

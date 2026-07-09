@@ -1,4 +1,3 @@
-// 053 — One-shot HMAC tokens for browser-pool transcode uploads.
 //
 // The browser-pool engine kicks off a transcode by writing a work_queue row
 // and handing the browser a URL like:

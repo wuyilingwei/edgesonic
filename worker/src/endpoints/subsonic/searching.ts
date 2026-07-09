@@ -10,7 +10,6 @@ export const searchRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-// 035 — same helpers as browsing.ts. Inlined to avoid cross-file churn.
 function currentUserId(c: Context): string {
   return (c.get("user") as User | undefined)?.username ?? "";
 }
@@ -28,7 +27,6 @@ const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 
 // search2 and search3 share the same ID3-organised query path; only the
 // response root element differs (searchResult2 vs searchResult3).
-// 108 — clients enumerate the whole library with an "empty" query + counts,
 // but what they actually SEND varies: Symfonium/DSub send the literal
 // two-character string `""`, others send `*` or a bare empty param. Navidrome
 // normalises all of these to the match-everything query; mirror that.
@@ -57,7 +55,6 @@ const search23Handler = (tag: "searchResult2" | "searchResult3") =>
       artistCount, artistOffset, albumCount, albumOffset, songCount, songOffset,
     });
 
-    // 035 — batch lookup annotations for each result group in a single roundtrip.
     const userId = currentUserId(c);
     const [artistAnn, albumAnn, songAnn] = await Promise.all([
       queries.getAnnotationsMap(userId, "artist", result.artists.map((a) => a.id)),

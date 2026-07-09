@@ -1,4 +1,3 @@
-// 106 — Subsonic 1.16.1 media library scanning endpoints, exposed at /rest/*.
 //
 // The actual scan logic lives in endpoints/storage/scan.ts (WebDAV + S3
 // crawling, scan_jobs tracking, worker pool dispatch). This file is a thin

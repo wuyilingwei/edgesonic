@@ -1,4 +1,3 @@
-// 036 — External lyric fetcher (NetEase public API).
 //
 // Used by GET /rest/getLyrics and GET /rest/getLyricsBySongId as the fallback
 // path when song_masters.lyrics is empty. We deliberately scope to NetEase

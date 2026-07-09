@@ -1,4 +1,3 @@
-// 089 — Lyrics file write-back unit test.
 //
 // Coverage:
 //   1. ID3v2.3 mp3: USLT frame present with correct encoding/lang/lyrics bytes

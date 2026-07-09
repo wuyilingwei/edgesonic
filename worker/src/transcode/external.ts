@@ -1,4 +1,3 @@
-// 049 — ExternalTranscodeEngine.
 //
 // Calls a self-hosted Node + ffmpeg container (docker/external-transcoder)
 // over plain HTTPS, protected by a shared key sent in

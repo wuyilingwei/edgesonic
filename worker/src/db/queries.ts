@@ -1,12 +1,10 @@
 import type { Artist, Album, SongMaster, SongInstance, Annotation, User, Playlist, Bookmark, PlayQueue, TranscodeJob, InternetRadioStation, PodcastChannel, PodcastEpisode, Share } from "../types/entities";
 
-// 107 — display names joined onto song_masters rows for Subsonic Child fields.
 export interface SongNames {
   artist_name: string | null;
   album_name: string | null;
 }
 
-// 108 — physical-file fields from the preferred playable instance, joined
 // onto song_masters rows. Subsonic clients gate playback decisions on
 // Child.suffix / contentType / bitRate / size / path, so every song listing
 // needs them. Instance preference mirrors getSongInstances: R2 copies first
@@ -60,7 +58,6 @@ export function createQueries(db: D1Database) {
 
       if (masters.results.length === 0) return [];
 
-      // 084 — D1 SQLite single-statement ? bind limit ~100. Batch ≤ 80 to leave
       // headroom for future fixed params. Multi-batch ORDER BY is reassembled
       // in JS to preserve the same year DESC, sort_name ASC NULLS LAST semantics.
       const ids = Array.from(new Set(masters.results.map((r) => r.album_id)));
@@ -248,7 +245,6 @@ export function createQueries(db: D1Database) {
       return result.results;
     },
 
-    // 108 — genre listing now carries names + physical fields like every
     // other song listing (it fed bare rows to mapSong before).
     async getSongsByGenre(genre: string, count: number, offset: number): Promise<SongRow[]> {
       const result = await db.prepare(
@@ -259,9 +255,7 @@ export function createQueries(db: D1Database) {
     },
 
     // Song Masters
-    // 107 — join artist/album display names so mapSong can emit the
     // spec-required Child.artist / Child.album text fields everywhere.
-    // 108 — also join the preferred instance's physical fields (SongPhysical).
     async getSongMaster(id: string): Promise<SongRow | null> {
       return db.prepare(
         `SELECT ${SONG_ROW_COLS} FROM song_masters sm ${SONG_ROW_JOINS}
@@ -278,7 +272,6 @@ export function createQueries(db: D1Database) {
     },
 
     // Fetch song_masters by an arbitrary id list (deduped, order preserved by caller).
-    // 084 — D1 SQLite has a ~100 bind variable cap per statement. Batch ≤ 80
     // so callers like /rest/getNowPlaying (KV active streams) and bookmarks
     // listings don't crash with "too many SQL variables" on large inputs.
     async getSongMastersByIds(ids: string[]): Promise<SongRow[]> {
@@ -301,7 +294,6 @@ export function createQueries(db: D1Database) {
     // Song Instances
     async getSongInstances(masterId: string): Promise<SongInstance[]> {
       const result = await db.prepare(
-        // 093 — Order R2 first so the media.ts selector's `selected =
         // instances[0]` default already lands on the R2 copy when present
         // (Worker binding fast path + R2 presign eligible). Within the same
         // source tier, higher bit_rate wins to preserve pre-093 quality
@@ -358,10 +350,8 @@ export function createQueries(db: D1Database) {
       ).bind(userId, itemId, itemType).first<Annotation>();
     },
 
-    // 035 — Batch lookup for browsing field back-fill.
     // Returns Map keyed by `${itemType}:${itemId}` → annotation row.
     // Empty `ids` short-circuits to avoid an empty IN(...) query.
-    // 084 — D1 SQLite caps bind variables at ~100 per statement; search3 with
     // songCount=500 used to crash with "too many SQL variables at offset 28".
     // Chunk to ≤ 80 ids per query (leaves 2 slots for user_id + item_type).
     async getAnnotationsMap(
@@ -523,7 +513,6 @@ export function createQueries(db: D1Database) {
       return result.results;
     },
 
-    // 047 — Top songs for a given artist name, ordered by aggregated play_count
     // across ALL users (catalog-level ranking, mirrors list_albums "frequent").
     // LIKE match on artist name so we tolerate sort_name / canonical variants
     // (last.fm uses the same artist param the client supplied).
@@ -682,7 +671,6 @@ export function createQueries(db: D1Database) {
     },
 
     // ========================================================================
-    // 037 — Bookmarks
     // ========================================================================
     async getBookmarksByUser(username: string): Promise<Bookmark[]> {
       const result = await db.prepare(
@@ -716,7 +704,6 @@ export function createQueries(db: D1Database) {
     },
 
     // ========================================================================
-    // 037 — PlayQueue (one saved queue per user; last-write-wins)
     // ========================================================================
     async getPlayQueue(username: string): Promise<PlayQueue | null> {
       return db.prepare(
@@ -749,7 +736,6 @@ export function createQueries(db: D1Database) {
     },
 
     // ========================================================================
-    // 044 — Sharing
     // ========================================================================
     // Each share is owned by one user; cascade deletes wipe entries when the
     // share or owner is removed. `getSharesForUser(username, isAdmin)` returns
@@ -867,7 +853,6 @@ export function createQueries(db: D1Database) {
     },
 
     // ========================================================================
-    // 038 — Scan Jobs (background scan progress)
     // ========================================================================
     async insertScanJob(opts: { id: string; sourceId: string }): Promise<void> {
       const now = Math.floor(Date.now() / 1000);
@@ -897,7 +882,6 @@ export function createQueries(db: D1Database) {
     },
 
     // ========================================================================
-    // 049 — Transcode Jobs
     // ========================================================================
     // The dispatcher (endpoints/transcode.ts) owns the row lifecycle:
     //   insertTranscodeJob → row in 'pending' / 'processing'
@@ -944,7 +928,6 @@ export function createQueries(db: D1Database) {
     },
 
     // ========================================================================
-    // 058 — Register a transcoded song_instance row.
     // ========================================================================
     // After the browser-pool worker (053) uploads a transcoded blob to R2,
     // we persist a song_instances row so the stream endpoint can short-circuit
@@ -1007,7 +990,6 @@ export function createQueries(db: D1Database) {
       }
     },
 
-    // 058 — Look up a pre-baked transcoded instance for a (master, profile).
     // Used by /rest/stream to short-circuit the 049 engine dispatch when the
     // browser pool (or pre-bake) has already produced the requested profile.
     async findTranscodedInstance(
@@ -1056,7 +1038,6 @@ export function createQueries(db: D1Database) {
     },
 
     // ========================================================================
-    // 045 — Internet Radio Stations
     // ========================================================================
     async listRadioStations(): Promise<InternetRadioStation[]> {
       const result = await db.prepare(
@@ -1125,7 +1106,6 @@ export function createQueries(db: D1Database) {
     },
 
     // ========================================================================
-    // 046 — Podcast Channels + Episodes
     // ========================================================================
     // RSS sync writes channel meta + UPSERTs episodes by (channel_id, guid).
     // Subsonic endpoints read these tables; downloadPodcastEpisode mutates
@@ -1303,7 +1283,6 @@ export function createQueries(db: D1Database) {
 // ============================================================================
 async function computePlaylistTotals(db: D1Database, songIds: string[]): Promise<{ count: number; duration: number }> {
   if (songIds.length === 0) return { count: 0, duration: 0 };
-  // 084 — D1 SQLite caps bind variables at ~100. Large playlists (>100 songs)
   // would otherwise crash here on createPlaylist / replacePlaylistSongs. We
   // dedupe by song id (the existing comment about COUNT(*) collapsing dupes
   // already reflects this) then chunk-sum.

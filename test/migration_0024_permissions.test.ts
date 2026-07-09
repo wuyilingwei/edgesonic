@@ -1,4 +1,3 @@
-// 087 — admin permissions seed (formerly migration 0024_admin_permissions.sql,
 // now folded into Schema.sql §5) seeds the 5 new permission rows × 4 levels
 // (20 rows total) with the documented default matrix (L3=1, L2/L1/L0=0).
 //

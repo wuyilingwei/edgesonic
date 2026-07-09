@@ -1,4 +1,3 @@
-// 078 — workerPool.formatTaskError must:
 //   1. Stamp every submission with [<task_type>:<task.id[0..8]>] prefix
 //   2. Clamp at 500 chars
 //   3. Accept Error | ErrorEvent-shaped { message } | string | unknown

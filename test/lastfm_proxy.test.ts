@@ -1,4 +1,3 @@
-// Tests for task 043 — /rest/getArtistInfo[2], /rest/getAlbumInfo[2],
 // /rest/getSimilarSongs[2], /rest/getTopSongs.
 //
 // Strategy mirrors test/scrape.test.ts:
@@ -382,7 +381,6 @@ async function main() {
     assert(fetchCalls.length === 1 && fetchCalls[0].url.includes("method=artist.getTopTracks"), "hit artist.getTopTracks");
   }
 
-  // 090 — cache moved from KV to D1 `lastfm_cache` table.
   console.log("D1 cache: repeat call within TTL hits cache (no second fetch):");
   {
     fetchCalls = [];

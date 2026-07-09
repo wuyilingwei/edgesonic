@@ -1,7 +1,5 @@
 // ============================================================================
-// Task 047 — getNowPlaying (D1-backed active stream registry).
 //
-// 090 — Migrated from KV to D1 `now_playing` table. Scrobble writes
 // (annotation.ts) UPSERT into now_playing; this endpoint reads with a 300s
 // staleness filter (WHERE updated_at > now-300) to match the old KV TTL.
 //
@@ -47,7 +45,6 @@ const getNowPlayingHandler = async (c: import("hono").Context<{
   const user = c.get("user");
   const env = c.env;
 
-  // 090 — Query D1 `now_playing` table; filter rows older than 300s (mirrors
   // old KV TTL). Visibility: view_all_users_items → all rows, else own only.
   const seeAll = await hasPermission(env.DB, user, "view_all_users_items");
   const nowSec = Math.floor(Date.now() / 1000);

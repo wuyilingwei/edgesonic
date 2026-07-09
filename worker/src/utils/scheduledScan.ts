@@ -1,4 +1,3 @@
-// 051 — Auto-scan tick handler invoked from the Cron Trigger.
 //
 // wrangler.toml fixes the cron to `0 */1 * * *` (every hour, shared with
 // 046's podcast refresh). To support cadences other than hourly we layer a
@@ -31,7 +30,6 @@ interface SourceRow {
   mode?: string | null;
 }
 
-// 090 — cron:last_scan_ts moved from KV to D1 `kv_store` table.
 const LAST_RUN_KEY = "cron:last_scan_ts";
 
 export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Promise<void> {

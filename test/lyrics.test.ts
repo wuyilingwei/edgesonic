@@ -1,4 +1,3 @@
-// Tests for task 036 — /rest/getLyrics + /rest/getLyricsBySongId
 //
 // Coverage:
 //   1. getLyrics — D1 hit (song_masters.lyrics populated) → returns XML with
@@ -88,7 +87,6 @@ function buildDb() {
       suffix TEXT DEFAULT '', content_type TEXT, bit_rate INTEGER, size INTEGER,
       duration INTEGER, missing INTEGER DEFAULT 0
     );
-    -- 107 — getSongMaster now LEFT JOINs albums for Child.album display names.
     CREATE TABLE albums (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL

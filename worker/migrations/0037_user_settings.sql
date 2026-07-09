@@ -1,4 +1,3 @@
--- 110 — User-level settings (per-user key-value store).
 -- Replaces the system-level lastfm_api_key feature_string with a per-user
 -- setting so each user can configure their own Last.fm API key.
 -- Also serves as a general per-user settings table for future use.

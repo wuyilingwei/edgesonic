@@ -1,4 +1,3 @@
-// 042 — POST /rest/tidyFolder
 // Move song files into a consistent folder layout driven by a template like
 // `{albumArtist}/{album}/{track:02d} - {title}`. Only R2 and WebDAV
 // instances are movable; other sources (subsonic, url) are skipped with a

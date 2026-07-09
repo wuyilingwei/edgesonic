@@ -1,14 +1,101 @@
 <script setup lang="ts">
-// 104 — Tools page. The 094 Subsonic clone (pull) and the 104 push-to-upstream
 // used to live inside Settings; they are workflows rather than configuration,
 // so they get their own page with one sub-page per direction. The credential
 // form is shared — both directions talk to the same upstream server.
-import { ref } from "vue";
+import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
+import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
-const { isSuperAdmin, edgesonicPost, md5, signedParams, restUrl } = useAuth();
+const { isSuperAdmin, edgesonicPost, edgesonicFetch, md5, signedParams, restUrl } = useAuth();
+const workerPool = useWorkerPool();
+
+// 115 — "auto-start in mm:ss" countdown next to the manual poll button.
+// workerPool.nextPollAt is a plain timestamp (not itself ticking), so a
+// local 1s clock drives the countdown text reactively.
+const nowTick = ref(Date.now());
+const autoStartCountdownText = computed(() => {
+  const eta = workerPool.nextPollAt;
+  if (!eta || eta <= nowTick.value) return "";
+  const totalSec = Math.ceil((eta - nowTick.value) / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+});
+
+// ---- 110: Work pool status (moved from Dashboard) ----
+interface WorkCounts { queued: number; claimed: number; completed: number; failed: number; canceled: number }
+interface WorkLoadRow { username: string; n: number }
+const workCounts = ref<WorkCounts>({ queued: 0, claimed: 0, completed: 0, failed: 0, canceled: 0 });
+const workLoad = ref<WorkLoadRow[]>([]);
+const totalTasks = computed(() => workCounts.value.queued + workCounts.value.claimed + workCounts.value.completed + workCounts.value.failed);
+const progressPct = computed(() => totalTasks.value > 0 ? Math.round((workCounts.value.completed / totalTasks.value) * 100) : 0);
+
+async function loadWorkStatus() {
+  try {
+    const text = await edgesonicFetch("work/status");
+    const parsed = JSON.parse(text) as { ok?: boolean; counts?: Partial<WorkCounts>; load?: WorkLoadRow[] };
+    if (parsed.ok) {
+      workCounts.value = { queued: parsed.counts?.queued ?? 0, claimed: parsed.counts?.claimed ?? 0, completed: parsed.counts?.completed ?? 0, failed: parsed.counts?.failed ?? 0, canceled: parsed.counts?.canceled ?? 0 };
+      workLoad.value = Array.isArray(parsed.load) ? parsed.load : [];
+    }
+  } catch { /* stay quiet */ }
+}
+
+async function onResetFailedWork() {
+  try { await edgesonicPost("maintenance/resetFailedWork", {}); await loadWorkStatus(); } catch { /* */ }
+}
+async function onReclaimStaleWork() {
+  try { await edgesonicPost("maintenance/reclaimStaleWork", {}); await loadWorkStatus(); } catch { /* */ }
+}
+
+// ---- 110: Storage + R2 cost (moved from Dashboard) ----
+interface StorageRow { source_type: string; count: number; bytes: number }
+interface StorageStats { breakdown: StorageRow[]; r2CoverCount: number; r2CoverBytes: number; freeAllocationGb: number }
+const storageStats = ref<StorageStats | null>(null);
+const storageLoading = ref(false);
+const freeAllocInput = ref(10);
+const freeAllocSaving = ref(false);
+const R2_PRICE_PER_GB = 0.015;
+const r2Row = computed(() => storageStats.value?.breakdown.find((r) => r.source_type === "r2") ?? { source_type: "r2", count: 0, bytes: 0 });
+const r2TotalBytes = computed(() => r2Row.value.bytes + (storageStats.value?.r2CoverBytes ?? 0));
+const r2Gb = computed(() => r2TotalBytes.value / 1024 ** 3);
+const billableGb = computed(() => Math.max(0, r2Gb.value - freeAllocInput.value));
+const monthlyCost = computed(() => billableGb.value * R2_PRICE_PER_GB);
+
+async function loadStorageStats() {
+  storageLoading.value = true;
+  try {
+    const text = await edgesonicFetch("stats/storage");
+    const data = JSON.parse(text) as { ok?: boolean } & Partial<StorageStats>;
+    if (data.ok) {
+      storageStats.value = { breakdown: data.breakdown ?? [], r2CoverCount: data.r2CoverCount ?? 0, r2CoverBytes: data.r2CoverBytes ?? 0, freeAllocationGb: data.freeAllocationGb ?? 10 };
+      freeAllocInput.value = storageStats.value.freeAllocationGb;
+    }
+  } catch { /* */ } finally { storageLoading.value = false; }
+}
+
+async function saveFreeAlloc() {
+  freeAllocSaving.value = true;
+  try { await edgesonicPost("features/updateString", { key: "r2_free_allocation_gb", value: String(freeAllocInput.value) }); } catch { /* */ } finally { freeAllocSaving.value = false; }
+}
+
+// handle, so it leaked a new 10s poller every time this component
+// (re)mounted (e.g. navigating away from /tools and back). Store the handle
+// and clear it on unmount, same pattern as Files.vue's workStatusHandle.
+let workStatusPollHandle: ReturnType<typeof setInterval> | null = null;
+let nowTickHandle: ReturnType<typeof setInterval> | null = null;
+onMounted(() => {
+  void loadWorkStatus();
+  void loadStorageStats();
+  workStatusPollHandle = window.setInterval(() => { if (!document.hidden) void loadWorkStatus(); }, 10000);
+  nowTickHandle = window.setInterval(() => { nowTick.value = Date.now(); }, 1000);
+});
+onUnmounted(() => {
+  if (workStatusPollHandle !== null) { clearInterval(workStatusPollHandle); workStatusPollHandle = null; }
+  if (nowTickHandle !== null) { clearInterval(nowTickHandle); nowTickHandle = null; }
+});
 
 // === Toast (same shape as Settings.vue's) ===
 const toast = ref({ show: false, msg: "", type: "success" });
@@ -17,11 +104,15 @@ function showToast(msg: string, type = "success") {
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-// === Sub-page tabs ===
-type ToolTab = "clone" | "push";
-const tab = ref<ToolTab>("clone");
+// (same open/toggleSection shape) instead of the bespoke `.tools-accordion`
+// this page used to have. Clone + Push are now one section ("migrate") with
+// an internal seg-btn switch (migrateMode) instead of two separate
+// top-level accordion entries.
+type SectionKey = "migrate" | "workPool" | "storage";
+const open = ref<Record<SectionKey, boolean>>({ migrate: false, workPool: false, storage: false });
+function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
+const migrateMode = ref<"clone" | "push">("clone");
 
-// === 094 — Subsonic server clone ===
 // Browser-driven clone: the SPA fetches metadata + bytes directly from the
 // upstream Subsonic server (using Subsonic MD5 token auth: t = md5(password
 // + salt), s = salt) and POSTs each item to /edgesonic/clone/* to persist
@@ -41,8 +132,12 @@ interface CloneForm { url: string; username: string; password: string; }
 const cloneForm = ref<CloneForm>({ url: "", username: "", password: "" });
 const cloneAudioEnabled = ref(false);
 const cloneUsersEnabled = ref(false);
+const cloneProxyEnabled = ref(false);
+const clonePlaylistOnly = ref(false);
+const cloneStarredOnly = ref(false);
 const cloneRunning = ref(false);
 const cloneCancelRequested = ref(false);
+const cloneFilterSongIds = ref<Set<string> | null>(null);
 
 interface CloneProgress {
   total: number;
@@ -93,7 +188,20 @@ function cloneUpstreamUrl(path: string, params?: Record<string, string>): string
 // when the server only speaks XML (older Navidrome / supysonic), we parse
 // the attributes out of the XML.
 async function cloneFetchJson(path: string, params?: Record<string, string>): Promise<any> {
-  const resp = await fetch(cloneUpstreamUrl(path, params));
+  const resp = cloneProxyEnabled.value
+    ? await fetch("/edgesonic/clone/proxy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          upstreamUrl: cloneForm.value.url,
+          username: cloneForm.value.username,
+          password: cloneForm.value.password,
+          path,
+          params: params || {},
+          binary: false,
+        }),
+      })
+    : await fetch(cloneUpstreamUrl(path, params));
   const text = await resp.text();
   try {
     const json = JSON.parse(text);
@@ -209,6 +317,53 @@ function fmtBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+async function buildCloneFilterSet(): Promise<Set<string> | null> {
+  if (!clonePlaylistOnly.value && !cloneStarredOnly.value) return null;
+  const out = new Set<string>();
+
+  if (clonePlaylistOnly.value) {
+    const resp = await cloneFetchJson("getPlaylists");
+    let playlists: any[] = [];
+    if (resp?._xml) playlists = parseXmlChildren(resp._xml, "playlist");
+    else {
+      const raw = resp?.playlists?.playlist || [];
+      playlists = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    }
+    for (const p of playlists) {
+      if (cloneCancelRequested.value) break;
+      const id = jget(p, "id") || "";
+      if (!id) continue;
+      const detail = await cloneFetchJson("getPlaylist", { id });
+      let entries: any[] = [];
+      if (detail?._xml) entries = parseXmlChildren(detail._xml, "entry");
+      else {
+        const raw = detail?.playlist?.entry || detail?.entries?.entry || [];
+        entries = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+      }
+      for (const e of entries) {
+        const sid = jget(e, "id") || e.id || "";
+        if (sid) out.add(String(sid));
+      }
+    }
+  }
+
+  if (cloneStarredOnly.value) {
+    const resp = await cloneFetchJson("getStarred2");
+    let songs: any[] = [];
+    if (resp?._xml) songs = parseXmlChildren(resp._xml, "song");
+    else {
+      const raw = resp?.starred2?.song || resp?.starred?.song || [];
+      songs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    }
+    for (const s of songs) {
+      const sid = jget(s, "id") || s.id || "";
+      if (sid) out.add(String(sid));
+    }
+  }
+
+  return out;
+}
+
 // Stage 1 — metadata. Walk getAlbumList2 (alphabeticalByName, large size),
 // then getAlbum per album, then POST /clone/upsertMaster per song.
 async function cloneMetadataStage() {
@@ -265,6 +420,8 @@ async function cloneMetadataStage() {
       }
       for (const s of songs) {
         if (cloneCancelRequested.value) break;
+        const sid = jget(s, "id") || "";
+        if (cloneFilterSongIds.value && sid && !cloneFilterSongIds.value.has(sid)) continue;
         const payload = normalizeSongNode(s, albumNode, { id: "", name: meta.artist });
         try {
           const data = JSON.parse(await edgesonicPost("clone/upsertMaster", payload));
@@ -324,8 +481,10 @@ async function cloneAudioStage() {
         songs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
       }
       for (const s of songs) {
+        const sid = jget(s, "id") || "";
+        if (cloneFilterSongIds.value && sid && !cloneFilterSongIds.value.has(sid)) continue;
         allSongs.push({
-          id: jget(s, "id") || "",
+          id: sid,
           title: jget(s, "title") || "Unknown Title",
           album: albumName,
           albumId,
@@ -346,7 +505,20 @@ async function cloneAudioStage() {
     if (cloneCancelRequested.value) break;
     try {
       const streamUrl = cloneUpstreamUrl("stream", { id: s.id });
-      const resp = await fetch(streamUrl);
+      const resp = cloneProxyEnabled.value
+        ? await fetch("/edgesonic/clone/proxy", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              upstreamUrl: cloneForm.value.url,
+              username: cloneForm.value.username,
+              password: cloneForm.value.password,
+              path: "stream",
+              params: { id: s.id },
+              binary: true,
+            }),
+          })
+        : await fetch(streamUrl);
       if (!resp.ok) throw new Error(`stream ${resp.status}`);
       const buf = await resp.arrayBuffer();
       if (buf.byteLength === 0) throw new Error("empty body");
@@ -561,10 +733,15 @@ async function runClone() {
   cloneRunning.value = true;
   cloneCancelRequested.value = false;
   cloneLog.value = [];
+  cloneFilterSongIds.value = null;
   for (const k of Object.keys(cloneStages.value) as Array<keyof typeof cloneStages.value>) {
     cloneStages.value[k] = newCloneProgress();
   }
   try {
+    cloneFilterSongIds.value = await buildCloneFilterSet();
+    if (cloneFilterSongIds.value) {
+      cloneLogPush(`filter: enabled, ${cloneFilterSongIds.value.size} song id(s) allowed by playlists/starred rules`);
+    }
     await cloneMetadataStage();
     await cloneAudioStage();
     await clonePlaylistsStage();
@@ -581,7 +758,6 @@ function cancelClone() {
   cloneCancelRequested.value = true;
 }
 
-// === 104 — Push local starred/playlists back TO the upstream ===
 // The reverse direction of the 094 clone, same browser-driven shape and same
 // upstream credential form. Local song ids mean nothing upstream, so each
 // song is matched via upstream search3 using a *cleaned* title (leading track
@@ -834,168 +1010,335 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
     </div>
 
     <template v-else>
-      <!-- Shared upstream credentials -->
-      <div class="card tools-card">
-        <div class="sub-header">
-          <span class="mono-label">🪞 {{ t("settings.common.clone.title") }}</span>
+      <!-- Sections mirror Settings.vue's .settings-section pattern
+           (button header + v-show body, no transition) instead of the
+           bespoke .tools-accordion this page used to have. -->
+
+      <!-- ============ SUBSONIC 迁移工具（克隆 + 推送，中间切换） ============ -->
+      <section class="settings-section card" :class="{ open: open.migrate }">
+        <button class="section-header" @click="toggleSection('migrate')">
+          <span class="section-title">🪞 SUBSONIC 迁移工具</span>
+          <span class="section-caret">{{ open.migrate ? '−' : '+' }}</span>
+        </button>
+        <div v-show="open.migrate" class="section-body">
+          <div class="seg">
+            <button type="button" :class="['seg-btn', { active: migrateMode === 'clone' }]" @click="migrateMode = 'clone'">克隆（拉取）</button>
+            <button type="button" :class="['seg-btn', { active: migrateMode === 'push' }]" @click="migrateMode = 'push'">推送（写回）</button>
+          </div>
+
+          <!-- Shared upstream credentials — both directions talk to the same server -->
+          <div class="sub-block">
+            <div class="sub-header"><span class="mono-label">上游服务器</span></div>
+            <div class="transcode-grid">
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.url") }}</span>
+                <input
+                  v-model="cloneForm.url"
+                  class="form-input"
+                  :placeholder="t('settings.common.clone.urlPlaceholder')"
+                  :disabled="cloneRunning || pushRunning"
+                  autocomplete="off"
+                />
+              </label>
+              <p class="feature-desc tc-desc">{{ t("settings.common.clone.urlDesc") }}</p>
+
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.username") }}</span>
+                <input
+                  v-model="cloneForm.username"
+                  class="form-input"
+                  :placeholder="t('settings.common.clone.usernamePlaceholder')"
+                  :disabled="cloneRunning || pushRunning"
+                  autocomplete="off"
+                />
+              </label>
+
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.password") }}</span>
+                <input
+                  v-model="cloneForm.password"
+                  type="password"
+                  class="form-input"
+                  :placeholder="t('settings.common.clone.passwordPlaceholder')"
+                  :disabled="cloneRunning || pushRunning"
+                  autocomplete="off"
+                />
+              </label>
+
+              <label class="tc-row">
+                <input type="checkbox" v-model="cloneProxyEnabled" />
+                <span class="tc-key">使用 Worker 代理（防止 CORS）</span>
+              </label>
+              <p class="feature-desc tc-desc" style="margin-left:0">开启后，所有上游 Subsonic 读取（歌单/收藏/元数据/音频）都经 EdgeSonic Worker 转发，适用于源站未配置 CORS 的场景。</p>
+            </div>
+          </div>
+
+          <!-- Clone (pull) -->
+          <div v-if="migrateMode === 'clone'" class="sub-block">
+            <p class="feature-desc" style="margin: 0 0 0.6rem 0">
+              {{ t("settings.common.clone.desc") }}
+            </p>
+            <div class="clone-options">
+              <label class="tc-row">
+                <input type="checkbox" v-model="clonePlaylistOnly" />
+                <span class="tc-key">仅克隆处于歌单的歌曲</span>
+              </label>
+              <label class="tc-row">
+                <input type="checkbox" v-model="cloneStarredOnly" />
+                <span class="tc-key">仅克隆收藏的歌曲</span>
+              </label>
+              <p class="feature-desc tc-desc" style="margin-left:0">上面两个过滤条件是并集关系：勾选任一项即纳入；两项都勾选时，克隆“歌单中的歌曲 ∪ 收藏的歌曲”。</p>
+            </div>
+            <div class="transcode-grid">
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.audioToggle") }}</span>
+                <span class="scan-toggle">
+                  <input type="checkbox" v-model="cloneAudioEnabled" :disabled="cloneRunning" />
+                  <span>{{ cloneAudioEnabled ? t("common.on") : t("common.off") }}</span>
+                </span>
+              </label>
+              <p class="feature-desc tc-desc">{{ t("settings.common.clone.audioToggleDesc") }}</p>
+
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.usersToggle") }}</span>
+                <span class="scan-toggle">
+                  <input type="checkbox" v-model="cloneUsersEnabled" :disabled="cloneRunning" />
+                  <span>{{ cloneUsersEnabled ? t("common.on") : t("common.off") }}</span>
+                </span>
+              </label>
+              <p class="feature-desc tc-desc">{{ t("settings.common.clone.usersToggleDesc") }}</p>
+
+              <div class="tc-actions">
+                <button v-if="!cloneRunning" class="btn-primary" :disabled="pushRunning" @click="runClone">
+                  {{ t("settings.common.clone.start") }}
+                </button>
+                <button v-else class="btn-danger" @click="cancelClone">
+                  {{ t("settings.common.clone.cancel") }}
+                </button>
+              </div>
+            </div>
+
+            <div v-if="cloneRunning || cloneStages.metadata.status !== 'idle'" class="clone-progress">
+              <div v-for="key in (['metadata', 'audio', 'playlists', 'starred', 'users'] as const)" :key="key" class="clone-stage-row">
+                <span class="clone-stage-label">{{ t(`settings.common.clone.stages.${key}`) }}</span>
+                <span class="clone-stage-count">{{ cloneStages[key].done }} / {{ cloneStages[key].total }}</span>
+                <span v-if="cloneStages[key].failed" class="clone-stage-failed">✗ {{ cloneStages[key].failed }}</span>
+                <span class="status-badge" :class="cloneStatusClass(cloneStages[key].status)">
+                  {{ t(`settings.common.clone.status.${cloneStages[key].status}`) }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Push (write back) -->
+          <div v-else class="sub-block">
+            <p class="feature-desc" style="margin: 0 0 0.6rem 0">
+              {{ t("settings.common.clone.push.desc") }}
+            </p>
+            <div class="tc-actions">
+              <button v-if="!pushRunning" class="btn-primary" :disabled="cloneRunning" @click="runPush">
+                {{ t("settings.common.clone.push.start") }}
+              </button>
+              <button v-else class="btn-danger" @click="cancelPush">
+                {{ t("settings.common.clone.cancel") }}
+              </button>
+            </div>
+            <div v-if="pushRunning || pushStages.starred.status !== 'idle'" class="clone-progress">
+              <div v-for="key in (['starred', 'playlists'] as const)" :key="key" class="clone-stage-row">
+                <span class="clone-stage-label">{{ t(`settings.common.clone.push.${key}`) }}</span>
+                <span class="clone-stage-count">{{ pushStages[key].done }} / {{ pushStages[key].total }}</span>
+                <span v-if="pushStages[key].failed" class="clone-stage-failed">✗ {{ pushStages[key].failed }}</span>
+                <span class="status-badge" :class="cloneStatusClass(pushStages[key].status)">
+                  {{ t(`settings.common.clone.status.${pushStages[key].status}`) }}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Shared live log — both directions write into the same cloneLog -->
+          <details v-if="cloneLog.length" class="clone-log sub-block" open>
+            <summary class="mono-label">{{ t("settings.common.clone.log") }}</summary>
+            <pre class="clone-log-pre">{{ cloneLog.join("\n") }}</pre>
+          </details>
         </div>
-        <div class="transcode-grid">
-          <label class="tc-row">
-            <span class="tc-key">{{ t("settings.common.clone.url") }}</span>
-            <input
-              v-model="cloneForm.url"
-              class="form-input"
-              :placeholder="t('settings.common.clone.urlPlaceholder')"
-              :disabled="cloneRunning || pushRunning"
-              autocomplete="off"
-            />
-          </label>
-          <p class="feature-desc tc-desc">{{ t("settings.common.clone.urlDesc") }}</p>
+      </section>
 
-          <label class="tc-row">
-            <span class="tc-key">{{ t("settings.common.clone.username") }}</span>
-            <input
-              v-model="cloneForm.username"
-              class="form-input"
-              :placeholder="t('settings.common.clone.usernamePlaceholder')"
-              :disabled="cloneRunning || pushRunning"
-              autocomplete="off"
-            />
-          </label>
-
-          <label class="tc-row">
-            <span class="tc-key">{{ t("settings.common.clone.password") }}</span>
-            <input
-              v-model="cloneForm.password"
-              type="password"
-              class="form-input"
-              :placeholder="t('settings.common.clone.passwordPlaceholder')"
-              :disabled="cloneRunning || pushRunning"
-              autocomplete="off"
-            />
-          </label>
-        </div>
-        <div class="corner corner-tl"></div>
-        <div class="corner corner-br"></div>
-      </div>
-
-      <!-- Sub-page tabs -->
-      <div class="tool-tabs">
-        <button :class="['tool-tab', { active: tab === 'clone' }]" @click="tab = 'clone'">{{ t("tools.tabClone") }}</button>
-        <button :class="['tool-tab', { active: tab === 'push' }]" @click="tab = 'push'">{{ t("tools.tabPush") }}</button>
-      </div>
-
-      <!-- Sub-page: clone (upstream → local) -->
-      <div v-show="tab === 'clone'" class="card tools-card">
-        <p class="feature-desc" style="margin: 0 0 0.6rem 0">
-          {{ t("settings.common.clone.desc") }}
-        </p>
-        <div class="transcode-grid">
-          <label class="tc-row">
-            <span class="tc-key">{{ t("settings.common.clone.audioToggle") }}</span>
-            <span class="scan-toggle">
-              <input type="checkbox" v-model="cloneAudioEnabled" :disabled="cloneRunning" />
-              <span>{{ cloneAudioEnabled ? t("common.on") : t("common.off") }}</span>
-            </span>
-          </label>
-          <p class="feature-desc tc-desc">{{ t("settings.common.clone.audioToggleDesc") }}</p>
-
-          <label class="tc-row">
-            <span class="tc-key">{{ t("settings.common.clone.usersToggle") }}</span>
-            <span class="scan-toggle">
-              <input type="checkbox" v-model="cloneUsersEnabled" :disabled="cloneRunning" />
-              <span>{{ cloneUsersEnabled ? t("common.on") : t("common.off") }}</span>
-            </span>
-          </label>
-          <p class="feature-desc tc-desc">{{ t("settings.common.clone.usersToggleDesc") }}</p>
-
-          <div class="tc-actions">
-            <button v-if="!cloneRunning" class="btn-primary" :disabled="pushRunning" @click="runClone">
-              {{ t("settings.common.clone.start") }}
-            </button>
-            <button v-else class="btn-danger" @click="cancelClone">
-              {{ t("settings.common.clone.cancel") }}
-            </button>
+      <!-- ============ 工作池 ============ -->
+      <section class="settings-section card" :class="{ open: open.workPool }">
+        <button class="section-header" @click="toggleSection('workPool')">
+          <span class="section-title">⚙ 工作池</span>
+          <span class="section-caret">{{ open.workPool ? '−' : '+' }}</span>
+        </button>
+        <div v-show="open.workPool" class="section-body">
+      <!-- Work pool card -->
+      <div class="card tools-work-pool-card">
+        <div class="card-header">
+          <span class="card-title">工作池</span>
+          <div class="wp-header-actions">
+            <span v-if="workerPool.isWorking" class="wp-auto-status wp-auto-status-running">运行中</span>
+            <span v-else-if="autoStartCountdownText" class="wp-auto-status">{{ autoStartCountdownText }} 后自动启动</span>
+            <button class="wp-refresh" :disabled="workerPool.isWorking" @click="workerPool.pollNow()">立即开始</button>
           </div>
         </div>
-
-        <div v-if="cloneRunning || cloneStages.metadata.status !== 'idle'" class="clone-progress">
-          <div v-for="key in (['metadata', 'audio', 'playlists', 'starred', 'users'] as const)" :key="key" class="clone-stage-row">
-            <span class="clone-stage-label">{{ t(`settings.common.clone.stages.${key}`) }}</span>
-            <span class="clone-stage-count">{{ cloneStages[key].done }} / {{ cloneStages[key].total }}</span>
-            <span v-if="cloneStages[key].failed" class="clone-stage-failed">✗ {{ cloneStages[key].failed }}</span>
-            <span class="status-badge" :class="cloneStatusClass(cloneStages[key].status)">
-              {{ t(`settings.common.clone.status.${cloneStages[key].status}`) }}
-            </span>
-          </div>
+        <div class="wp-progress-line">
+          <span class="wp-progress-label">解析进度</span>
+          <span class="wp-progress-num">{{ workCounts.completed }} / {{ totalTasks }} ({{ progressPct }}%)</span>
         </div>
-        <div class="corner corner-tl"></div>
-        <div class="corner corner-br"></div>
+        <div class="wp-progress-bar">
+          <div class="wp-progress-fill" :style="{ width: progressPct + '%' }"></div>
+        </div>
+        <div class="wp-counts">
+          <div class="wp-count"><span class="wp-count-label">队列</span><span class="wp-count-num">{{ workCounts.queued }}</span></div>
+          <div class="wp-count"><span class="wp-count-label">进行中</span><span class="wp-count-num">{{ workCounts.claimed }}</span></div>
+          <div class="wp-count"><span class="wp-count-label">完成</span><span class="wp-count-num">{{ workCounts.completed }}</span></div>
+          <div class="wp-count" :class="{ 'wp-count-emphasis': workCounts.failed > 0 }"><span class="wp-count-label">失败</span><span class="wp-count-num">{{ workCounts.failed }}</span></div>
+        </div>
+        <div class="wp-workers">
+          <div class="wp-workers-title">活跃浏览器 worker</div>
+          <div v-if="workLoad.length === 0" class="wp-workers-empty">无浏览器在线</div>
+          <ul v-else class="wp-workers-list">
+            <li v-for="row in workLoad" :key="row.username" class="wp-worker-row">
+              <span class="wp-worker-name">{{ row.username }}</span>
+              <span class="wp-worker-load">{{ row.n }} 个任务</span>
+            </li>
+          </ul>
+        </div>
+        <div v-if="workCounts.failed > 0 || workCounts.claimed > 0" class="wp-actions">
+          <button v-if="workCounts.failed > 0" class="btn-secondary btn-sm" @click="onResetFailedWork()">重启失败</button>
+          <button v-if="workCounts.claimed > 0" class="btn-secondary btn-sm" @click="onReclaimStaleWork()">回收超时</button>
+        </div>
+        <div class="wp-worker-toggle">
+          <label class="wp-toggle-label">
+            <input type="checkbox" :checked="workerPool.enabled" :disabled="!workerPool.eligible" @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)" />
+            <span>浏览器 Worker: {{ workerPool.enabled ? '已启用' : '已禁用' }}</span>
+          </label>
+        </div>
+        <div v-if="workerPool.lastError" class="wp-last-error">
+          <span>⚠</span> <code>{{ workerPool.lastError }}</code>
+        </div>
       </div>
-
-      <!-- Sub-page: push (local → upstream) -->
-      <div v-show="tab === 'push'" class="card tools-card">
-        <p class="feature-desc" style="margin: 0 0 0.6rem 0">
-          {{ t("settings.common.clone.push.desc") }}
-        </p>
-        <div class="tc-actions">
-          <button v-if="!pushRunning" class="btn-primary" :disabled="cloneRunning" @click="runPush">
-            {{ t("settings.common.clone.push.start") }}
-          </button>
-          <button v-else class="btn-danger" @click="cancelPush">
-            {{ t("settings.common.clone.cancel") }}
-          </button>
         </div>
-        <div v-if="pushRunning || pushStages.starred.status !== 'idle'" class="clone-progress">
-          <div v-for="key in (['starred', 'playlists'] as const)" :key="key" class="clone-stage-row">
-            <span class="clone-stage-label">{{ t(`settings.common.clone.push.${key}`) }}</span>
-            <span class="clone-stage-count">{{ pushStages[key].done }} / {{ pushStages[key].total }}</span>
-            <span v-if="pushStages[key].failed" class="clone-stage-failed">✗ {{ pushStages[key].failed }}</span>
-            <span class="status-badge" :class="cloneStatusClass(pushStages[key].status)">
-              {{ t(`settings.common.clone.status.${pushStages[key].status}`) }}
-            </span>
+      </section>
+
+      <!-- ============ 存储与 R2 费用 ============ -->
+      <section class="settings-section card" :class="{ open: open.storage }">
+        <button class="section-header" @click="toggleSection('storage')">
+          <span class="section-title">💾 存储与 R2 费用</span>
+          <span class="section-caret">{{ open.storage ? '−' : '+' }}</span>
+        </button>
+        <div v-show="open.storage" class="section-body">
+      <div class="card tools-storage-card">
+        <div class="card-header">
+          <span class="card-title">存储 & R2 费用</span>
+          <button class="wp-refresh" :disabled="storageLoading" @click="loadStorageStats">↻</button>
+        </div>
+        <div v-if="storageLoading" class="storage-loading">加载中…</div>
+        <template v-else-if="storageStats">
+          <table class="storage-table">
+            <thead><tr><th>存储源</th><th class="num-col">文件数</th><th class="num-col">占用空间</th></tr></thead>
+            <tbody>
+              <tr v-for="row in storageStats.breakdown" :key="row.source_type">
+                <td>{{ row.source_type.toUpperCase() }}</td>
+                <td class="num-col">{{ row.count.toLocaleString() }}</td>
+                <td class="num-col">{{ fmtBytes(row.bytes) }}</td>
+              </tr>
+              <tr v-if="storageStats.r2CoverCount > 0">
+                <td>R2 封面</td>
+                <td class="num-col">{{ storageStats.r2CoverCount }}</td>
+                <td class="num-col">{{ fmtBytes(storageStats.r2CoverBytes) }}</td>
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr>
+                <td><strong>合计</strong></td>
+                <td class="num-col"><strong>{{ (storageStats.breakdown.reduce((s, r) => s + r.count, 0) + storageStats.r2CoverCount).toLocaleString() }}</strong></td>
+                <td class="num-col"><strong>{{ fmtBytes(storageStats.breakdown.reduce((s, r) => s + r.bytes, 0) + storageStats.r2CoverBytes) }}</strong></td>
+              </tr>
+            </tfoot>
+          </table>
+          <div class="cost-rows">
+            <div class="cost-row"><span class="cost-label">R2 文件存储</span><span class="cost-value">{{ fmtBytes(r2Row.bytes) }}</span></div>
+            <div class="cost-row"><span class="cost-label">R2 封面存储</span><span class="cost-value">{{ fmtBytes(storageStats.r2CoverBytes ?? 0) }}</span></div>
+            <div class="cost-row"><span class="cost-label">R2 总用量</span><span class="cost-value" style="font-weight:600">{{ fmtBytes(r2TotalBytes) }}</span></div>
+            <div class="cost-row cost-row-input">
+              <label class="cost-label">免费额度分配</label>
+              <div class="free-alloc-input-row">
+                <input v-model.number="freeAllocInput" type="number" min="0" max="10" step="0.5" class="free-alloc-input" />
+                <span class="cost-unit">GB</span>
+                <button class="btn-sm btn-primary" :disabled="freeAllocSaving" @click="saveFreeAlloc">保存</button>
+              </div>
+            </div>
+            <div class="cost-row"><span class="cost-label">计费用量</span><span class="cost-value">{{ billableGb <= 0 ? '0 GB（免费额内）' : `${billableGb.toFixed(3)} GB` }}</span></div>
+            <div class="cost-row cost-total-row"><span class="cost-label">预估月费</span><span class="cost-value cost-total">{{ monthlyCost <= 0 ? '$0.00' : `$${monthlyCost.toFixed(4)}` }}</span></div>
           </div>
-        </div>
-        <div class="corner corner-tl"></div>
-        <div class="corner corner-br"></div>
+        </template>
+        <div v-else class="storage-loading muted">暂无数据</div>
       </div>
-
-      <!-- Shared live log -->
-      <details v-if="cloneLog.length" class="clone-log card tools-card" open>
-        <summary class="mono-label">{{ t("settings.common.clone.log") }}</summary>
-        <pre class="clone-log-pre">{{ cloneLog.join("\n") }}</pre>
-      </details>
+        </div>
+      </section>
     </template>
-
-    <!-- Toast -->
-    <transition name="toast">
-      <div v-if="toast.show" class="tools-toast" :class="toast.type">{{ toast.msg }}</div>
-    </transition>
   </div>
 </template>
 
 <style scoped>
 .tools { max-width: 860px; }
-.tools-card { padding: 1rem 1.2rem; margin-bottom: 1.1rem; position: relative; }
 
-/* Sub-page tabs */
-.tool-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.1rem; }
-.tool-tab {
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
-  color: var(--color-text-secondary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  letter-spacing: 0.05em;
-  padding: 0.45rem 1.1rem;
+/* Sections mirror Settings.vue's .settings-section exactly (same
+   markup shape: button.section-header + v-show'd .section-body, no
+   collapse transition) so Tools and Settings share one design language
+   instead of Tools having its own bespoke accordion. */
+.settings-section { padding: 0; margin-bottom: 1.1rem; overflow: hidden; }
+.section-header {
+  width: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.95rem 1.2rem;
+  background: var(--color-bg-primary);
+  border: none;
+  color: var(--color-text-primary);
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition: background 0.15s;
 }
-.tool-tab:hover { color: var(--color-text-primary); }
-.tool-tab.active {
+.section-header:hover { background: var(--color-bg-tertiary); }
+.settings-section.open .section-header { border-bottom: 1px solid var(--color-border-subtle); }
+.section-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.section-caret {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
   color: var(--color-accent-primary);
-  border-color: var(--color-accent-primary);
-  background: var(--color-accent-dim);
+  width: 20px; text-align: center;
+}
+.section-body { padding: 1.1rem 1.2rem 1.3rem; }
+.sub-block { padding: 0.9rem 0; border-bottom: 1px solid var(--color-border-subtle); }
+.sub-block:first-child { padding-top: 0; }
+.sub-block:last-child { border-bottom: none; padding-bottom: 0; }
+
+.seg { display: inline-flex; border: 1px solid var(--color-border-subtle); margin-bottom: 1rem; }
+.seg-btn {
+  background: none; border: none; padding: 0.35rem 0.85rem; cursor: pointer;
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  letter-spacing: 0.05em; text-transform: uppercase;
+  color: var(--color-text-secondary);
+  border-right: 1px solid var(--color-border-subtle);
+}
+.seg-btn:last-child { border-right: none; }
+.seg-btn:hover { color: var(--color-text-primary); }
+.seg-btn.active { background: var(--color-accent-dim); color: var(--color-accent-primary); }
+
+.clone-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem 0.95rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 6px;
+  background: var(--color-bg-primary);
 }
 
 /* Shared with Settings (scoped copies) */
@@ -1084,4 +1427,45 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
 .tools-toast.error { border-color: #e5484d; }
 .toast-enter-active, .toast-leave-active { transition: opacity 0.2s; }
 .toast-enter-from, .toast-leave-to { opacity: 0; }
+
+.tools-work-pool-card, .tools-storage-card { padding: 1rem 1.2rem; margin-top: 0; }
+.wp-refresh { background: none; border: 1px solid var(--color-border-subtle); border-radius: 4px; color: var(--color-text-secondary); cursor: pointer; font-size: var(--fs-sm); padding: 0.2rem 0.6rem; }
+.wp-refresh:hover { border-color: var(--color-accent-dim); color: var(--color-text-primary); }
+.wp-refresh:disabled { opacity: 0.5; cursor: default; }
+/* 115 — countdown/running status sits left of the manual poll button */
+.wp-header-actions { display: flex; align-items: center; gap: 0.6rem; }
+.wp-auto-status { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); white-space: nowrap; }
+.wp-auto-status-running { color: var(--color-accent-primary); }
+.wp-progress-line { display: flex; justify-content: space-between; font-size: var(--fs-sm); margin-bottom: 0.3rem; }
+.wp-progress-bar { height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden; margin-bottom: 0.8rem; }
+.wp-progress-fill { height: 100%; background: var(--color-accent-primary); transition: width 0.3s; }
+.wp-counts { display: flex; gap: 1.5rem; margin-bottom: 0.8rem; }
+.wp-count { display: flex; flex-direction: column; align-items: center; }
+.wp-count-label { font-size: var(--fs-xs); color: var(--color-text-muted); }
+.wp-count-num { font-family: var(--font-mono); font-size: 1.1rem; font-weight: 600; color: var(--color-text-primary); }
+.wp-count-emphasis .wp-count-num { color: #e5484d; }
+.wp-workers { margin-bottom: 0.6rem; }
+.wp-workers-title { font-size: var(--fs-xs); color: var(--color-text-muted); margin-bottom: 0.3rem; }
+.wp-workers-empty { font-size: var(--fs-sm); color: var(--color-text-muted); }
+.wp-workers-list { list-style: none; padding: 0; margin: 0; }
+.wp-worker-row { display: flex; justify-content: space-between; padding: 0.2rem 0; font-size: var(--fs-sm); }
+.wp-worker-name { color: var(--color-text-primary); }
+.wp-worker-load { color: var(--color-text-muted); }
+.wp-actions { display: flex; gap: 0.6rem; margin-bottom: 0.6rem; }
+.wp-worker-toggle { padding-top: 0.5rem; border-top: 1px solid var(--color-border-subtle); }
+.wp-toggle-label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: var(--fs-sm); }
+.wp-last-error { margin-top: 0.4rem; font-size: var(--fs-xs); color: #e5484d; }
+.storage-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
+.storage-table th, .storage-table td { padding: 0.4rem 0.6rem; text-align: left; border-bottom: 1px solid var(--color-border-subtle); font-size: var(--fs-sm); }
+.storage-table .num-col { text-align: right; font-family: var(--font-mono); }
+.cost-rows { display: flex; flex-direction: column; gap: 0.4rem; }
+.cost-row { display: flex; justify-content: space-between; font-size: var(--fs-sm); }
+.cost-label { color: var(--color-text-muted); }
+.cost-value { font-family: var(--font-mono); }
+.cost-total-row { font-weight: 600; border-top: 1px solid var(--color-border-subtle); padding-top: 0.4rem; }
+.cost-total { color: var(--color-accent-primary); }
+.cost-row-input { flex-direction: column; gap: 0.3rem; }
+.free-alloc-input-row { display: flex; align-items: center; gap: 0.4rem; }
+.free-alloc-input { width: 60px; }
+.storage-loading { padding: 1rem; color: var(--color-text-muted); font-size: var(--fs-sm); }
 </style>

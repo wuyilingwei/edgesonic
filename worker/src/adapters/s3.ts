@@ -1,4 +1,3 @@
-// 096 — S3-compatible storage adapter (MinIO / AWS S3 / Backblaze B2 / Wasabi).
 //
 // Design decisions:
 //   • Always path-style URL: {endpoint}/{bucket}/{key}

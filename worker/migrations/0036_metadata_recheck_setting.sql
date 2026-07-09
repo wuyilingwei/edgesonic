@@ -1,4 +1,3 @@
--- 110 — periodic auto-recheck: dispatches a browser-pool 'metadata' task
 -- (dedupKey namespace "recheck:<instanceId>", dispatched at most once per
 -- instance ever) for song_instances that either (A) the worker's embedded
 -- tag parser could not read at all (tag_scanned=2 — unsupported container

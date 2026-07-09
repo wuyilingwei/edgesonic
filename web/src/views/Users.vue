@@ -15,7 +15,6 @@ function showToast(msg: string, type = "success") { toast.value = { show: true, 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 const levelColors: Record<number, string> = { 0: "muted", 1: "success", 2: "info", 3: "warning" };
 
-// 064 — Per-user cache-buster for avatar thumbs. Bump on successful upload so
 // the existing /rest/getAvatar response (Cache-Control: max-age=86400 from
 // subsonic/account.ts) doesn't stick around in the browser cache.
 const avatarBust = ref<Record<string, number>>({});
@@ -204,7 +203,6 @@ function changeLevel(u: { username: string; level: number }, newLevel: number) {
   updateUser({ username: u.username, level: newLevel });
 }
 
-// 064 — Avatar button is visible when caller can edit this row's avatar:
 // always for self; admin+ for everyone.
 const canEditAvatar = (u: { username: string }) =>
   u.username === currentUsername.value || isAdmin.value;
@@ -246,7 +244,6 @@ onMounted(load);
 
     <div v-if="loading" class="empty-state">{{ t("common.loading") }}</div>
 
-    <!-- 064 — added a leading Avatar column; total cols now: avatar / name / level / status / actions -->
     <div v-else class="table-wrap" style="--grid-cols: 56px 1.5fr 1fr 1fr auto">
       <div class="table-header">
         <span></span>
@@ -275,7 +272,6 @@ onMounted(load);
       <div v-if="!users.length" class="empty-state">{{ t("users.noUsers") }}</div>
     </div>
 
-    <!-- 064 — Avatar modal: preview + file picker + submit -->
     <div v-if="showAvatarModal" class="modal-backdrop" @click.self="closeAvatarModal">
       <div class="card avatar-modal">
         <div class="card-header">
@@ -319,7 +315,6 @@ onMounted(load);
 .user-name { font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-sm); color: var(--color-text-primary); letter-spacing: 0.05em; }
 .level-select { display: inline-block; width: auto; padding: 0.25rem 0.5rem; font-size: var(--fs-sm); }
 
-/* 064 — Avatar cell + row actions */
 .avatar-cell {
   position: relative;
   width: 36px;

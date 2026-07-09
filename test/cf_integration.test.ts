@@ -1,4 +1,3 @@
-// 054 — Cloudflare API integration unit test.
 //
 // Coverage:
 //   1. callCfApi success / CF success=false / non-JSON branches
@@ -80,7 +79,6 @@ function jsonResp(body: unknown, status = 200): Response {
 // ---------------------------------------------------------------------------
 // App builder — mounts cfRoutes with a super-admin context var.
 // ---------------------------------------------------------------------------
-// 087 — cfRoutes now mounts a route-level permissionMiddleware("manage_cloudflare")
 // that reads user_permissions from c.env.DB. The harness injects a minimal D1
 // stub that answers the one SELECT the middleware issues; rows seeded so that
 // level=3 → enabled=1 and anything else → enabled=0 (matches the production

@@ -1,4 +1,3 @@
-// 049 — SandboxTranscodeEngine.
 //
 // Drives the worker/transcoder-image container via @cloudflare/sandbox.
 // The container exposes:
