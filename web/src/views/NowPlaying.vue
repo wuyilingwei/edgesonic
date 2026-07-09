@@ -6,6 +6,14 @@ import { useAuth, formatDuration, parseXmlInner } from "../api";
 const player = usePlayerStore();
 const { coverArtUrl, authFetch } = useAuth();
 
+// Tracks the currently-active lyric line's DOM element (for scroll-into-view).
+// Was previously declared in a separate bare <script> block, which is
+// module-scope (shared across every instance of this component) rather than
+// per-instance state, and confused vue-tsc's cross-block type inference for
+// the template ref callback below (spurious "HTMLElement not assignable to
+// null" error). Component-local `let` inside <script setup> is correct here.
+let lyricsActiveEl: HTMLElement | null = null;
+
 // ---- Lyrics ----
 interface LyricLine { time: number; text: string }
 const lyrics = ref<LyricLine[]>([]);
@@ -120,9 +128,15 @@ function formatT(sec: number): string {
     <!-- Left: cover + song info -->
     <div class="np-left">
       <div class="np-cover-wrap">
+        <!-- 400 isn't in the backend's ALLOWED_COVER_SIZES allow-list
+             (64/96/128/192/256/384/512 — media.ts parseCoverSize), so a
+             request with size=400 silently fell through to the uncached
+             "serve the original file" path: every play served the full-size
+             original instead of a cached thumbnail. 512 is the closest
+             allowed size at or above this box's 400px CSS width. -->
         <img
           v-if="track?.coverArt && !coverFailed"
-          :src="coverArtUrl(track.coverArt, 400)"
+          :src="coverArtUrl(track.coverArt, 512)"
           class="np-cover"
           @error="coverFailed = true"
           alt="cover"
@@ -207,10 +221,6 @@ function formatT(sec: number): string {
     </transition>
   </div>
 </template>
-
-<script lang="ts">
-let lyricsActiveEl: HTMLElement | null = null;
-</script>
 
 <style scoped>
 .nowplaying {
