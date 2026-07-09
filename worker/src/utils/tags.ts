@@ -278,12 +278,61 @@ export interface PictureLocation {
   offset: number;
   length: number;
   mime: string;
+  // 111 — which buffer `offset` is relative to. Absent/"head" for every
+  // pre-111 caller (offsets were always head-relative); "tail" only when the
+  // picture was found via the WAV tail-scan fallback, so callers know they
+  // must index into the TAIL slice they fetched, not the head.
+  source?: "head" | "tail";
 }
 
-export function locateEmbeddedPicture(head: Uint8Array): PictureLocation | null {
-  if (head.length < 4) return null;
-  if (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) return locateID3Picture(head, 0);
-  if (head[0] === 0x66 && head[1] === 0x4c && head[2] === 0x61 && head[3] === 0x43) return locateFLACPicture(head);
+// 111 — head-only lookup never found WAV covers: a WAV file starts with
+// "RIFF", which matched neither of the two branches below, so any embedded
+// APIC art in a WAV's "id3 "/"ID3 " sub-chunk was silently never located.
+// `tail` mirrors parseTags' dual head/tail design (many WAV rippers append
+// the id3 chunk AFTER the audio "data" payload); when the picture is found
+// in `tail`, the returned offset is relative to the START OF `tail` (not the
+// whole file) — callers that fetched `tail` as its own slice can index into
+// it directly, exactly like the head case.
+export function locateEmbeddedPicture(head: Uint8Array, tail?: Uint8Array): PictureLocation | null {
+  if (head.length >= 4) {
+    if (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) return locateID3Picture(head, 0);
+    if (head[0] === 0x66 && head[1] === 0x4c && head[2] === 0x61 && head[3] === 0x43) return locateFLACPicture(head);
+    if (head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46) {
+      const pic = locateWAVPictureHead(head);
+      if (pic) return pic;
+    }
+  }
+  const tailPic = tail ? locateWAVPictureTail(tail) : null;
+  return tailPic ? { ...tailPic, source: "tail" } : null;
+}
+
+// WAV "id3 "/"ID3 " chunk positioned BEFORE the "data" payload — walk chunks
+// from the RIFF header exactly like parseWAV's primary branch.
+function locateWAVPictureHead(buf: Uint8Array): PictureLocation | null {
+  let pos = 12;
+  while (pos + 8 <= buf.length) {
+    const id = String.fromCharCode(buf[pos], buf[pos + 1], buf[pos + 2], buf[pos + 3]);
+    const size = buf[pos + 4] | (buf[pos + 5] << 8) | (buf[pos + 6] << 16) | (buf[pos + 7] << 24);
+    if (id === "id3 " || id === "ID3 ") {
+      const chunkStart = pos + 8;
+      const pic = locateID3Picture(buf.subarray(chunkStart, Math.min(chunkStart + size, buf.length)), chunkStart);
+      if (pic) return pic;
+    }
+    if (id === "data") break; // audio payload — a trailing id3 chunk needs the tail slice
+    pos += 8 + size + (size % 2);
+  }
+  return null;
+}
+
+// WAV "id3 "/"ID3 " chunk positioned AFTER "data" — same byte-scan technique
+// parseWAV(buf, fromTail=true) already uses for text tags.
+function locateWAVPictureTail(buf: Uint8Array): PictureLocation | null {
+  for (let i = 0; i + 10 < buf.length; i++) {
+    if (buf[i] === 0x49 && buf[i + 1] === 0x44 && buf[i + 2] === 0x33 && buf[i + 3] <= 4 && buf[i + 4] === 0) {
+      const pic = locateID3Picture(buf.subarray(i), i);
+      if (pic) return pic;
+    }
+  }
   return null;
 }
 

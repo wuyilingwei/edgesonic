@@ -724,6 +724,13 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
    'Copy WebDAV songs to R2 on first play so later plays stream from R2 (faster). Uses R2 storage.',
    unixepoch());
 
+-- 0036: 110 periodic browser-pool metadata re-check (unsupported formats +
+-- lyrics/disc backfill). Default 24h; 0 disables.
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('metadata_recheck_interval_hours', '24',
+   'Hours between automatic browser-pool metadata re-checks for unsupported-format or lyrics/disc-incomplete songs (0=disabled)',
+   unixepoch());
+
 -- ============================================================================
 -- 23. External Secrets (0010 — 049 external transcoder shared key)
 -- ============================================================================

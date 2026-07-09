@@ -15,6 +15,7 @@ interface StorageRow { source_type: string; count: number; bytes: number }
 interface StorageStats {
   breakdown: StorageRow[];
   r2CoverCount: number;
+  r2CoverBytes: number;
   freeAllocationGb: number;
 }
 const storageStats = ref<StorageStats | null>(null);
@@ -27,7 +28,9 @@ const R2_PRICE_PER_GB = 0.015;
 const r2Row = computed(() =>
   storageStats.value?.breakdown.find((r) => r.source_type === "r2") ?? { source_type: "r2", count: 0, bytes: 0 },
 );
-const r2Gb = computed(() => r2Row.value.bytes / 1024 ** 3);
+// 110 — R2 total for cost = native R2 uploads + cover art bytes (both live in R2).
+const r2TotalBytes = computed(() => r2Row.value.bytes + (storageStats.value?.r2CoverBytes ?? 0));
+const r2Gb = computed(() => r2TotalBytes.value / 1024 ** 3);
 const billableGb = computed(() => Math.max(0, r2Gb.value - freeAllocInput.value));
 const monthlyCost = computed(() => billableGb.value * R2_PRICE_PER_GB);
 
@@ -48,6 +51,7 @@ async function loadStorageStats() {
       storageStats.value = {
         breakdown: data.breakdown ?? [],
         r2CoverCount: data.r2CoverCount ?? 0,
+        r2CoverBytes: data.r2CoverBytes ?? 0,
         freeAllocationGb: data.freeAllocationGb ?? 10,
       };
       freeAllocInput.value = storageStats.value.freeAllocationGb;
@@ -617,91 +621,6 @@ onUnmounted(() => {
       </transition>
     </section>
 
-    <!-- 101 — Storage & R2 Cost Estimation (super-admin only) -->
-    <section v-if="isSuperAdmin" class="storage-section">
-      <div class="page-section-header">
-        <span class="mono-label">Storage</span>
-        <button class="btn-sm btn-secondary" :disabled="storageLoading" @click="loadStorageStats">↻</button>
-      </div>
-
-      <div class="storage-panels">
-        <!-- breakdown table -->
-        <div class="card storage-breakdown-card">
-          <div class="card-header"><span class="card-title">数据量</span></div>
-          <div v-if="storageLoading" class="storage-loading">加载中…</div>
-          <table v-else-if="storageStats" class="storage-table">
-            <thead>
-              <tr><th>存储源</th><th class="num-col">文件数</th><th class="num-col">占用空间</th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="row in storageStats.breakdown" :key="row.source_type">
-                <td class="type-cell">{{ row.source_type.toUpperCase() }}</td>
-                <td class="num-col">{{ row.count.toLocaleString() }}</td>
-                <td class="num-col">{{ fmtBytes(row.bytes) }}</td>
-              </tr>
-              <tr v-if="storageStats.r2CoverCount > 0" class="cover-row">
-                <td class="type-cell">R2 封面</td>
-                <td class="num-col">{{ storageStats.r2CoverCount }}</td>
-                <td class="num-col muted">–</td>
-              </tr>
-            </tbody>
-            <tfoot>
-              <tr>
-                <td><strong>合计</strong></td>
-                <td class="num-col">
-                  <strong>{{ storageStats.breakdown.reduce((s, r) => s + r.count, 0).toLocaleString() }}</strong>
-                </td>
-                <td class="num-col">
-                  <strong>{{ fmtBytes(storageStats.breakdown.reduce((s, r) => s + r.bytes, 0)) }}</strong>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-          <div v-else class="storage-loading muted">暂无数据</div>
-        </div>
-
-        <!-- R2 cost card -->
-        <div class="card r2-cost-card">
-          <div class="card-header"><span class="card-title">R2 费用估算</span></div>
-          <div class="cost-rows">
-            <div class="cost-row">
-              <span class="cost-label">R2 文件用量</span>
-              <span class="cost-value">{{ fmtBytes(r2Row.bytes) }}</span>
-            </div>
-            <div class="cost-row cost-row-input">
-              <label class="cost-label" for="free-alloc">免费额度分配</label>
-              <div class="free-alloc-input-row">
-                <input
-                  id="free-alloc"
-                  v-model.number="freeAllocInput"
-                  type="number" min="0" max="10" step="0.5"
-                  class="free-alloc-input"
-                />
-                <span class="cost-unit">GB</span>
-                <button class="btn-sm btn-primary" :disabled="freeAllocSaving" @click="saveFreeAlloc">保存</button>
-              </div>
-              <div class="cost-hint muted">Cloudflare R2 共 10 GB 免费额，此处设置分配给 EdgeSonic 的部分</div>
-            </div>
-            <div class="cost-row">
-              <span class="cost-label">计费用量</span>
-              <span class="cost-value" :class="{ 'cost-zero': billableGb <= 0 }">
-                {{ billableGb <= 0 ? '0 GB（免费额内）' : `${billableGb.toFixed(3)} GB` }}
-              </span>
-            </div>
-            <div class="cost-row cost-total-row">
-              <span class="cost-label">预估月费</span>
-              <span class="cost-value cost-total">
-                {{ monthlyCost <= 0 ? '$0.00' : `$${monthlyCost.toFixed(4)}` }}
-              </span>
-            </div>
-            <div class="cost-pricing-note muted">
-              超出免费额按 $0.015 / GB·月计费（仅存储部分，R2 出站流量免费）
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
     <!-- Stats -->
     <div class="grid grid-4 stats-grid">
       <div class="stat-card card hoverable">
@@ -778,6 +697,99 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <!-- 101 — Storage & R2 Cost Estimation (super-admin only, at bottom) -->
+    <section v-if="isSuperAdmin" class="storage-section" style="margin-top:1rem">
+      <div class="page-section-header">
+        <span class="mono-label">Storage</span>
+        <button class="btn-sm btn-secondary" :disabled="storageLoading" @click="loadStorageStats">↻</button>
+      </div>
+
+      <div class="storage-panels">
+        <!-- breakdown table -->
+        <div class="card storage-breakdown-card">
+          <div class="card-header"><span class="card-title">数据量</span></div>
+          <div v-if="storageLoading" class="storage-loading">加载中…</div>
+          <table v-else-if="storageStats" class="storage-table">
+            <thead>
+              <tr><th>存储源</th><th class="num-col">文件数</th><th class="num-col">占用空间</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in storageStats.breakdown" :key="row.source_type">
+                <td class="type-cell">{{ row.source_type.toUpperCase() }}</td>
+                <td class="num-col">{{ row.count.toLocaleString() }}</td>
+                <td class="num-col">{{ fmtBytes(row.bytes) }}</td>
+              </tr>
+              <tr v-if="storageStats.r2CoverCount > 0" class="cover-row">
+                <td class="type-cell">R2 封面</td>
+                <td class="num-col">{{ storageStats.r2CoverCount }}</td>
+                <td class="num-col">{{ fmtBytes(storageStats.r2CoverBytes) }}</td>
+              </tr>
+            </tbody>
+            <tfoot>
+              <tr>
+                <td><strong>合计</strong></td>
+                <td class="num-col">
+                  <strong>{{ (storageStats.breakdown.reduce((s, r) => s + r.count, 0) + storageStats.r2CoverCount).toLocaleString() }}</strong>
+                </td>
+                <td class="num-col">
+                  <strong>{{ fmtBytes(storageStats.breakdown.reduce((s, r) => s + r.bytes, 0) + storageStats.r2CoverBytes) }}</strong>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+          <div v-else class="storage-loading muted">暂无数据</div>
+        </div>
+
+        <!-- R2 cost card -->
+        <div class="card r2-cost-card">
+          <div class="card-header"><span class="card-title">R2 费用估算</span></div>
+          <div class="cost-rows">
+            <div class="cost-row">
+              <span class="cost-label">R2 文件存储</span>
+              <span class="cost-value">{{ fmtBytes(r2Row.bytes) }}</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">R2 封面存储</span>
+              <span class="cost-value">{{ fmtBytes(storageStats?.r2CoverBytes ?? 0) }}</span>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">R2 总用量</span>
+              <span class="cost-value" style="font-weight:600">{{ fmtBytes(r2TotalBytes) }}</span>
+            </div>
+            <div class="cost-row cost-row-input">
+              <label class="cost-label" for="free-alloc">免费额度分配</label>
+              <div class="free-alloc-input-row">
+                <input
+                  id="free-alloc"
+                  v-model.number="freeAllocInput"
+                  type="number" min="0" max="10" step="0.5"
+                  class="free-alloc-input"
+                />
+                <span class="cost-unit">GB</span>
+                <button class="btn-sm btn-primary" :disabled="freeAllocSaving" @click="saveFreeAlloc">保存</button>
+              </div>
+              <div class="cost-hint muted">Cloudflare R2 共 10 GB 免费额，此处设置分配给 EdgeSonic 的部分</div>
+            </div>
+            <div class="cost-row">
+              <span class="cost-label">计费用量</span>
+              <span class="cost-value" :class="{ 'cost-zero': billableGb <= 0 }">
+                {{ billableGb <= 0 ? '0 GB（免费额内）' : `${billableGb.toFixed(3)} GB` }}
+              </span>
+            </div>
+            <div class="cost-row cost-total-row">
+              <span class="cost-label">预估月费</span>
+              <span class="cost-value cost-total">
+                {{ monthlyCost <= 0 ? '$0.00' : `$${monthlyCost.toFixed(4)}` }}
+              </span>
+            </div>
+            <div class="cost-pricing-note muted">
+              超出免费额按 $0.015 / GB·月计费（仅存储部分，R2 出站流量免费）
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
   </div>
 </template>
 

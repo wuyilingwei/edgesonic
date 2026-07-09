@@ -105,6 +105,8 @@ async function loadFeatures() {
     // 091/092: hydrate presign toggles + probe R2 secrets presence.
     hydratePresignFromFeatures();
     loadR2PresignStatus();
+    // 110: hydrate the metadata re-check cadence.
+    hydrateMetadataRecheckFromFeatures();
   } catch (e: unknown) {
     // 后端契约可能尚未部署 —— 优雅降级显示错误（非 JSON 响应一律视为 API 不可用）
     error.value = e instanceof SyntaxError || !(e instanceof Error)
@@ -349,6 +351,33 @@ async function saveWebdavPresign() {
     showToast(`${t("settings.common.presign.saveFailed")}: ${msg}`, "error");
   }
   webdavPresignBusy.value = false;
+}
+
+// === 110 — metadata re-check cadence ===
+const metadataRecheckIntervalHours = ref<number>(24);
+const metadataRecheckIntervalBusy = ref(false);
+
+function hydrateMetadataRecheckFromFeatures() {
+  const hours = parseInt(findFeatureString("metadata_recheck_interval_hours", "24"), 10);
+  metadataRecheckIntervalHours.value = Number.isFinite(hours) && hours >= 0 ? hours : 24;
+}
+
+async function saveMetadataRecheckInterval() {
+  metadataRecheckIntervalBusy.value = true;
+  try {
+    const hours = Math.max(0, Math.min(168, Math.floor(metadataRecheckIntervalHours.value || 0)));
+    metadataRecheckIntervalHours.value = hours;
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "metadata_recheck_interval_hours",
+      value: String(hours),
+    }));
+    if (!data.ok) throw new Error(data.error || "metadata_recheck_interval_hours");
+    showToast(t("settings.common.workerPool.recheckIntervalSaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.workerPool.recheckIntervalSaveFailed")}: ${msg}`, "error");
+  }
+  metadataRecheckIntervalBusy.value = false;
 }
 
 function hydrateScanFromFeatures() {
@@ -660,6 +689,34 @@ async function onBackfillCompleted() {
     workerBackfillToast.value = e instanceof Error ? e.message : String(e);
   }
   workerBackfillBusy.value = false;
+}
+
+// 110 — admin trigger for /edgesonic/work/recheckMetadataNow. Runs the same
+// selection the cron tick (metadata_recheck_interval_hours) uses, bypassing
+// its cadence gate: dispatches a browser-pool metadata re-check for
+// tag_scanned=2 rows (unsupported container format) and tag_scanned=1 rows
+// still missing lyrics/disc despite the album already having a cover.
+const recheckMetadataBusy = ref(false);
+const recheckMetadataToast = ref("");
+async function onRecheckMetadataNow() {
+  if (!isSuperAdmin.value || recheckMetadataBusy.value) return;
+  recheckMetadataBusy.value = true;
+  recheckMetadataToast.value = "";
+  try {
+    const text = await edgesonicPost("work/recheckMetadataNow", {});
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "rejected");
+    recheckMetadataToast.value = t("settings.common.workerPool.recheckDoneToast", {
+      dispatched: data.dispatched || 0,
+      unsupported: data.unsupportedFormat || 0,
+      incomplete: data.lyricsOrDiscIncomplete || 0,
+      badDuration: data.implausibleWavDuration || 0,
+    });
+    await loadWorkerStatus();
+  } catch (e: unknown) {
+    recheckMetadataToast.value = e instanceof Error ? e.message : String(e);
+  }
+  recheckMetadataBusy.value = false;
 }
 
 // 078 — maintenance: cleanup duplicate album cover bindings. Calls
@@ -1672,6 +1729,40 @@ onMounted(() => {
                   : t("settings.common.workerPool.backfillButton") }}
               </button>
               <span v-if="workerBackfillToast" class="feature-desc" style="margin-left: 0.6rem">{{ workerBackfillToast }}</span>
+            </div>
+
+            <!-- 110 — cron-driven metadata re-check: interval + manual trigger
+                 (unsupported-format retries + lyrics/disc backfill). -->
+            <div class="tc-row" style="margin-top: 0.6rem">
+              <span class="tc-key">{{ t("settings.common.workerPool.recheckLabel") }}</span>
+              <span class="feature-desc">{{ t("settings.common.workerPool.recheckDesc") }}</span>
+            </div>
+            <div class="tc-actions">
+              <input
+                v-model.number="metadataRecheckIntervalHours"
+                type="number" min="0" max="168" step="1"
+                class="free-alloc-input"
+                style="width: 5rem"
+              />
+              <button
+                class="btn-sm btn-secondary"
+                :disabled="metadataRecheckIntervalBusy"
+                @click="saveMetadataRecheckInterval"
+              >
+                {{ t("settings.common.scan.save") }}
+              </button>
+              <button
+                class="btn-secondary"
+                :disabled="recheckMetadataBusy"
+                @click="onRecheckMetadataNow"
+              >
+                {{ recheckMetadataBusy
+                  ? t("settings.common.workerPool.recheckRunning")
+                  : t("settings.common.workerPool.recheckButton") }}
+              </button>
+            </div>
+            <div v-if="recheckMetadataToast" class="tc-actions">
+              <span class="feature-desc">{{ recheckMetadataToast }}</span>
             </div>
           </div>
         </div>
