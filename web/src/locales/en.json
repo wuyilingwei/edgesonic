@@ -519,10 +519,18 @@
         "recheckDoneToast": "Dispatched {dispatched} (unsupported format {unsupported} + lyrics/disc incomplete {incomplete} + implausible WAV duration {badDuration})",
         "recheckIntervalSaved": "Interval saved",
         "recheckIntervalSaveFailed": "Save failed",
-        "maxConcurrent": "Concurrency",
-        "maxConcurrentHint": "1-8, higher = faster but more bandwidth/CPU",
-        "maxConcurrentSaved": "Concurrency saved",
-        "maxConcurrentSaveFailed": "Save concurrency failed"
+        "lrcBackfillLabel": "Batch LRC sidecar backfill",
+        "lrcBackfillDesc": "Scan every song still missing lyrics for a sibling .lrc file next to its audio source and fill it in (094's sidecar check only fires at scan time for brand-new files or when a client actually requests lyrics — pre-existing library songs are never retroactively checked). Runs automatically every 24h by default — adjust or disable below.",
+        "lrcBackfillButton": "Backfill now",
+        "lrcBackfillRunning": "Backfilling…",
+        "lrcBackfillDoneToast": "Checked {candidates} songs missing lyrics, filled {filled}",
+        "lrcBackfillIntervalSaved": "Interval saved",
+        "lrcBackfillIntervalSaveFailed": "Save failed",
+        "maxConcurrent": "Concurrency ceiling",
+        "maxConcurrentHint": "1-8 — the browser auto-tunes actual concurrency between 1 and this ceiling based on processing speed: ramps up while tasks succeed, halves back down on failure",
+        "maxConcurrentSaved": "Concurrency ceiling saved",
+        "maxConcurrentSaveFailed": "Save concurrency ceiling failed",
+        "currentConcurrency": "Current concurrency"
       },
       "maintenance": {
         "title": "Maintenance tools",

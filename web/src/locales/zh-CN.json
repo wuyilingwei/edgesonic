@@ -519,10 +519,18 @@
         "recheckDoneToast": "已派发 {dispatched}（格式不兼容 {unsupported} + 歌词/碟号缺失 {incomplete} + WAV 时长异常 {badDuration}）",
         "recheckIntervalSaved": "检查频率已保存",
         "recheckIntervalSaveFailed": "保存失败",
-        "maxConcurrent": "并发度",
-        "maxConcurrentHint": "1-8，越高消化越快但带宽/CPU 消耗增加",
-        "maxConcurrentSaved": "并发度已保存",
-        "maxConcurrentSaveFailed": "保存并发度失败"
+        "lrcBackfillLabel": "批量回填 LRC 歌词",
+        "lrcBackfillDesc": "扫描所有仍缺歌词的歌曲，检查其音频文件旁是否有同名 .lrc 文件并回填（094 的 sidecar 检测只在新扫描入库或用户实际点开歌词时触发，老库存歌曲从未被回溯检查）。默认每 24 小时自动运行一次，可在下方调整或关闭。",
+        "lrcBackfillButton": "立即回填",
+        "lrcBackfillRunning": "回填中…",
+        "lrcBackfillDoneToast": "已检查 {candidates} 首缺歌词的歌曲，回填 {filled} 首",
+        "lrcBackfillIntervalSaved": "回填频率已保存",
+        "lrcBackfillIntervalSaveFailed": "保存失败",
+        "maxConcurrent": "并发上限",
+        "maxConcurrentHint": "1-8，浏览器会按处理速度自动在 1 到此上限之间调整实际并发数——处理顺利时逐步提高，出现失败时立刻减半回落",
+        "maxConcurrentSaved": "并发上限已保存",
+        "maxConcurrentSaveFailed": "保存并发上限失败",
+        "currentConcurrency": "当前并发"
       },
       "maintenance": {
         "title": "维护工具",

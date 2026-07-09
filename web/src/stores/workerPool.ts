@@ -83,6 +83,27 @@ export function formatTaskError(
   return prefixed.length > ERR_LIMIT ? prefixed.slice(0, ERR_LIMIT) : prefixed;
 }
 
+/**
+ * 113 — AIMD-style adaptive concurrency step. Given how the last batch went,
+ * returns the concurrency to use for the NEXT poll cycle:
+ *   - any failure in the batch → halve it (min 1) — back off hard the moment
+ *     the device/network shows strain.
+ *   - all succeeded → +1, capped at `ceiling` — ramp up one step at a time
+ *     while everything is going well.
+ *   - empty batch (no tasks polled) → unchanged, nothing to learn from.
+ * Exported so the unit test can exercise the ramp/backoff curve without
+ * spinning up the whole Pinia store + mocked fetch/Worker plumbing.
+ */
+export function nextConcurrency(
+  current: number,
+  ceiling: number,
+  batch: { total: number; failed: number },
+): number {
+  if (batch.total === 0) return current;
+  if (batch.failed > 0) return Math.max(1, Math.floor(current / 2));
+  return Math.min(ceiling, current + 1);
+}
+
 export const useWorkerPool = defineStore("workerPool", () => {
   const { level, edgesonicFetch, edgesonicPost, restUrl } = useAuth();
 
@@ -96,12 +117,21 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // mis-configured — feature_strings.worker_poll_interval_seconds is clamped
   // 30..3600 by the worker validator.
   const pollIntervalMs = ref(DEFAULT_POLL_MS);
-  // 088 — number of concurrent Web Workers used by pollAndDrain. Drives both
-  // the /work/poll `limit=` (so the server hands us exactly N tasks) and the
-  // Promise.all fan-out below. Hydrated from feature_strings.worker_max_concurrent
-  // on start; admin can change it live via Settings → workerPool sub-block.
-  // Clamped 1..8 on both sides (server validator + client hydrate guard).
+  // 088 — ceiling on concurrent Web Workers. Hydrated from
+  // feature_strings.worker_max_concurrent on start; admin can change it live
+  // via Settings → workerPool sub-block. Clamped 1..8 on both sides (server
+  // validator + client hydrate guard).
+  //
+  // 113 — this is now a CEILING, not the concurrency pollAndDrain actually
+  // uses every cycle. `currentConcurrency` below is the real, adaptive value:
+  // it starts at 1 and ramps up by +1 each cycle where every task in the
+  // batch succeeded (device/network has headroom), or halves back down (min
+  // 1) the moment a cycle has any failure (device/network is straining).
+  // This auto-tunes to "however fast this particular browser can actually
+  // go" instead of making every participant claim a fixed admin-picked
+  // number regardless of its real hardware/bandwidth.
   const maxConcurrent = ref(3);
+  const currentConcurrency = ref(1);
   const stats = ref({ completed: 0, failed: 0, currentTaskType: "" });
   const lastError = ref<string | null>(null);
   const lastPollAt = ref<number>(0);
@@ -280,15 +310,20 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastError.value = null;
     lastPollAt.value = Date.now();
     try {
+      // 113 — the ceiling may have been lowered by an admin since the last
+      // ramp-up; clamp before using it as the adaptive base.
+      if (currentConcurrency.value > maxConcurrent.value) {
+        currentConcurrency.value = maxConcurrent.value;
+      }
       // 089 S — Adaptive concurrency: when music is actively playing, throttle
       // metadata workers down to 1 so they don't compete with the player's own
       // /rest/stream Range requests for R2 bandwidth. Each metadata worker
-      // fetches up to 512 KB from /rest/stream; at maxConcurrent=3 that means
-      // 3 concurrent sub-requests competing with the player's stream → ~52 KB/s
+      // fetches up to 512 KB from /rest/stream; at full concurrency that means
+      // several concurrent sub-requests competing with the player's stream →
       // degraded throughput. Reducing to 1 during playback lets the player
       // dominate the available bandwidth while background work still trickles
       // through. Falls back to full concurrency when the store isn't mounted.
-      let effectiveConcurrent = maxConcurrent.value;
+      let effectiveConcurrent = currentConcurrency.value;
       isPlaybackThrottled.value = false;
       try {
         const player = usePlayerStore();
@@ -296,7 +331,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
           effectiveConcurrent = 1;
           isPlaybackThrottled.value = true;
         }
-      } catch { /* player store not available yet — keep full concurrency */ }
+      } catch { /* player store not available yet — keep adaptive concurrency */ }
 
       // 088 — `limit` matches the concurrency cap: a one-shot poll fetches as
       // many tasks as we can run in parallel, then Promise.all fans them out
@@ -310,12 +345,24 @@ export const useWorkerPool = defineStore("workerPool", () => {
       if (!data.ok) throw new Error(data.error || "poll rejected");
       // 093g — track whether the queue had work so scheduleNext can pick
       // the fast or idle cadence.
-      hadTasksLastPoll = (data.tasks || []).length > 0;
+      const tasks = data.tasks || [];
+      hadTasksLastPoll = tasks.length > 0;
       // 088 — concurrent drain. `Promise.all` doesn't short-circuit on first
       // rejection here because executeOne catches its own errors (recording
       // failed stats + pushRecent) and resolves anyway, so a single bad task
       // doesn't stop its siblings.
-      await Promise.all((data.tasks || []).map((task) => executeOne(task)));
+      const beforeFailed = stats.value.failed;
+      await Promise.all(tasks.map((task) => executeOne(task)));
+
+      // 113 — adjust the adaptive concurrency for the NEXT cycle based on how
+      // this batch went. Skipped during playback throttling — that's a
+      // deliberate override, not a signal about the device's real capacity.
+      if (!isPlaybackThrottled.value) {
+        currentConcurrency.value = nextConcurrency(currentConcurrency.value, maxConcurrent.value, {
+          total: tasks.length,
+          failed: stats.value.failed - beforeFailed,
+        });
+      }
     } catch (e) {
       lastError.value = e instanceof Error ? e.message : String(e);
     } finally {
@@ -459,6 +506,10 @@ export const useWorkerPool = defineStore("workerPool", () => {
       const mc = parseInt(fs.find((f) => f.key === "worker_max_concurrent")?.value || "3", 10);
       if (Number.isFinite(mc) && mc >= 1 && mc <= 8) {
         maxConcurrent.value = mc;
+        // 113 — the ceiling may have just been lowered below where the
+        // adaptive value had ramped to; clamp immediately rather than
+        // waiting for the next drain cycle to notice.
+        if (currentConcurrency.value > mc) currentConcurrency.value = mc;
       }
     } catch { /* fail-quiet — keep DEFAULT_POLL_MS */ }
   }
@@ -471,6 +522,10 @@ export const useWorkerPool = defineStore("workerPool", () => {
     // stale chips for the next user.
     recent.value = [];
     completedSamples.value = [];
+    // 113 — start the next session's adaptive ramp from scratch rather than
+    // carrying over a value tuned for whatever device/network the previous
+    // session had.
+    currentConcurrency.value = 1;
   }
 
   return {
@@ -481,9 +536,11 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastError,
     lastPollAt,
     pollIntervalMs,
-    // 088 — concurrency knob (live), surfaced so Settings.vue can read+display
+    // 088 — concurrency ceiling (live), surfaced so Settings.vue can read+display
     // alongside pollIntervalMs without a separate fetch.
     maxConcurrent,
+    // 113 — the real, adaptive concurrency pollAndDrain is currently using.
+    currentConcurrency,
     // 089 S — playback-throttle indicator for the Settings UI.
     isPlaybackThrottled,
     // 056 — HUD-facing
