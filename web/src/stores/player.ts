@@ -285,6 +285,44 @@ export const usePlayerStore = defineStore("player", () => {
     else _shuffleOrder = [];
   }
 
+  // 114 — Unified playback-mode cycle. `shuffle` and `repeatMode` used to
+  // each need their own button (PlayerBar/NowPlaying both had two), which
+  // doesn't match the single-button convention most players use (顺序播放 →
+  // 列表循环 → 单曲循环 → 随机播放 → …). This maps the two independent flags
+  // onto one 4-state cycle without changing next()/prev()'s underlying logic
+  // or the localStorage keys — shuffle+repeatMode stay the actual source of
+  // truth, this is just a friendlier view/action over them.
+  type PlaybackMode = "sequential" | "repeat-all" | "repeat-one" | "shuffle";
+  const playbackMode = computed<PlaybackMode>(() => {
+    if (shuffle.value) return "shuffle";
+    if (repeatMode.value === "all") return "repeat-all";
+    if (repeatMode.value === "one") return "repeat-one";
+    return "sequential";
+  });
+
+  function cyclePlaybackMode() {
+    const mode = playbackMode.value;
+    if (mode === "sequential") {
+      repeatMode.value = "all";
+    } else if (mode === "repeat-all") {
+      repeatMode.value = "one";
+    } else if (mode === "repeat-one") {
+      // Entering shuffle also sets repeatMode='all' so the shuffled order
+      // loops forever instead of stopping at the end (next()'s shuffle
+      // branch only wraps around when repeatMode==='all').
+      repeatMode.value = "all";
+      shuffle.value = true;
+      if (queue.value.length > 0) _regenShuffleOrder();
+    } else {
+      // shuffle → back to sequential
+      shuffle.value = false;
+      repeatMode.value = "off";
+      _shuffleOrder = [];
+    }
+    localStorage.setItem("edgesonic:repeatMode", repeatMode.value);
+    localStorage.setItem("edgesonic:shuffle", String(shuffle.value));
+  }
+
   /** Stop playback and clear queue (e.g. on logout). */
   function clear() {
     _pendingRestoreTime = null;
@@ -359,8 +397,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   return {
     queue, index, playing, currentTime, duration, volume, bufferedRanges,
-    current, hasTrack, repeatMode, shuffle,
+    current, hasTrack, repeatMode, shuffle, playbackMode,
     setQueue, playAt, toggle, next, prev, seek, setVolume,
-    toggleRepeat, toggleShuffle, clear,
+    toggleRepeat, toggleShuffle, cyclePlaybackMode, clear,
   };
 });

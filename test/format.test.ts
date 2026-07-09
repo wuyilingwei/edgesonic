@@ -202,6 +202,17 @@ assert(pl.lines[2].start === 62500, "[01:02.5] → 62500ms (padded fraction)");
 const plain = parseLrc("just a line\nanother line");
 assert(plain.synced === false && plain.lines.length === 2 && plain.lines[0].start === undefined,
   "plain text stays unsynced without start");
+
+// 114 — a "{...}" line interleaved among synced lyrics (non-lyric JSON /
+// word-timing side-channel some scrapers pass through verbatim) must not
+// surface as a spurious unsynced entry planted in the middle of the timeline.
+const withJunk = parseLrc('[00:00.00]第一句\n{"t":0,"c":[]}\n[00:08.12]第二句');
+assert(withJunk.synced === true, "still detected as synced");
+assert(withJunk.lines.length === 2, '"{...}" line dropped, only 2 real lyric lines kept');
+assert(withJunk.lines.every((l) => l.start !== undefined), "no line lost its start offset");
+const onlyJunk = parseLrc('{"just": "junk"}');
+assert(onlyJunk.synced === false && onlyJunk.lines.length === 0,
+  "a lyrics blob that's only junk yields no lines (not a bogus unsynced entry)");
 const lyrXml = subsonicOK({
   lyricsList: {
     structuredLyrics: {

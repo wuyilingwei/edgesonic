@@ -247,6 +247,14 @@ const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
 // ("[ti:..]", "[ar:..]", "[by:..]", "[offset:..]"...) are dropped; if the
 // blob has no timestamps at all, every non-empty line passes through
 // unsynced (plain-text lyrics from external fetchers).
+//
+// 114 — some sources interleave a line starting with "{" (a JSON metadata /
+// word-timing side-channel blob some scrapers pass through verbatim, not
+// lyric text). Before this, such a line fell through to the final
+// `out.push({ value: line })` and got planted as a spurious unsynced entry
+// in the middle of an otherwise-synced timeline (structuredLyrics would emit
+// it as a <line> with no `start` attribute, next to lines that all have one).
+// Dropped the same way "[tag:..]" metadata lines already are.
 // ---------------------------------------------------------------------------
 const LRC_TS = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
 
@@ -274,6 +282,8 @@ export function parseLrc(lyrics: string): {
     }
     // Metadata tag line like [ti:xxx] / [by:xxx] — not lyrics content.
     if (/^\[[a-zA-Z#][^\]]*\]$/.test(line)) continue;
+    // 114 — non-lyric "{...}" blob — not lyrics content either.
+    if (line.startsWith("{")) continue;
     out.push({ value: line });
   }
   if (synced) out.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));

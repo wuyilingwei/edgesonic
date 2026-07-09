@@ -28,6 +28,16 @@ const progressPct = computed(() =>
   player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0,
 );
 
+// 114 — icon + i18n key per unified playback mode (see player.ts cyclePlaybackMode).
+const PLAYBACK_MODE_ICONS: Record<string, string> = {
+  sequential: "➡", "repeat-all": "🔁", "repeat-one": "🔂", shuffle: "🔀",
+};
+const PLAYBACK_MODE_KEYS: Record<string, string> = {
+  sequential: "sequential", "repeat-all": "repeatAll", "repeat-one": "repeatOne", shuffle: "shuffle",
+};
+const playbackModeIcon = computed(() => PLAYBACK_MODE_ICONS[player.playbackMode]);
+const playbackModeKey = computed(() => PLAYBACK_MODE_KEYS[player.playbackMode]);
+
 // 093d — buffered range segments rendered as a light bar behind the
 // play-progress fill. Each tuple is [startSec, endSec]; we map to % of
 // duration. Browsers usually return one continuous range [0, N] for
@@ -91,15 +101,20 @@ function onVolume(e: Event) {
     <!-- Controls + progress -->
     <div class="pb-center">
       <div class="pb-controls">
-        <button class="pb-btn" :class="{ active: player.shuffle }" :disabled="!player.hasTrack" :title="t('player.shuffle')" @click="player.toggleShuffle()">🔀</button>
+        <!-- 114 — single playback-mode button (was two: shuffle toggle +
+             repeat cycle). Cycles 顺序→列表循环→单曲循环→随机→顺序. -->
+        <button
+          class="pb-btn"
+          :class="{ active: player.playbackMode !== 'sequential' }"
+          :disabled="!player.hasTrack"
+          :title="t(`player.playbackMode.${playbackModeKey}`)"
+          @click="player.cyclePlaybackMode()"
+        >{{ playbackModeIcon }}</button>
         <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.previous')" @click="player.prev()">⏮</button>
         <button class="pb-btn pb-play" :disabled="!player.hasTrack" :title="player.playing ? t('player.pause') : t('player.play')" @click="player.toggle()">
           {{ player.playing ? "⏸" : "▶" }}
         </button>
         <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.next')" @click="player.next()">⏭</button>
-        <button class="pb-btn" :class="{ active: player.repeatMode !== 'off' }" :disabled="!player.hasTrack" :title="t('player.repeat')" @click="player.toggleRepeat()">
-          {{ player.repeatMode === "one" ? "🔂" : "🔁" }}
-        </button>
       </div>
       <div class="pb-progress-row">
         <span class="pb-time">{{ formatDuration(Math.floor(player.currentTime)) }}</span>

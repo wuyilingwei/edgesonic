@@ -349,7 +349,13 @@
     "previous": "Previous",
     "play": "Play",
     "pause": "Pause",
-    "next": "Next"
+    "next": "Next",
+    "playbackMode": {
+      "sequential": "Sequential",
+      "repeatAll": "Repeat all",
+      "repeatOne": "Repeat one",
+      "shuffle": "Shuffle"
+    }
   },
   "tools": {
     "label": "SYSTEM / TOOLS",

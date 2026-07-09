@@ -349,7 +349,13 @@
     "previous": "上一首",
     "play": "播放",
     "pause": "暂停",
-    "next": "下一首"
+    "next": "下一首",
+    "playbackMode": {
+      "sequential": "顺序播放",
+      "repeatAll": "列表循环",
+      "repeatOne": "单曲循环",
+      "shuffle": "随机播放"
+    }
   },
   "tools": {
     "label": "系统 / 工具",
