@@ -96,24 +96,14 @@ function doLogout() {
   <!-- 登录后框架：NavBar + Sidebar + Main + PlayerBar -->
   <div v-else class="shell">
     <nav class="navbar">
-      <!-- left: hamburger + nav links -->
+      <!-- left: logo + hamburger -->
       <div class="nav-left">
+        <router-link to="/" class="nav-logo">
+          <img src="/logo.svg" alt="EdgeSonic" class="nav-logo-img" />
+          <span class="logo-text">EDGESONIC</span>
+        </router-link>
         <button class="hamburger" @click="menuOpen = !menuOpen">☰</button>
-        <div class="nav-links">
-          <router-link to="/" class="nav-link" :class="{ active: route.path === '/' }">
-            <span class="link-prefix">// </span>{{ t("app.menu.dashboard") }}
-          </router-link>
-          <router-link to="/library" class="nav-link" :class="{ active: route.path.startsWith('/library') }">
-            <span class="link-prefix">// </span>{{ t("app.menu.library") }}
-          </router-link>
-        </div>
       </div>
-
-      <!-- center: logo (absolutely centered) -->
-      <router-link to="/" class="nav-logo">
-        <img src="/logo.svg" alt="EdgeSonic" class="nav-logo-img" />
-        <span class="logo-text">EDGESONIC</span>
-      </router-link>
 
       <!-- right: user -->
       <div class="nav-user">
@@ -185,9 +175,6 @@ function doLogout() {
   gap: 1.25rem;
 }
 .nav-logo {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex; align-items: center; gap: 10px;
   font-family: var(--font-mono);
   font-size: 1.05rem;
@@ -196,6 +183,7 @@ function doLogout() {
   color: var(--color-accent-primary);
   line-height: 1;
   white-space: nowrap;
+  text-decoration: none;
 }
 .nav-logo-img {
   height: 38px;

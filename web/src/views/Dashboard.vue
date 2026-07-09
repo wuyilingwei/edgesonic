@@ -721,24 +721,29 @@ onUnmounted(() => {
       <div class="card-header">
         <span class="card-title">{{ t("dashboard.systemInfo") }}</span>
       </div>
-      <div class="info-grid">
-        <div class="info-row"><span class="info-key">EdgeSonic</span><span class="info-val">v{{ edgesonicVersion }}</span></div>
-        <div class="info-row"><span class="info-key">{{ t("dashboard.infoApiVersion") }}</span><span class="info-val">1.16.1</span></div>
-        <div class="info-row"><span class="info-key">{{ t("dashboard.infoPlatform") }}</span><span class="info-val">Cloudflare Workers</span></div>
-        <div class="info-row"><span class="info-key">Worker Build</span><span class="info-val">{{ workerVersion }}</span></div>
-        <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoUsers") }}</span><span class="info-val">{{ stats.users }}</span></div>
-        <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoSources") }}</span><span class="info-val">{{ stats.sources }}</span></div>
+      <div class="info-two-col">
+        <div class="info-col">
+          <div class="info-row"><span class="info-key">EdgeSonic</span><span class="info-val">v{{ edgesonicVersion }}</span></div>
+          <div class="info-row"><span class="info-key">{{ t("dashboard.infoApiVersion") }}</span><span class="info-val">1.16.1</span></div>
+          <div class="info-row"><span class="info-key">{{ t("dashboard.infoPlatform") }}</span><span class="info-val">Cloudflare Workers</span></div>
+          <div class="info-row"><span class="info-key">Worker Build</span><span class="info-val">{{ workerVersion }}</span></div>
+        </div>
+        <div class="info-col">
+          <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoUsers") }}</span><span class="info-val">{{ stats.users }}</span></div>
+          <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoSources") }}</span><span class="info-val">{{ stats.sources }}</span></div>
+          <div class="info-row">
+            <span class="info-key">GitHub Latest</span>
+            <span class="info-val">
+              <a v-if="updateAvailable" href="https://github.com/wuyilingwei/edgesonic/releases/latest" target="_blank" rel="noopener" class="update-link">
+                v{{ latestVersion }} — 有新版本
+              </a>
+              <span v-else-if="latestVersion" class="update-current">v{{ latestVersion }} — 已是最新</span>
+              <span v-else-if="updateChecking" class="muted">检查中…</span>
+              <span v-else class="muted">—</span>
+            </span>
+          </div>
+        </div>
       </div>
-      <div v-if="latestVersion" class="update-check-row">
-        <span class="info-key">GitHub Latest</span>
-        <span class="info-val">
-          <a v-if="updateAvailable" href="https://github.com/wuyilingwei/edgesonic/releases/latest" target="_blank" rel="noopener" class="update-link">
-            v{{ latestVersion }} — 有新版本可用
-          </a>
-          <span v-else class="update-current">v{{ latestVersion }} — 已是最新</span>
-        </span>
-      </div>
-      <div v-else-if="updateChecking" class="update-check-row muted">检查更新中…</div>
     </div>
 
     <!-- 101 — Storage & R2 Cost Estimation (super-admin only, at bottom) -->
@@ -860,6 +865,13 @@ onUnmounted(() => {
   gap: 0;
 }
 .info-grid .info-row { border-bottom: 1px solid var(--color-border-subtle); }
+.info-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 2rem;
+}
+.info-col { display: flex; flex-direction: column; }
+.info-col .info-row:last-child { border-bottom: none; }
 .info-row {
   display: flex; justify-content: space-between;
   padding: 0.6rem 0;
