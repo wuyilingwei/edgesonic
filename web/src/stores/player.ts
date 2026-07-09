@@ -50,7 +50,6 @@ export const usePlayerStore = defineStore("player", () => {
   // events from the active <audio> element (fires ~4×/s during download).
   const bufferedRanges = ref<[number, number][]>([]);
 
-  // 110 — Playback modes: 'off' | 'one' | 'all' (repeat), shuffle boolean.
   type RepeatMode = "off" | "one" | "all";
   const repeatMode = ref<RepeatMode>(
     (localStorage.getItem("edgesonic:repeatMode") as RepeatMode) || "off"

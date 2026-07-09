@@ -84,7 +84,6 @@ export function esc(s: string): string {
 
 // ---------------------------------------------------------------------------
 // Subsonic response envelope.
-// 107 — OpenSubsonic requires every subsonic-response to carry, in BOTH the
 // XML and JSON serializations: status, version, type, serverVersion, and
 // openSubsonic=true. Handlers always build XML here; the format middleware
 // (middleware/format.ts) converts to JSON when the client sends f=json, so

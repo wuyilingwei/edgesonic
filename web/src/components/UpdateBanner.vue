@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// 081 — "New version available" banner.
 //
 // Driven entirely by useUpdateBanner — main.ts polls /edgesonic/version every
 // 5 minutes and feeds the result to the store. The banner is fixed at the top

@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — EdgeSonic private management bucket. Mounted at /edgesonic/* by
 // router.ts. Web-session-only (enforced at auth.ts prefix level).
 //
 // NOTE: webLoginRoutes lives separately because it has to run BEFORE
@@ -41,19 +40,11 @@ edgesonicRoutes.route("/", usersRoutes);
 edgesonicRoutes.route("/", permissionsRoutes);
 edgesonicRoutes.route("/", featuresRoutes);
 edgesonicRoutes.route("/", transcodeRoutes);
-// 052 — browser worker pool (poll / submit / heartbeat / dispatch / status / cancel)
 edgesonicRoutes.route("/", workRoutes);
-// 053 — browser-pool transcode upload (binary body, HMAC-signed token)
 edgesonicRoutes.route("/", workUploadRoutes);
-// 054 — Cloudflare API integration (token / cron / analytics)
 edgesonicRoutes.route("/", cfRoutes);
-// 078 — operational maintenance tools (cleanup-duplicate-covers, ...)
 edgesonicRoutes.route("/", maintenanceRoutes);
-// 081 — public version endpoint (no auth, SPA freshness detection)
 edgesonicRoutes.route("/", versionRoutes);
-// 091 — R2 presigned URL status (super-admin Dashboard hint)
 edgesonicRoutes.route("/", r2presignRoutes);
-// 094 — Subsonic server clone write endpoints (super-admin only, browser-driven)
 edgesonicRoutes.route("/", cloneRoutes);
-// 101 — storage stats + R2 cost estimation
 edgesonicRoutes.route("/", statsRoutes);

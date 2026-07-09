@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — Storage browse (per-source file/folder listing). Split out of the old
 // endpoints/filebrowse.ts; the scanTags sibling moved to tag/read.ts.
 import { Hono } from "hono";
 import { permissionMiddleware } from "../../auth";

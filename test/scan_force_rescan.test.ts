@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Task 076 — force=1 disables the ETag short-circuit so every existing
 // instance lands on path 2 (UPDATE + tag_scanned=0). Default scans should
 // still skip unchanged files (the 051 behaviour).
 //

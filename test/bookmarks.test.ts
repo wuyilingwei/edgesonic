@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 // ============================================================================
-// 037 — Bookmarks + PlayQueue queries round-trip
 // Run: npx tsx test/bookmarks.test.ts
 // ----------------------------------------------------------------------------
 // Uses an in-memory D1 mock that recognises just the SQL statements created by
@@ -130,7 +129,6 @@ function makeDb(initial: { song_masters?: Row[] } = {}): {
     }
 
     // -------- song_masters lookup by id list --------
-    // 107 — the queries now LEFT JOIN artists/albums for display names; the
     // mock has no such tables, so emulate an empty join (names → null).
     const withNames = (r: Row): Row => ({ ...r, artist_name: null, album_name: null });
     const songMastersIn = sql.match(/^SELECT sm\.\*.+FROM song_masters sm.+WHERE sm\.id IN \(([?,\s]+)\)$/i);

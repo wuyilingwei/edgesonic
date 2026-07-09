@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 052 — Browser worker pool unit test.
 //
 // Coverage:
 //   1. dispatchWork → row appears in queue with correct caps/payload
@@ -219,7 +218,6 @@ function makeEnv() {
         throw new Error(`unmocked first sql: ${trimmed}`);
       },
       async all<T = unknown>() {
-        // 090 — features.loadStrMap loads ALL string flags at once.
         if (trimmed.startsWith("SELECT key, value FROM feature_strings")) {
           return {
             results: Array.from(featureStrings.entries()).map(([key, value]) => ({ key, value })),

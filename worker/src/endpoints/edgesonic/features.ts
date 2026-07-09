@@ -26,7 +26,6 @@ export const featuresRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-// 087 — gated by manage_permissions (the same permission used by the write
 // endpoints below). Pre-087 used a hardcoded `if (user.level < 2)` which
 // violated the permission-model rule; the new check now flows through
 // user_permissions.manage_permissions (L3=1, L2=0 by default — operators can
@@ -36,7 +35,6 @@ featuresRoutes.get("/features/list", permissionMiddleware("manage_permissions"),
     "SELECT key, value, description, updated_at FROM features ORDER BY key ASC"
   ).all<{ key: string; value: number; description: string | null; updated_at: number }>();
 
-  // 049 — string-valued feature flags (transcode_engine, transcode_mode, etc).
   // Returned alongside the boolean flags so the Settings UI can render them in
   // the same Common section without a second round-trip.
   const strResult = await c.env.DB.prepare(
@@ -85,7 +83,6 @@ featuresRoutes.post("/features/update", async (c) => {
   return c.json({ ok: true });
 });
 
-// 049 — Update a string-valued feature flag (transcode_engine, etc).
 // Same authorisation as updateFeature (manage_permissions). The set of valid
 // keys is constrained server-side so we never write into an unknown row.
 const STRING_FEATURE_KEYS = new Set([
@@ -93,52 +90,42 @@ const STRING_FEATURE_KEYS = new Set([
   "transcode_mode",
   "default_transcode_profiles",
   "external_transcoder_url",
-  // 040 — priority-ordered list of enabled metadata scrape sources.
   "scrape_enabled_sources",
-  // 043 — Last.fm public read API key (server-side). Empty disables the
   // getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs proxies.
   "lastfm_api_key",
-  // 051 — incremental scan + scheduled WebDAV refresh controls.
   "scan_interval_hours",
   "scan_etag_check",
   "scan_rescan_strategy",
   "scan_browser_auto",
-  // 052 — browser worker pool kill-switch and tunables. All four are stored
   // as strings even though some look numeric, so they round-trip through the
   // same /features/updateString endpoint as the rest of feature_strings.
   "worker_pool_enabled",
   "worker_poll_interval_seconds",
   "worker_batch_size",
   "worker_claim_ttl_seconds",
-  // 088 — concurrent Web Workers per browser. Bigger = faster queue drain but
   // higher fetch bandwidth and CPU on the participating browser. Clamped 1..8.
   "worker_max_concurrent",
-    // 065 — Cross-Origin Isolation kill switch. When '1', the global response
     // middleware in index.ts stamps COOP/COEP/CORP headers so the browser flips
     // `crossOriginIsolated = true`, unlocking SharedArrayBuffer + ffmpeg.wasm
     // multi-thread in the work pool. '0' restores pre-065 behaviour.
     "enable_cross_origin_isolation",
-    // 091 — R2 presigned URL short-circuit for /rest/stream raw+r2. When '1'
     // AND R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY secrets are set (plus
     // CF_ACCOUNT_ID reused from 054), the stream endpoint 302-redirects the
     // browser to a short-lived SigV4 R2 S3 URL so bytes bypass the Worker
     // sub-request bandwidth pool. '0' keeps the existing in-Worker stream path.
     "enable_r2_presign",
-    // 092 — WebDAV presigned URL short-circuit. When '1' AND the chosen
     // credential's stream_proxy_strategy allows WebDAV 302, the stream
     // endpoint 302-redirects to a UserInfo-embedded WebDAV URL. Default '1'
     // (on) — WebDAV streams benefit more than R2 since there's no Worker
     // binding fast path. Per-credential strategy in subsonic_credentials
     // still gates which clients opt in.
     "enable_webdav_presign",
-    // 103 — WebDAV play-through hot cache. When '1', a raw (non-transcode)
     // /rest/stream of a webdav:// instance schedules a background copy of the
     // whole file into R2 (cache/webdav/<masterId>.<suffix>) and registers a
     // source_type='cached' instance, so subsequent plays stream from R2
     // (Worker binding fast path / R2 presign 302) instead of the throttled
     // proxied WebDAV path. Default '0' — it consumes R2 storage.
     "enable_webdav_hotcache",
-    // 110 — cadence (hours) for the cron-driven metadata re-check that
     // dispatches unsupported-format / lyrics-or-disc-incomplete song_instances
     // to the browser worker pool for a second music-metadata pass. 0=disabled.
     "metadata_recheck_interval_hours",
@@ -148,7 +135,6 @@ const STRING_FEATURE_KEYS = new Set([
 function validateFeatureString(key: string, value: string): string | null {
   switch (key) {
     case "transcode_engine":
-      // 053 — `browser_pool` joins the enum. Engines that do not run ffmpeg
       // in-Worker (browser_pool here, sandbox/external before it) all coexist
       // behind the same string-valued flag so the Settings UI does not need
       // to know which backend physically runs the codec.
@@ -205,26 +191,21 @@ function validateFeatureString(key: string, value: string): string | null {
       if (value !== "0" && value !== "1") return "worker_pool_enabled must be '0' or '1'";
       return null;
     case "enable_cross_origin_isolation":
-      // 065 — only '0' or '1'. Mirrored shape on worker_pool_enabled.
       if (value !== "0" && value !== "1") return "enable_cross_origin_isolation must be '0' or '1'";
       return null;
     case "enable_r2_presign":
-      // 091 — only '0' or '1'. Actual R2 S3 credentials live in Workers
       // Secrets (not D1); this flag only gates whether the stream endpoint
       // tries the presign path. When '1' but secrets are missing, the
       // stream endpoint silently falls back to the in-Worker stream.
       if (value !== "0" && value !== "1") return "enable_r2_presign must be '0' or '1'";
       return null;
     case "enable_webdav_presign":
-      // 092 — only '0' or '1'. Mirrors enable_r2_presign shape.
       if (value !== "0" && value !== "1") return "enable_webdav_presign must be '0' or '1'";
       return null;
     case "enable_webdav_hotcache":
-      // 103 — only '0' or '1'. Mirrors enable_webdav_presign shape.
       if (value !== "0" && value !== "1") return "enable_webdav_hotcache must be '0' or '1'";
       return null;
     case "metadata_recheck_interval_hours": {
-      // 110 — same shape as scan_interval_hours: non-negative integer, 0-168.
       if (!/^\d+$/.test(value)) return "metadata_recheck_interval_hours must be a non-negative integer";
       const n = parseInt(value, 10);
       if (n < 0 || n > 168) return "metadata_recheck_interval_hours must be between 0 and 168";
@@ -239,7 +220,6 @@ function validateFeatureString(key: string, value: string): string | null {
       return null;
     }
     case "worker_batch_size": {
-      // 1..20 — bigger batches mean a single browser monopolises rare-cap
       // tasks; smaller batches mean more polls per minute.
       if (!/^\d+$/.test(value)) return "worker_batch_size must be a non-negative integer";
       const n = parseInt(value, 10);
@@ -247,7 +227,6 @@ function validateFeatureString(key: string, value: string): string | null {
       return null;
     }
     case "worker_claim_ttl_seconds": {
-      // 15..600 — the reclaim sweep runs hourly so anything beyond 10 minutes
       // is effectively rounded up to the next cron tick.
       if (!/^\d+$/.test(value)) return "worker_claim_ttl_seconds must be a non-negative integer";
       const n = parseInt(value, 10);
@@ -255,7 +234,6 @@ function validateFeatureString(key: string, value: string): string | null {
       return null;
     }
     case "worker_max_concurrent": {
-      // 088 — 1..8. The lower bound preserves the pre-088 serial behaviour
       // when an operator wants to roll back; the upper bound caps the per-
       // browser fan-out so a single participating tab can't saturate the
       // queue endpoint or the user's downlink.
@@ -322,7 +300,6 @@ featuresRoutes.post("/features/updateString", async (c) => {
   return c.json({ ok: true });
 });
 
-// 049 — External transcoder shared secret. Admin-only (manage_permissions)
 // because exposing it would let anyone POST raw audio to the container.
 // GET returns only a "set/unset" boolean — the actual value never leaves
 // the Worker except when the engine itself uses it for outbound requests.
@@ -372,7 +349,6 @@ featuresRoutes.post("/features/secrets/set", async (c) => {
   return c.json({ ok: true, key, set: !!body.value });
 });
 
-// 110 — User-level settings (per-user, not system-wide).
 // Currently used for lastfm_api_key so each user can set their own Last.fm key.
 // Any authenticated user can read/write their own settings; no admin required.
 featuresRoutes.get("/features/userSetting", async (c) => {

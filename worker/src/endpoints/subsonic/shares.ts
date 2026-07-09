@@ -142,7 +142,6 @@ function parseExpiresMs(raw: string | undefined): { present: false } | { present
 const getSharesHandler = async (c: import("hono").Context<{ Bindings: Env; Variables: { user: User } }>) => {
   const user = c.get("user");
   const queries = createQueries(c.env.DB);
-  // 087 — was `user.level === 3` (cross-user visibility). Replaced with the
   // view_all_users_items permission so an operator can delegate the "see all
   // shares" capability without granting full super-admin.
   const seeAll = await hasPermission(c.env.DB, user, "view_all_users_items");
@@ -229,7 +228,6 @@ const updateShareHandler = async (c: import("hono").Context<{ Bindings: Env; Var
   const queries = createQueries(c.env.DB);
   const existing = await queries.getShareById(id);
   if (!existing) return c.text(subsonicError(70, "Share not found"), 404, XML);
-  // 087 — cross-user modification gated by view_all_users_items.
   if (existing.user_id !== user.username) {
     const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
     if (!canAll) {
@@ -262,7 +260,6 @@ const deleteShareHandler = async (c: import("hono").Context<{ Bindings: Env; Var
   const queries = createQueries(c.env.DB);
   const existing = await queries.getShareById(id);
   if (!existing) return c.text(subsonicError(70, "Share not found"), 404, XML);
-  // 087 — cross-user delete gated by view_all_users_items.
   if (existing.user_id !== user.username) {
     const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
     if (!canAll) {

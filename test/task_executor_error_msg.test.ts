@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 078 — workerPool.formatTaskError must:
 //   1. Stamp every submission with [<task_type>:<task.id[0..8]>] prefix
 //   2. Clamp at 500 chars
 //   3. Accept Error | ErrorEvent-shaped { message } | string | unknown

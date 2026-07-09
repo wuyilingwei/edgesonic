@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 051 — Incremental scan unit test.
 //
 // Validates the four decision branches in asyncScanSource:
 //   1. unchanged file        → no UPDATE / no INSERT, only tag_scanned stays

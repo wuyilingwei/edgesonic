@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 052 — Background reclaim of stale work_queue claims.
 //
 // A browser node that grabbed a task and then went offline (tab close, network
 // drop, OS sleep) leaves the row in status='claimed' with a heartbeat_at that
@@ -24,7 +23,6 @@
 //
 // Two thresholds drive the decision:
 //   worker_claim_ttl_seconds — heartbeat age beyond which a claim is "stale"
-//                              (default 60 — long enough for a metadata task,
 //                              short enough that a closed tab unblocks the
 //                              queue within a minute)
 //   max_attempts (per row)   — work_queue.max_attempts (default 3)

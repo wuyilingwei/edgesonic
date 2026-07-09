@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — Tag scanner (formerly /rest/scanTags). Reads embedded tags for
 // unscanned song_instances and rebuilds artist/album linkage. Designed to be
 // driven in a loop from the web UI until remaining = 0.
 import { Hono } from "hono";
@@ -56,7 +55,6 @@ tagReadRoutes.get("/read", permissionMiddleware("manage_sources"), async (c) => 
       if (slices) {
         const tags = parseTags(slices.head, slices.tail);
         if (tags && (tags.title || tags.artist || tags.album)) {
-          // 109 — link artist_id to the TRACK artist (tags.artist), matching
           // the pre-existing behaviour; album_artist_id is a SEPARATE column
           // that was never populated by this endpoint even though the schema
           // and the browser-pool path (relinkArtistAlbum) both use it. Only

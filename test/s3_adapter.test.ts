@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Tests for task 096 — S3-compatible storage adapter.
 //
 // Coverage:
 //   1. parseS3RootPath: bucket-only / bucket/prefix / deep prefix

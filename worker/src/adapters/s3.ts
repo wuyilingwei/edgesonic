@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 096 — S3-compatible storage adapter (MinIO / AWS S3 / Backblaze B2 / Wasabi).
 //
 // Design decisions:
 //   • Always path-style URL: {endpoint}/{bucket}/{key}

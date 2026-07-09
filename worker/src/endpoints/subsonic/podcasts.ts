@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 // ============================================================================
-// 046 — Podcast Subsonic endpoints
 // ----------------------------------------------------------------------------
 //   GET           /rest/getPodcasts(.view)            [id?, includeEpisodes?]
 //   GET           /rest/getNewestPodcasts(.view)      [count?]

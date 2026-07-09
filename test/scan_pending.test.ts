@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 051 — /storage/scan/pending endpoint test.
 //
 // Exercises the SQL shape via a thin Hono mount + mock D1. Covers:
 //   • only tag_scanned=0 rows for the asked source come back

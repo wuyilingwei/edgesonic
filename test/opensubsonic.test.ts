@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Tests for task 035 — OpenSubsonic protocol declaration.
 //
 // Coverage:
 //   * getOpenSubsonicExtensions returns the three advertised extensions
@@ -163,10 +162,8 @@ async function main() {
     assert(xmlHas(body, 'name="apiKeyAuthentication"'), "advertises apiKeyAuthentication");
     assert(xmlHas(body, 'name="tokenInfo"'), "advertises tokenInfo");
     assert(xmlHas(body, 'name="formPost"'), "advertises formPost");
-    // 108 — songLyrics is now advertised: getLyricsBySongId emits spec-shaped
     // structuredLyrics, and clients only call it when the extension is declared.
     assert(xmlHas(body, 'name="songLyrics"'), "advertises songLyrics (108)");
-    // 107 — versions are <versions>N</versions> CHILD ELEMENTS (Navidrome
     // shape), so the JSON conversion yields "versions":[1] as a number array.
     assert(xmlHas(body, "<versions>1</versions>"), "versions emitted as child elements");
     assert(!xmlHas(body, 'versions="'), "no legacy versions attribute");

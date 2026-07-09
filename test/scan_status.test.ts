@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 038 — scan_jobs state-machine smoke test for queries.ts + getScanStatus aggregation.
 // Run: npx tsx test/scan_status.test.ts
 
 import { createQueries } from "../worker/src/db/queries";

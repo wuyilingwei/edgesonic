@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Tests for task 036 — /rest/getCoverArt size parameter.
 //
 // Strategy:
 //   * In-memory SQLite D1 shim with an `albums` row pre-baked.

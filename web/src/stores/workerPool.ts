@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 052 — Browser worker pool client (Pinia store).
 // ---------------------------------------------------------------------------
 // The store is registered on app start (main.ts). Whenever the page is
 // visible AND `enabled` is true AND the user has level ≥ 2, we hit
@@ -61,7 +60,6 @@ const DEFAULT_POLL_MS = 5 * 60 * 1000;
 // (default 5 min) so idle browsers don't hammer D1.
 const FAST_POLL_MS = 30 * 1000;
 
-// 078 — error message ceiling matches the worker-side clamp in
 // taskExecutor.ts AND the server-side clamp in /work/submit. Three layers of
 // 500-byte truncation is intentional: each layer protects its own surface
 // from runaway error strings (memory churn on the worker, postMessage cost
@@ -69,7 +67,6 @@ const FAST_POLL_MS = 30 * 1000;
 const ERR_LIMIT = 500;
 
 /**
- * 078 — Build the error string we send to /work/submit when a worker fails.
  *
  * Prefix carries enough context to grep work_queue.error_message rows:
  *   "[metadata:abcd1234] HTTP 503 from r2-stream"
@@ -111,7 +108,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // mis-configured — feature_strings.worker_poll_interval_seconds is clamped
   // 30..3600 by the worker validator.
   const pollIntervalMs = ref(DEFAULT_POLL_MS);
-  // 088 — number of concurrent Web Workers used by pollAndDrain. Drives both
   // the /work/poll `limit=` (so the server hands us exactly N tasks) and the
   // Promise.all fan-out below. Hydrated from feature_strings.worker_max_concurrent
   // on start; admin can change it live via Settings → workerPool sub-block.
@@ -124,7 +120,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // player is actively streaming. Settings UI can surface this as a hint.
   const isPlaybackThrottled = ref(false);
 
-  // 056 — surface state Files.vue needs to render the work-queue HUD.
   // - `recent` is a small FIFO ring (≤ 5) of just-finished tasks so the UI
   //   can show task chips without re-querying the server.
   // - `completedSamples` powers the speed estimator: we push one entry per
@@ -199,11 +194,9 @@ export const useWorkerPool = defineStore("workerPool", () => {
 
   // --- internal state ---
   let draining = false;
-  // 056 — `draining` is module-local, not reactive; mirror it into a ref so
   // `isWorking` updates when poll-and-drain starts/stops without a task.
   const isDraining = ref(false);
 
-  // 056 — true whenever the pool has *something* to show in the HUD: either
   // a task is currently executing (currentTaskType is non-empty) or we're
   // mid-poll. Falls back to false when fully idle so Files.vue can collapse
   // the work-queue block.
@@ -211,7 +204,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
     !!stats.value.currentTaskType || isDraining.value,
   );
 
-  // 056 — completions/min averaged over the last SPEED_WINDOW_MS. Returns
   // null when there's < 2 samples or the window is too short (UI shows "--").
   const speedPerMin = computed<number | null>(() => {
     const samples = completedSamples.value;
@@ -242,24 +234,41 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // without changing the idle behaviour that protects D1 from over-polling.
   let timeoutId: number | null = null;
   let hadTasksLastPoll = false;
+  // 115 — Tools.vue shows a live "auto-start in mm:ss" countdown next to the
+  // manual poll button. Reactive so the UI can derive a ticking display from
+  // it without reaching into the module-local `timeoutId`/`poolStartedAt`.
+  // 0 means "nothing scheduled" (pool disabled/ineligible/stopped).
+  const nextPollAt = ref<number>(0);
 
   function scheduleNext(): void {
     if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
-    if (!enabled.value || !eligible.value) return;
-    const delay = hadTasksLastPoll ? FAST_POLL_MS : pollIntervalMs.value;
+    if (!enabled.value || !eligible.value) { nextPollAt.value = 0; return; }
+    // so a briefly-opened tab doesn't grab tasks. After the grace period,
+    // aggressive 30s polling kicks in if the queue has work.
+    const sinceStart = Date.now() - poolStartedAt;
+    const inGracePeriod = sinceStart < START_DELAY_MS;
+    const delay = inGracePeriod
+      ? pollIntervalMs.value
+      : (hadTasksLastPoll ? FAST_POLL_MS : pollIntervalMs.value);
+    nextPollAt.value = Date.now() + delay;
     timeoutId = window.setTimeout(async () => {
       await pollAndDrain();
       scheduleNext();
     }, delay);
   }
 
+  // first automatic poll by 5 minutes so a briefly-opened tab doesn't grab
+  // work queue tasks. Manual pollNow() bypasses this delay.
+  const START_DELAY_MS = 5 * 60 * 1000;
+  let poolStartedAt = 0;
+
   function start(): void {
     if (timeoutId !== null) return;
     if (!enabled.value || !eligible.value) return;
-    // Kick off one drain immediately so the user sees the first task move
-    // through the UI without waiting a full interval. Errors are swallowed
-    // and surfaced via lastError.
-    void pollAndDrain().then(() => scheduleNext());
+    // 5 minutes. User can click "force poll" in the UI to start instantly.
+    poolStartedAt = Date.now();
+    hadTasksLastPoll = false;
+    scheduleNext();
   }
 
   function stop(): void {
@@ -267,6 +276,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
       clearTimeout(timeoutId);
       timeoutId = null;
     }
+    nextPollAt.value = 0;
   }
 
   function setEnabled(v: boolean): void {
@@ -313,7 +323,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
         }
       } catch { /* player store not available yet — keep full concurrency */ }
 
-      // 088 — `limit` matches the concurrency cap: a one-shot poll fetches as
       // many tasks as we can run in parallel, then Promise.all fans them out
       // through executeOne. Each executeOne owns its own Web Worker so they
       // never share state — fetch + parseBuffer + submit run concurrently.
@@ -326,7 +335,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
       // 093g — track whether the queue had work so scheduleNext can pick
       // the fast or idle cadence.
       hadTasksLastPoll = (data.tasks || []).length > 0;
-      // 088 — concurrent drain. `Promise.all` doesn't short-circuit on first
       // rejection here because executeOne catches its own errors (recording
       // failed stats + pushRecent) and resolves anyway, so a single bad task
       // doesn't stop its siblings.
@@ -367,7 +375,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
       // Submit success path.
       await edgesonicPost("work/submit", { id: task.id, result });
       stats.value.completed++;
-      // 056 — surface to Files.vue HUD.
       pushRecent({
         id: task.id,
         taskType: task.taskType,
@@ -377,7 +384,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
       });
       recordSample();
     } catch (e) {
-      // 078 — wrap the raw error with task context so admins reading
       // work_queue.error_message can spot which task failed without joining
       // back through result_json. The 500-char ceiling is enforced inside
       // formatTaskError; /work/submit also clamps server-side as belt-and-
@@ -421,7 +427,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
         }
       };
       const onError = (e: ErrorEvent) => {
-        // 078 — ErrorEvent.message is often empty in Chromium for module-type
         // workers (cross-origin security policy redacts it). Fall back to the
         // inner Error.message, then to the event type, then a hard-coded
         // string so executeOne's downstream formatter never sees "".
@@ -468,7 +473,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
         // Reschedule so the new cadence applies on the next tick.
         if (timeoutId !== null) { stop(); start(); }
       }
-      // 088 — pull worker_max_concurrent. Clamp client-side to 1..8 as a
       // belt-and-braces guard; the server validator already rejects anything
       // outside the same range. Default 3 matches the migration seed.
       const mc = parseInt(fs.find((f) => f.key === "worker_max_concurrent")?.value || "3", 10);
@@ -482,7 +486,6 @@ export const useWorkerPool = defineStore("workerPool", () => {
     stop();
     stats.value = { completed: 0, failed: 0, currentTaskType: "" };
     lastError.value = null;
-    // 056 — also wipe the HUD-facing surface so a logout doesn't leave
     // stale chips for the next user.
     recent.value = [];
     completedSamples.value = [];
@@ -496,15 +499,16 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastError,
     lastPollAt,
     pollIntervalMs,
-    // 088 — concurrency knob (live), surfaced so Settings.vue can read+display
     // alongside pollIntervalMs without a separate fetch.
     maxConcurrent,
     // 089 S — playback-throttle indicator for the Settings UI.
     isPlaybackThrottled,
-    // 056 — HUD-facing
     recent,
     speedPerMin,
     isWorking,
+    // 115 — Tools.vue "auto-start in mm:ss" countdown next to the manual
+    // poll button. 0 = nothing scheduled.
+    nextPollAt,
     start,
     stop,
     setEnabled,

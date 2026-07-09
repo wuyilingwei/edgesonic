@@ -25,7 +25,6 @@ export const browsingRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-// 035 — pull authenticated username for per-user annotation back-fill.
 // Guest (level 0) bypasses auth on browse paths but still has c.get("user")
 // populated by the middleware; if absent (e.g. unit tests without harness)
 // we fall back to "" which yields an empty annotations Map.
@@ -108,7 +107,6 @@ const getAlbumHandler = async (c: Context) => {
   const userId = currentUserId(c);
   const albumAnn = await queries.getAnnotationsMap(userId, "album", [id]);
   const songAnn = await queries.getAnnotationsMap(userId, "song", songs.map((s) => s.id));
-  // 107 — albums have no artist column; derive the display artist from the
   // first song row (getSongMastersByAlbum joins artist_name). Clients render
   // AlbumWithSongsID3.artist/artistId prominently, so omit only when empty.
   const firstSong = songs[0];

@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 // ============================================================================
-// 046 — Podcast RSS sync helpers
 // ----------------------------------------------------------------------------
 //   refreshChannel(db, channelId)   — fetch RSS, update channel meta + episodes
 //   refreshAllChannels(db)          — invoked by the hourly Cron Trigger

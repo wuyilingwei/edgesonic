@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 082 — POST /edgesonic/maintenance/resetFailedWork
 //
 // Smoke test for the "browser bundle stuck failed → unstick" recovery hatch.
 // Mirrors the maintenance_reclaim shim (node:sqlite + Hono + handwritten D1
@@ -96,7 +95,6 @@ function buildDb(): DatabaseSync {
       value TEXT NOT NULL,
       updated_at INTEGER DEFAULT 0
     );
-    -- 087 — endpoint now uses permissionMiddleware("maintenance_reset").
     CREATE TABLE user_permissions (
       level INTEGER NOT NULL,
       permission TEXT NOT NULL,
@@ -261,7 +259,6 @@ async function main() {
     const { post } = makeApp(sqlite, { username: "user", level: 2 });
     const r = await post("/edgesonic/maintenance/resetFailedWork", {});
     assert(r.status === 403, `403 (got ${r.status})`);
-    // 087 — permissionMiddleware returns the Subsonic XML envelope, not JSON.
     const text = await r.text();
     assert(text.includes("Not authorized"),
       `body mentions Not authorized (got "${text.slice(0, 80)}")`);

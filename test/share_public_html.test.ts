@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 075 — Public /share/:id HTML landing page tests.
 //
 // Strategy: in-memory SQLite (node:sqlite) wrapped in a D1 shim (same recipe as
 // shares.test.ts), then mount `sharePublicRoutes` on a fresh Hono app and drive

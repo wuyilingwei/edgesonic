@@ -635,7 +635,6 @@ CREATE INDEX IF NOT EXISTS idx_work_claimed
   ON work_queue (claimed_by, heartbeat_at) WHERE status = 'claimed';
 
 -- ============================================================================
--- 21. Boolean Feature Flags (0002 — docs/DESIGN.md §3.3)
 -- ============================================================================
 -- Integer-typed feature flags. String/JSON-valued flags live in feature_strings
 -- (section 22 below).
@@ -657,7 +656,6 @@ INSERT OR IGNORE INTO features (key, value, description, updated_at) VALUES
   ('scrape_enabled', 1, 'Master switch for metadata scraping', unixepoch());
 
 -- ============================================================================
--- 22. String Feature Flags (0010 — feature_strings)
 -- ============================================================================
 -- String/JSON-valued feature flags. Used by 049 transcode engine, 051 scan,
 -- 052 work pool, 065 COOP/COEP, 088 concurrency, 091/092 presign.
@@ -732,7 +730,6 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
    unixepoch());
 
 -- ============================================================================
--- 23. External Secrets (0010 — 049 external transcoder shared key)
 -- ============================================================================
 -- Stored as plain TEXT for now; admin-gated endpoints read/write only.
 CREATE TABLE IF NOT EXISTS external_secrets (

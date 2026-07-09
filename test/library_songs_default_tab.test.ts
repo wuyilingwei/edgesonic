@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Task 076 — Library default tab.
 //
 // Verifies that Library.vue no longer reads localStorage to seed the active
 // tab — every fresh mount must start on "songs" so users land on tracks even

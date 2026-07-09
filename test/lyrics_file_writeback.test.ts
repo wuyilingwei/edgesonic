@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 089 — Lyrics file write-back unit test.
 //
 // Coverage:
 //   1. ID3v2.3 mp3: USLT frame present with correct encoding/lang/lyrics bytes

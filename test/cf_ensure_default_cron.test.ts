@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 067 — /edgesonic/cf/ensureDefaultCron unit tests.
 //
 // Coverage:
 //   1. Empty live schedules → PUT default, returns applied=true with the

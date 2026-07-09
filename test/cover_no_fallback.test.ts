@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Task 076 — getCoverArt must NOT fall back to song-instance directory or
 // embedded art when album.cover_r2_key is NULL.
 //
 // Background: the previous covers.resolveAlbumCover() path picked any

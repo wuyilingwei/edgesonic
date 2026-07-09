@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Tests for task 065 — Cross-Origin Isolation middleware.
 //
 // Coverage:
 //   1. Feature ON  → response carries COOP=same-origin, COEP=require-corp,
@@ -251,7 +250,6 @@ async function run() {
     await app.request("/ping");
     assert(kv.hits + kv.misses === getsAfterFirst,
       "second request served from in-isolate memory cache (no extra KV read)");
-    // 090 — features.ts no longer uses KV; first request goes directly to D1.
     assert(getsAfterFirst === 0, "first request went to D1 directly (no KV reads)");
   }
 

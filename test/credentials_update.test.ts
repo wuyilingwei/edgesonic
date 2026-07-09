@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 082 — POST /edgesonic/auth/credentials/update
 //
 // Inline label-rename for an existing Subsonic credential. Authorisation is
 // pinned to the session user (UPDATE WHERE id=? AND username=?), so the

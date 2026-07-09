@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Tests for task 097 — WebDAV read-only presign credentials.
 //
 // Coverage:
 //   1. presign_username set → presign URL uses presign_username:presign_password (not main creds)

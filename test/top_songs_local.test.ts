@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Tests for task 047 — getTopSongs local-first ordering with last.fm fallback.
 //
 // Strategy:
 //   * In-memory SQLite shimmed as D1.

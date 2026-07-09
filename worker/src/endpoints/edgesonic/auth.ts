@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — EdgeSonic auth-management bucket: web login, session list, subsonic
 // credentials, guest tokens. Login is the only route in this whole tree that
 // runs *before* the global authMiddleware (it issues the session token used by
 // every other endpoint in /tag /storage /edgesonic).
@@ -22,7 +21,6 @@ import { permissionMiddleware, subsonicError, sha256 } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
 import type { User } from "../../types/entities";
 
-// 055 — The public web-login route. Lives outside authMiddleware (it's the
 // only request that legitimately arrives without a session) and is exported
 // separately so index.ts can mount it BEFORE the global auth filter at the
 // /edgesonic/auth/login + /edgesonic/auth/logout paths.
@@ -61,7 +59,6 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
   const expiresAt = Math.floor(Date.now() / 1000) + 86400; // 24 hours
   const userAgent = c.req.header("User-Agent") || "";
 
-  // 090 — Session stored only in D1 `sessions` table (KV session: cache removed).
   await db
     .prepare(
       "INSERT INTO sessions (id, username, token, user_agent, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
@@ -88,7 +85,6 @@ webLoginRoutes.post("/edgesonic/auth/logout", async (c) => {
     return c.json({ ok: false, error: "Invalid JSON" }, 400);
   }
 
-  // 090 — Logout only touches D1; KV session: cache removed.
   if (body.sessionToken) {
     await db.prepare("DELETE FROM sessions WHERE token = ?").bind(body.sessionToken).run();
   }
@@ -137,7 +133,6 @@ edgesonicAuthRoutes.post("/auth/sessions/revoke", async (c) => {
   if (!row) {
     return c.text(subsonicError(70, "Session not found"), 404, XML);
   }
-  // 090 — D1 is the sole authority; no KV session: cache to delete.
   await db.prepare("DELETE FROM sessions WHERE id = ?").bind(body.id).run();
   return c.text(subsonicOK({}), 200, XML);
 });
@@ -184,7 +179,6 @@ edgesonicAuthRoutes.post("/auth/credentials/create", permissionMiddleware("manag
     return c.text(subsonicError(0, "Missing password"), 400, XML);
   }
 
-  // 092 — validate optional stream_proxy_strategy. Default 'always'.
   const strategy = body.streamProxyStrategy || "always";
   if (!["always", "never", "r2_only", "webdav_only"].includes(strategy)) {
     return c.text(subsonicError(0, "Invalid streamProxyStrategy (always|never|r2_only|webdav_only)"), 400, XML);
@@ -204,7 +198,6 @@ edgesonicAuthRoutes.post("/auth/credentials/create", permissionMiddleware("manag
   );
 });
 
-// 082 — Rename an existing Subsonic credential's label (e.g. "Pixel" → "DSub
 // on Pixel 9"). Doesn't touch the password or last_used; just lets the user
 // keep their device registry tidy.
 //   - body: { id, label }
@@ -236,7 +229,6 @@ edgesonicAuthRoutes.post("/auth/credentials/update", permissionMiddleware("manag
     return c.text(subsonicError(0, "Label too long (max 200 chars)"), 400, XML);
   }
 
-  // 092 — optional stream_proxy_strategy update. When absent we leave it
   // unchanged (so the label-only rename path stays a single-column UPDATE).
   const strategy = body.streamProxyStrategy;
   if (strategy !== undefined && !["always", "never", "r2_only", "webdav_only"].includes(strategy)) {

@@ -16,7 +16,6 @@
 import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
 
-// 055 — API surface split into 4 buckets. /rest stays Subsonic; everything
 // management-shaped moved to /tag, /storage, /edgesonic.
 const REST_BASE = "/rest";
 const TAG_BASE = "/tag";
@@ -83,7 +82,6 @@ export function useAuth() {
   }
 
   async function login(u: string, p: string): Promise<LoginResult> {
-    // Web login: POST master_password → get session token (055 — moved to
     // /edgesonic/auth/login during the API four-bucket refactor).
     const resp = await fetch(`${EDGESONIC_BASE}/auth/login`, {
       method: "POST",
@@ -147,7 +145,6 @@ export function useAuth() {
     return resp.text();
   }
 
-  // 055 — Bucket-aware helpers. Same signature as authFetch/authPost so the
   // call sites only need to swap function names + paths.
   // Auth failures (401/403) are surfaced as a typed error so the caller can
   // distinguish "session expired" from "request failed" and toast + redirect
@@ -235,7 +232,6 @@ export function useAuth() {
     return JSON.parse(await tagPost("batchWrite", body));
   }
 
-  // 042 — tidy folder via template; dryRun:true returns plan only.
   interface TidyFolderResult {
     ok: boolean;
     error?: string;
@@ -252,7 +248,6 @@ export function useAuth() {
     return JSON.parse(await tagPost("tidyFolder", { ids, template, dryRun: !!opts?.dryRun, source: opts?.source }));
   }
 
-  // 041 — submit browser-parsed metadata for an instance (OGG/Opus/M4A/...).
   // `tags` is an ExtractedMetadata shape from web/src/lib/metadata.ts.
   interface SubmitMetadataResult { ok: boolean; error?: string; masterId?: string; albumId?: string; artistId?: string; }
   async function submitMetadata(instanceId: string, tags: Record<string, string | number>): Promise<SubmitMetadataResult> {
@@ -272,7 +267,6 @@ export function useAuth() {
     qs.set("source", target);
     if (path) qs.set("path", path);
     if (opts?.masterId) qs.set("master_id", opts.masterId);
-    // 055 — moved from /rest/files/upload to /storage/files/upload
     return new Promise<string>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${STORAGE_BASE}/files/upload?${qs.toString()}`);

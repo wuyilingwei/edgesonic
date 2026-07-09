@@ -26,7 +26,6 @@ export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 // Path Classification
 // ============================================================================
 
-// 055 — Path classification follows the 4-tier layout
 //   /rest/*      Subsonic protocol  → existing token+salt / apikey / guestToken
 //   /tag/*       Tag management     → web session ONLY
 //   /storage/*   Storage management → web session ONLY
@@ -35,7 +34,6 @@ export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 // subsonic_credentials / apiKey cannot reach management surfaces.
 
 const NO_AUTH_PATHS = new Set([
-  // 106 — ping and getLicense moved OUT of NO_AUTH_PATHS so that Subsonic
   // clients can use /rest/ping to verify credentials. Most Subsonic servers
   // (including the reference music-tag-web instance) require auth on ping;
   // clients that ping without credentials to test connectivity will get a
@@ -43,11 +41,9 @@ const NO_AUTH_PATHS = new Set([
   // extension probe stays public (clients check it before authenticating).
   "/rest/getOpenSubsonicExtensions",
   "/rest/getOpenSubsonicExtensions.view",
-  // 055 — login bootstraps the very session token the middleware will check
   // for every other request, so it has to live outside the auth filter.
   "/edgesonic/auth/login",
   "/edgesonic/auth/logout",
-  // 081 — public version probe for SPA freshness detection. Returns only the
   // build version and isolate start time (non-sensitive); the SPA polls it
   // every 5 minutes including AFTER the session has expired so the "refresh
   // me" banner still appears on stale tabs.
@@ -67,7 +63,6 @@ const GUEST_ALLOWED_PATHS = new Set([
   "/rest/getSongsByGenre",
   "/rest/getAlbumList2",
   "/rest/search3",
-  // 036 — lyric endpoints are read-only metadata; safe for guests / cred-only
   // clients to call. External fetch fallback only writes to D1, never to files.
   "/rest/getLyrics",
   "/rest/getLyricsBySongId",
@@ -78,26 +73,22 @@ const GUEST_ALLOWED_PATHS = new Set([
 // Everything else management-shaped now lives outside /rest/* so the prefix
 // check handles it implicitly.
 const REST_SESSION_ONLY_PATHS = new Set([
-  // 035 — master-password rotation
   "/rest/changePassword",
   "/rest/changePassword.view",
   // download (R2/WebDAV-backed binary, large bandwidth potential)
   "/rest/download",
-  // 044 — Sharing CUD (mints public links). getShares stays open.
   "/rest/createShare",
   "/rest/createShare.view",
   "/rest/updateShare",
   "/rest/updateShare.view",
   "/rest/deleteShare",
   "/rest/deleteShare.view",
-  // 045 — Internet Radio CUD
   "/rest/createInternetRadioStation",
   "/rest/createInternetRadioStation.view",
   "/rest/updateInternetRadioStation",
   "/rest/updateInternetRadioStation.view",
   "/rest/deleteInternetRadioStation",
   "/rest/deleteInternetRadioStation.view",
-  // 046 — Podcast CUD + refresh + R2 download
   "/rest/createPodcastChannel",
   "/rest/createPodcastChannel.view",
   "/rest/deletePodcastChannel",
@@ -124,7 +115,6 @@ export async function sha256(input: string): Promise<string> {
 // ============================================================================
 // Subsonic Credential Lookup
 // ============================================================================
-// 090 — Removed the KV session cache lookup (step 3). D1 `sessions` table is
 // the sole authority; the KV "faster lookup" was a micro-optimisation that
 // burned KV quota. Sessions still live in D1 exclusively.
 async function findSubsonicCredential(
@@ -146,7 +136,6 @@ async function findSubsonicCredential(
         .prepare("UPDATE subsonic_credentials SET last_used = ? WHERE username = ? AND password = ?")
         .bind(Math.floor(Date.now() / 1000), username, cred.password)
         .run();
-      // 092 — per-credential 302 strategy. NULL or invalid → 'always'.
       const strat = cred.stream_proxy_strategy;
       const strategy = (strat === "always" || strat === "never" || strat === "r2_only" || strat === "webdav_only")
         ? strat
@@ -163,13 +152,11 @@ async function findSubsonicCredential(
 
   for (const sess of sessions.results) {
     if (md5(sess.token + salt) === token) {
-      // 105 — sliding renewal: an actively used session keeps living instead
       // of hard-dying 24h after login (which users perceived as "the deploy
       // logged me out" — the 081 update banner made them reload right onto
       // the expired session). Bump only when under 20h remain so a busy tab
       // costs at most one D1 write every ~4h.
       await renewSessionIfNeeded(db, sess.token);
-      // 092 — session credentials always use 'always' (no per-session tuning).
       return { credential: sess.token, kind: "session", streamProxyStrategy: "always" };
     }
   }
@@ -188,7 +175,6 @@ async function renewSessionIfNeeded(db: D1Database, token: string): Promise<void
     .run();
 }
 
-// 105 — Legacy Subsonic password auth (`p=<plain>` or `p=enc:<hex>`). Several
 // clients (and "force plain-text auth" toggles) never send t/s; before 105
 // those requests fell through to "Wrong username or password". Order mirrors
 // findSubsonicCredential: subsonic_credentials first, then session tokens.
@@ -250,7 +236,6 @@ async function lookupUser(db: D1Database, username: string): Promise<User | null
     .first<User>();
 }
 
-// 055 — webLoginRoutes moved to endpoints/edgesonic/auth.ts so the new
 // /edgesonic/auth/login path lives next to the rest of the auth-management
 // endpoints. The middleware below still has to skip the new path.
 
@@ -263,13 +248,11 @@ export const authMiddleware = createMiddleware<{
 }>(async (c, next) => {
   const path = new URL(c.req.url).pathname;
 
-  // 055 — Management buckets (/edgesonic /tag /storage) are JSON-only on the
   // client; returning a Subsonic XML error body there breaks the SPA's
   // JSON.parse with "Unexpected token '<'". Format the error per request
   // path: XML for /rest/*, JSON for the management buckets. Mirrors the same
   // policy already used by permissionMiddleware below.
   const isMgmt = path.startsWith("/edgesonic/") || path.startsWith("/tag/") || path.startsWith("/storage/");
-  // 107 — always emit XML here; the format middleware (mounted on /rest/*
   // BEFORE this auth middleware in index.ts) converts to JSON when the
   // client sends f=json, keeping a single XML→JSON conversion point.
   const authFail = (code: number, message: string, status: 401 | 403) =>
@@ -323,7 +306,6 @@ export const authMiddleware = createMiddleware<{
   let authMethod: AuthMethod | null = null;
 
   if (apiKey) {
-    // 090 — API Key authentication via D1 `api_keys` table (was KV).
     const row = await db
       .prepare("SELECT username FROM api_keys WHERE api_key = ?")
       .bind(apiKey)
@@ -336,11 +318,9 @@ export const authMiddleware = createMiddleware<{
     const cred = await findSubsonicCredential(db, username, token, salt);
     if (cred) {
       authMethod = cred.kind;
-      // 092 — per-credential 302 strategy, surfaced to the stream endpoint.
       c.set("streamProxyStrategy", cred.streamProxyStrategy);
     }
   } else if (q.p) {
-    // 105 — legacy password auth (p=plain / p=enc:hex)
     const cred = await findSubsonicCredentialByPassword(db, username, q.p);
     if (cred) {
       authMethod = cred.kind;
@@ -348,7 +328,6 @@ export const authMiddleware = createMiddleware<{
     }
   }
 
-  // 092 — API key path defaults to 'always' (no per-key tuning yet).
   if (apiKey && authMethod === "apikey") {
     c.set("streamProxyStrategy", "always");
   }
@@ -425,7 +404,6 @@ export const permissionMiddleware = (requiredPermission: string) =>
     }
 
     if (perm.max_rph > 0) {
-      // 090 — Rate limiting via D1 `rate_limits` table (was KV rph:user:perm).
       // Logic: read current row; if window_start is >3600s ago, reset window.
       // Otherwise reject if count >= max_rph, else increment.
       const nowSec = Math.floor(Date.now() / 1000);
@@ -460,7 +438,6 @@ export const permissionMiddleware = (requiredPermission: string) =>
   });
 
 // ============================================================================
-// 087 — minLevel() was deleted.
 // ----------------------------------------------------------------------------
 // The function existed but was never imported anywhere; its presence merely
 // advertised the wrong pattern. EdgeSonic's security model is "authorisation

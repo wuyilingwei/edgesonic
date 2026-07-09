@@ -15,7 +15,6 @@
 
 import type { Artist, Album, SongMaster, Playlist, Bookmark, PlayQueue, InternetRadioStation, Share, PodcastChannel, PodcastEpisode } from "./entities";
 
-// 035 — Subset of `annotations` row used by Subsonic responses.
 // All three mapXxx functions accept this as an optional 3rd arg so existing
 // callers (037 detail maps, etc.) compile unchanged.
 export interface AnnotationLite {
@@ -56,7 +55,6 @@ export interface SubsonicChild {
   playCount?: number;
 }
 
-// 035 — Inject starred / userRating / playCount when an annotation row exists.
 // Subsonic spec emits `starred` only when truly starred (uses starred_at ISO).
 // Absent annotation → all three fields stay undefined (back-compat with 1.16.1).
 function applyAnnotation<
@@ -92,10 +90,8 @@ export function mapAlbum(a: Album, artistName?: string, annotation?: AnnotationL
   return applyAnnotation(obj, annotation);
 }
 
-// 107 — song rows joined with artists/albums carry the display names; the
 // mapper picks them up when present. Before 107 `album` was set to the album
 // ID (parentId), which broke every client that displays Child.album as text.
-// 108 — rows may also carry preferred-instance physical fields (inst_*, see
 // queries.ts SongPhysical); clients gate playback on suffix/contentType/
 // bitRate/size/path, so emit them whenever the row has them.
 export function mapSong(
@@ -182,7 +178,6 @@ export function mapPlaylistDetail(p: Playlist, songs: SongMaster[]) {
   };
 }
 
-// 037 — Bookmarks + PlayQueue
 export interface SubsonicBookmark {
   position: number;          // ms within the song
   username: string;
@@ -235,7 +230,6 @@ export function mapPlayQueueDetail(q: PlayQueue, username: string, songs: SongMa
   };
 }
 
-// 045 — Internet Radio. Subsonic spec: <internetRadioStation id name streamUrl homepageUrl/>.
 // homepageUrl is emitted only when non-empty (back-compat with strict clients).
 export interface SubsonicInternetRadioStation {
   id: string;
@@ -253,7 +247,6 @@ export function mapInternetRadioStation(r: InternetRadioStation): SubsonicIntern
   };
 }
 
-// 044 — Sharing. Subsonic <share id url description username created expires
 // lastVisited visitCount> + nested <entry> per shared song.
 // The Subsonic spec expects `url` to be the absolute public URL of the share;
 // we let the endpoint inject it based on the current request's origin since
@@ -291,7 +284,6 @@ export function mapShareDetail(s: Share, publicUrl: string, songs: SongMaster[])
 }
 
 // ============================================================================
-// 046 — Podcasts
 // ----------------------------------------------------------------------------
 // Subsonic spec shapes (subsonic-rest-api-1.16.1.xsd):
 //   <channel id url title description coverArt originalImageUrl status errorMessage>

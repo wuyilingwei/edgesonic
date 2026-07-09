@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — Shared between storage/browse.ts (listFiles) and tag/read.ts (scanTags).
 // Both endpoints need to fetch head/tail bytes from R2 or WebDAV sources so they
 // can parse embedded tags without buffering whole files.
 import { encodePath } from "../endpoints/storage/scan";
@@ -27,7 +26,9 @@ export interface SourceRow {
 }
 
 export const HEAD_BYTES = 256 * 1024;
-export const TAIL_BYTES = 128 * 1024;
+// The previous 128KB tail was too small to contain the full id3 chunk, so
+// parseWAV's tail scan couldn't find the ID3v2 signature at the chunk start.
+export const TAIL_BYTES = 2 * 1024 * 1024;
 
 export function srcBaseUrl(src: SourceRow): string {
   const root = (src.root_path || "").replace(/^\/+|\/+$/g, "");

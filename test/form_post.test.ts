@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Tests for task 047 — formPost OpenSubsonic extension.
 //
 // Strategy:
 //   * Install formPostMiddleware in front of routes that read both

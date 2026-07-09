@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 078 — POST /edgesonic/maintenance/cleanupDuplicateCovers
 //
 // Coverage:
 //   1. 3 albums share same cover_r2_key → 1 keeps it (smallest id), 2 NULL'd
@@ -77,7 +76,6 @@ function buildDb(): DatabaseSync {
       cover_r2_key TEXT,
       updated_at INTEGER DEFAULT 0
     );
-    -- 087 — endpoint now uses permissionMiddleware("maintenance_cleanup").
     CREATE TABLE user_permissions (
       level INTEGER NOT NULL,
       permission TEXT NOT NULL,
@@ -193,7 +191,6 @@ async function main() {
     const { post } = makeApp(sqlite, { username: "user", level: 2 });
     const r = await post("/edgesonic/maintenance/cleanupDuplicateCovers", {});
     assert(r.status === 403, `403 (got ${r.status})`);
-    // 087 — permissionMiddleware returns the Subsonic-style XML envelope, not
     // the legacy JSON shape. We assert on the body text instead of trying to
     // parse JSON (which would fail).
     const text = await r.text();

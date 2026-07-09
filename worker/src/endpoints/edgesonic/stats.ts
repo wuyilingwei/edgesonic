@@ -33,7 +33,6 @@ statsRoutes.get("/stats/storage", async (c) => {
 
   const db = c.env.DB;
 
-  // 110 — Group by source_type FIRST so hotCacheWebdav rows (source_type='cached',
   // storage_uri r2://cache/webdav/...) don't inflate the 'r2' bucket. Only
   // source_type != 'cached' with r2:// URIs count as native R2 storage.
   //
@@ -67,7 +66,6 @@ statsRoutes.get("/stats/storage", async (c) => {
     ORDER BY bytes DESC
   `).all<{ source_type: string; count: number; bytes: number }>();
 
-  // 110 — R2 cover art: count from D1 (albums.cover_r2_key), size from R2 list.
   // covers/ prefix holds album/artist images; cache/ holds sized variants.
   const coversRow = await db
     .prepare("SELECT COUNT(*) AS n FROM albums WHERE cover_r2_key IS NOT NULL AND cover_r2_key != ''")

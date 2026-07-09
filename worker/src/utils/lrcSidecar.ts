@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 094 — LRC sidecar lyrics fallback.
 //
 // Two entry points:
 //   - fetchLrcSidecar(env, storageUri): read the bytes of a sibling .lrc file

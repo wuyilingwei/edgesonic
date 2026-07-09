@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 084 — D1 SQL bind variable cap (~100) chunking.
 //
 // Coverage:
 //   * getAnnotationsMap chunks ≤ 80 ids per query, merges results into a Map.

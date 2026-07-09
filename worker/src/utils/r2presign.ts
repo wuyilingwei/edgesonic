@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 091 — R2 S3 presigned URL generator (SigV4, no external SDK).
 //
 // R2 is S3-compatible. To let the browser fetch R2 objects directly (bypassing
 // the Worker sub-request bandwidth pool), we sign a short-lived URL using
@@ -31,7 +30,6 @@
 //
 // Region is hardcoded to "auto" — R2 ignores the region but SigV4 requires one.
 //
-// 096 — SigV4 primitives extracted to sigv4.ts; imported here to keep the
 // public API (presignR2Get + PresignOpts) fully backward-compatible.
 
 import { hex, hmac, sha256Hex, uriEncode } from "./sigv4";
@@ -61,7 +59,6 @@ export interface PresignOpts {
  */
 export async function presignR2Get(opts: PresignOpts): Promise<string> {
   const ttl = Math.min(Math.max(opts.ttlSec ?? 300, 1), 604800);
-  // 093 — Use virtual-hosted style (https://{bucket}.{accountId}.r2.cloudflarestorage.com/{key})
   // per R2 docs. Path style (https://{accountId}.r2.cloudflarestorage.com/{bucket}/{key})
   // generates signatures whose host header doesn't match what R2 verifies → 403.
   const host = `${opts.bucket}.${opts.accountId}.r2.cloudflarestorage.com`;
@@ -76,7 +73,6 @@ export async function presignR2Get(opts: PresignOpts): Promise<string> {
   const credentialScope = `${dateStamp}/${REGION}/${SERVICE}/aws4_request`;
   const credential = `${opts.accessKeyId}/${credentialScope}`;
 
-  // 093 — Sign host only. R2 accepts an unsigned Range header on a presigned
   // GET (the official AWS SDK presign also signs host only by default). Signing
   // Range required the browser to send the exact same Range value we signed,
   // which <audio> does not guarantee — any mismatch 403'd the whole request.
@@ -86,7 +82,6 @@ export async function presignR2Get(opts: PresignOpts): Promise<string> {
   const signedHeadersList = ["host"];
   const signedHeaders = "host";
 
-  // 093 — Presigned GET must include X-Amz-Content-Sha256=UNSIGNED-PAYLOAD
   // in the query string and use "UNSIGNED-PAYLOAD" as the canonical request
   // payload hash. Using sha256("") (empty body hash) instead 403s on R2.
   // Mirrors the AWS SDK v3 presign output.

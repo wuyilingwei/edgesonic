@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 // ============================================================================
-// Task 047 — formPost OpenSubsonic extension.
 //
 // Real Subsonic clients (DSub, Symfonium, Navidrome web …) often POST with
 // Content-Type: application/x-www-form-urlencoded for endpoints that mutate

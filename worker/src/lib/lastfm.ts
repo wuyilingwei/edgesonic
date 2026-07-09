@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 // ============================================================================
-// Task 043 — Last.fm public read API client.
 //
 // All read-only endpoints (no user session, only server api_key). KV-fronted
 // with a 24h TTL — last.fm's "what's hot" data barely shifts that often, and
@@ -66,15 +65,12 @@ function stableParamString(params: Record<string, string | number | undefined>):
 // Core fetch primitive. Reads api_key from user_settings (per-user) first,
 // falls back to feature_strings.lastfm_api_key (system-level). Hits D1
 // lastfm_cache first, then reaches out to ws.audioscrobbler.com on a miss.
-// 090 — Cache moved from KV (24h TTL) to D1 `lastfm_cache` table.
-// 110 — API key moved from system-level to per-user setting.
 export async function lastfmFetch(
   env: Env,
   method: string,
   params: Record<string, string | number | undefined>,
   username?: string,
 ): Promise<Record<string, unknown>> {
-  // 110 — Try user-level key first, fall back to system-level.
   let apiKey = "";
   if (username) {
     const userRow = await env.DB.prepare(
@@ -142,7 +138,6 @@ export async function lastfmFetch(
     );
   }
 
-  // 090 — Write to D1 lastfm_cache instead of KV.
   await env.DB.prepare(
     "INSERT INTO lastfm_cache (cache_key, value, expires_at) VALUES (?, ?, ?)" +
     " ON CONFLICT(cache_key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at"

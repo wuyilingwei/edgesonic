@@ -64,7 +64,6 @@ export async function fetchLyric(songmid: string, proxyFetch: ProxyFn): Promise<
     () => directLyric(songmid),
     () => proxyFetch({ source: SOURCE, intent: "lyric", songId: songmid }),
   );
-  // QQ Music sometimes returns base64 — but our Worker passes nobase64=1, so
   // when proxied we always get raw LRC text. Direct path uses the same param.
   return upstream.lyric || "";
 }

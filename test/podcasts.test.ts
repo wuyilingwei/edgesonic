@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 // ============================================================================
-// 046 — Podcast endpoints + RSS sync round-trip
 // Run: npx tsx test/podcasts.test.ts
 // ----------------------------------------------------------------------------
 // Strategy mirrors test/lastfm_proxy.test.ts:

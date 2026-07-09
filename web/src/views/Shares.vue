@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// 061 — Public Share management UI. Thin shell over 044 backend:
 //   GET      /rest/getShares
 //   GET|POST /rest/createShare
 //   GET|POST /rest/updateShare

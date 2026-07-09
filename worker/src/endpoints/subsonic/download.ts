@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — Subsonic 1.16.1 download / downloadMultiple endpoints. Split out of the
 // old endpoints/files.ts so the storage/files.ts file can focus on R2 / WebDAV
 // CRUD without dragging in the Subsonic XML response shape.
 import { Hono } from "hono";

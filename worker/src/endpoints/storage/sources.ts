@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — Storage source CRUD. Split out of the old endpoints/admin.ts into the
 // /storage/sources/* bucket per the 4-tier API refactor. All endpoints require
 // a web-session credential (enforced by auth.ts prefix check) plus the
 // manage_sources permission.
@@ -48,9 +47,7 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
       lastSync: s.last_sync ? String(s.last_sync) : "0",
       // 089 S2 — 'library' | 'sync_only'
       mode: s.mode ?? "library",
-      // 096 — region for S3-compatible sources
       region: s.region ?? "us-east-1",
-      // 097 — indicate whether a read-only presign account is configured (password not returned)
       presignUsername: s.presign_username ?? "",
     },
   }));
@@ -71,7 +68,6 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
   if (mode !== "library" && mode !== "sync_only") {
     return c.text(subsonicError(0, "Invalid mode: must be 'library' or 'sync_only'"), 400, XML);
   }
-  // 096 — region (S3-compatible sources; default us-east-1 for all types)
   const region = body.region || "us-east-1";
   const db = c.env.DB;
   const id = crypto.randomUUID().substring(0, 8);
@@ -117,9 +113,7 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   if (body.enabled !== undefined) { sets.push("enabled = ?"); binds.push(body.enabled ? 1 : 0); }
   // 089 S2 — update mode
   if (body.mode !== undefined) { sets.push("mode = ?"); binds.push(body.mode); }
-  // 096 — update region
   if (body.region !== undefined && body.region !== "") { sets.push("region = ?"); binds.push(body.region); }
-  // 097 — update presign credentials (empty string → null to clear)
   if (body.presign_username !== undefined) { sets.push("presign_username = ?"); binds.push(body.presign_username || null); }
   if (body.presign_password !== undefined) { sets.push("presign_password = ?"); binds.push(body.presign_password || null); }
   if (sets.length === 0) {

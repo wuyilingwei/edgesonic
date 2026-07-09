@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// 069 — Playlist CRUD UI.
 //
 // Backend (034):
 //   GET /rest/getPlaylists                                           list

@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 111 — Coverage for the WAV bug pair Rosmontis reported:
 //   1. "wav不能正确的识别封面" — locateEmbeddedPicture (worker/src/utils/tags.ts)
 //      only recognized ID3/FLAC magic bytes at buffer start; a WAV file
 //      ("RIFF...") matched neither branch, so an embedded id3/APIC picture

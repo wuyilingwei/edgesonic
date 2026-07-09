@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 088 — worker_max_concurrent feature flag.
 //
 // Covers the server-side knob added in 088:
 //   1. Migration 0025 default — feature_strings row exists with value '3'.
@@ -84,7 +83,6 @@ function buildDb(): DatabaseSync {
       description TEXT,
       updated_at INTEGER DEFAULT 0
     );
-    -- 087 — features/updateString gates on manage_permissions; the test user
     -- is super-admin (level=3) so the permission row must be enabled.
     CREATE TABLE user_permissions (
       level INTEGER NOT NULL,

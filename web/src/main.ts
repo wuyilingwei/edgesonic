@@ -35,20 +35,14 @@ const routes = [
   // Permissions matrix now lives inside Settings; keep the old route working.
   { path: "/permissions", redirect: "/settings" },
   { path: "/settings", component: Settings, meta: { title: "Settings" } },
-  // 104 — Tools page: Subsonic clone (pull) + push-to-upstream, extracted from
   // Settings. Lazy-loaded — super-admin workflows, rarely visited.
   { path: "/tools", component: () => import("./views/Tools.vue"), meta: { title: "Tools" } },
-  // 062 — Internet Radio management. Lazy-loaded; view is rarely needed by
   // non-admin users so we keep it out of the main chunk.
   { path: "/radio", component: () => import("./views/Radio.vue"), meta: { title: "Radio" } },
-  // 063 — Podcast subscription management.
   { path: "/podcasts", component: () => import("./views/Podcasts.vue"), meta: { title: "Podcasts" } },
-  // 061 — Public Share creation & management.
   { path: "/shares", component: () => import("./views/Shares.vue"), meta: { title: "Shares" } },
-  // 069 — Playlist CRUD UI. Lazy loaded; no nested detail route — the view
   // owns its detail state inline so back-nav doesn't re-pick a playlist.
   { path: "/playlists", component: () => import("./views/Playlists.vue"), meta: { title: "Playlists" } },
-  // 110 — Full-screen Now Playing page: cover + lyrics + controls.
   { path: "/now-playing", component: () => import("./views/NowPlaying.vue"), meta: { title: "Now Playing" } },
 ];
 
@@ -69,7 +63,6 @@ app.use(pinia);
 app.use(i18n);
 app.mount("#app");
 
-// 081 — Long-lived SPA tabs can sit on a stale bundle for hours after a worker
 // deploy. We poll a tiny public endpoint and feed the result into the update
 // banner store; the banner only renders once the version or isolate start time
 // differs from the first sample we recorded.

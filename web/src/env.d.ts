@@ -13,16 +13,4 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-import { defineConfig } from "vite";
-import vue from "@vitejs/plugin-vue";
-import { readFileSync } from "fs";
-
-const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8"));
-
-export default defineConfig({
-  plugins: [vue()],
-  server: { port: 5173 },
-  define: {
-    __EDGESONIC_VERSION__: JSON.stringify(pkg.version),
-  },
-});
+declare const __EDGESONIC_VERSION__: string;

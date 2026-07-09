@@ -50,7 +50,6 @@ export interface SongMaster {
   genre: string | null;
   compilation: number;
   participants: string | null;
-  // 036 — full LRC / plain-text lyrics. Populated by writeTags or by an
   // external fetch the first time /rest/getLyrics(BySongId) sees an empty row.
   lyrics: string | null;
   created_at: number;
@@ -122,16 +121,13 @@ export interface SubsonicCredential {
 export interface StorageSource {
   id: string;
   type: string;
-  // 005 — human-readable label
   name?: string | null;
   base_url: string;
   username: string | null;
   password: string | null;
-  // 0003 — path prefix inside the remote
   root_path?: string | null;
   last_sync: number | null;
   enabled: number;
-  // 026 — scan mode: 'library' (default) | 'sync_only' (scan but skip DB inserts)
   mode: string;
   created_at: number;
   updated_at: number;
@@ -157,7 +153,6 @@ export interface PlaylistEntry {
   added_at: number;
 }
 
-// 037 — Bookmarks + PlayQueue
 export interface Bookmark {
   user_id: string;
   song_master_id: string;
@@ -176,7 +171,6 @@ export interface PlayQueue {
   updated_at: number;
 }
 
-// 044 — Sharing
 export interface Share {
   id: string;
   user_id: string;                  // owner (FK users.username)
@@ -194,7 +188,6 @@ export interface ShareEntry {
   song_master_id: string;
 }
 
-// 046 — Podcasts (migration 0019)
 export interface PodcastChannel {
   id: string;
   url: string;
@@ -225,7 +218,6 @@ export interface PodcastEpisode {
   created_at: number;
 }
 
-// 045 — Internet Radio stations (migration 0018)
 export interface InternetRadioStation {
   id: string;
   name: string;
@@ -236,7 +228,6 @@ export interface InternetRadioStation {
   updated_at: number;
 }
 
-// 049 — Transcode jobs (post-migration 0010: adds engine + profile_id columns)
 export interface TranscodeJob {
   id: string;
   instance_id: string;

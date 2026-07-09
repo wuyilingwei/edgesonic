@@ -42,17 +42,13 @@ interface Source {
   rootPath: string;
   enabled: boolean;
   lastSync: string;
-  // 068 — true iff the row's password_encrypted column holds a `v1:` AES-GCM
   // blob; false for legacy plaintext or rows where the password column itself
   // is empty (e.g. r2 / url sources, which never had a password).
   encrypted: boolean;
   // P4 — library=扫描时入库; sync_only=仅作复制/同步目标，扫描不入库
   mode: "library" | "sync_only";
-  // 096 — S3 region (us-east-1 for AWS/MinIO default; 'auto' for R2)
   region: string;
-  // 097 — non-empty when a read-only presign account is configured (password not returned)
   presignUsername: string;
-  // 060 — Last scan_jobs row snapshot for this source. Populated by
   // pollScanStatus() so the action column can render idle/running/completed/
   // failed without an extra round-trip per row.
   scanStatus: ScanState;
@@ -72,7 +68,6 @@ const form = ref({ type: "webdav", name: "", base_url: "", username: "", passwor
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
-// === 060 — Scan polling + history ===
 // In-memory history: scan_jobs we've observed during this session. Keyed by
 // source id, capped at 5 entries (newest first). We deliberately don't add a
 // /storage/scan/history endpoint (task scope says "don't extend endpoints"),
@@ -212,9 +207,7 @@ async function saveEdit() {
   if (editForm.value.root_path !== s.rootPath) body.root_path = editForm.value.root_path;
   if (editForm.value.enabled !== s.enabled) body.enabled = editForm.value.enabled ? 1 : 0;
   if (editForm.value.mode !== s.mode) body.mode = editForm.value.mode;
-  // 096 — region (S3 only; safe to send for other types, backend stores it)
   if (editForm.value.region !== s.region) body.region = editForm.value.region;
-  // 097 — presign creds for WebDAV: always send presign_username (supports clearing via "");
   //        send presign_password only when non-empty (like main password)
   if (s.type === "webdav") {
     body.presign_username = editForm.value.presignUsername; // "" → null in backend
@@ -245,14 +238,11 @@ async function load() {
         rootPath: s.rootPath || "",
         enabled: s.enabled === "true" || s.enabled === "1",
         lastSync: s.lastSync && s.lastSync !== "0" ? new Date(parseInt(s.lastSync) * 1000).toLocaleString() : "Never",
-        // 068 — sources/list emits encrypted="true"|"false". Only webdav /
         // subsonic rows ever flip to true; r2 / url stay false.
         encrypted: s.encrypted === "true",
         // P4 — mode defaults to "library" when attribute is absent
         mode: (s.mode === "sync_only" ? "sync_only" : "library") as "library" | "sync_only",
-        // 096 — region for S3-compatible sources
         region: s.region || "us-east-1",
-        // 097 — read-only presign account indicator (password is never returned)
         presignUsername: s.presignUsername || "",
         scanStatus: prev?.scanStatus ?? "idle",
         scanJobId: prev?.scanJobId ?? null,
@@ -372,12 +362,10 @@ function stopMirror(sId: string) {
 }
 
 async function scanSource(s: Source, force = false) {
-  // 060 — flip to a launching placeholder so the row immediately shows a
   // spinner instead of staying on "Scan". The 1st pollScanStatus() will
   // replace this with the real running snapshot (jobs are inserted
   // synchronously inside scan/start before the response returns, see
   // worker/src/endpoints/storage/scan.ts:50-107).
-  // 076 — `force` (Shift+click) bypasses the ETag short-circuit on the worker
   // side so every existing instance gets an UPDATE + tag_scanned=0 reset. This
   // gives the user a way to say "I know nothing changed metadata-wise but
   // re-run the metadata pipeline anyway" — the common-case incremental scan
@@ -448,7 +436,6 @@ function statusLabel(s: Source): string {
   return t("sources.scanStatus.idle");
 }
 
-// === 068 — bulk-encrypt legacy plaintext passwords ===
 // Super-admin only. The button is hidden for plain admins so the one-way
 // nature of the action stays out of the regular admin's foot-gun surface.
 // We don't pre-check STORAGE_KEY availability on the client because:
@@ -510,16 +497,6 @@ onUnmounted(() => {
         <h1 class="page-title">{{ t("sources.title") }}</h1>
       </div>
       <div class="page-header-actions">
-        <!-- 068 — super-admin only one-way bulk encrypt. Hidden behind
-             confirm() to avoid an accidental click trashing the legacy
-             password column before STORAGE_KEY is verified. -->
-        <button
-          v-if="isSuperAdmin"
-          class="btn-secondary"
-          :disabled="migrating"
-          :title="t('sources.migrateHint')"
-          @click="migratePasswords"
-        >{{ migrating ? t("sources.migrating") : t("sources.migratePasswords") }}</button>
         <button v-if="isAdmin" :class="showForm ? 'btn-secondary' : 'btn-primary'" @click="showForm = !showForm">{{ showForm ? t("common.cancel") : t("sources.add") }}</button>
       </div>
     </div>
@@ -563,7 +540,6 @@ onUnmounted(() => {
           </select>
           <span class="field-hint">{{ t("sources.mode.hint") }}</span>
         </div>
-        <!-- 097 — Read-only presign account (WebDAV only, in add form) -->
         <div v-if="form.type === 'webdav'" class="form-group span-all">
           <label class="form-label">{{ t("sources.presignCreds") }} <span class="field-hint-inline">({{ t("common.optional", "可选") }})</span></label>
           <input v-model="form.presign_username" class="form-input" :placeholder="t('sources.presignUsername')" autocomplete="off" />
@@ -580,125 +556,64 @@ onUnmounted(() => {
     <div v-if="loading" class="loading-state">{{ t("common.loading") }}</div>
     <div v-else class="grid grid-2">
       <div v-for="s in sources" :key="s.id" class="card hoverable source-card">
-        <!-- Top row: type badge (left) + badges + actions (right) -->
+        <!-- Top: type badge + status badges (info row) -->
         <div class="source-header">
           <span class="status-badge info">{{ s.type.toUpperCase() }}</span>
-          <!-- P5: split into stable badge group + action group -->
-          <div class="source-right">
-            <!-- Badge row -->
-            <div class="source-badges">
-              <!-- 068 — encrypted/plaintext badge -->
-              <span
-                v-if="(s.type === 'webdav' || s.type === 'subsonic') && isAdmin"
-                :class="['status-badge', s.encrypted ? 'success' : 'warn']"
-                :title="s.encrypted ? t('sources.passwordEncryptedHint') : t('sources.passwordPlaintextHint')"
-              >{{ s.encrypted ? t("sources.passwordEncrypted") : t("sources.passwordPlaintext") }}</span>
-              <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
-              <!-- P4: mode badge — only shown for sync_only, library is the default/silent state -->
-              <span v-if="s.mode === 'sync_only'" class="status-badge mode-sync" :title="t('sources.mode.hint')">{{ t("sources.mode.syncOnly") }}</span>
-              <!-- 097 — read-only presign account badge -->
-              <span v-if="s.type === 'webdav' && s.presignUsername" class="status-badge presign-set" :title="t('sources.presignStatusSet')">⊙ {{ t("sources.presignCreds") }}</span>
-              <!-- 060: scan status pill (display only — buttons are in source-actions below) -->
-              <template v-if="isAdmin && (s.type === 'webdav' || s.type === 's3')">
-                <span v-if="s.scanStatus === 'running'" class="scan-pill scan-pill-running" :title="t('sources.scanStatus.progress')">
-                  <span class="scan-spinner" aria-hidden="true"></span>
-                  <span class="scan-pill-text">{{ statusLabel(s) }}</span>
-                </span>
-                <span v-else-if="s.scanStatus === 'completed'" class="scan-pill scan-pill-completed" :title="t('sources.scanStatus.completed', { total: s.scanTotal, relative: relativeTime(s.scanEndedAt || s.scanStartedAt) })">
-                  <span class="scan-icon" aria-hidden="true">✓</span>
-                  <span class="scan-pill-text">{{ statusLabel(s) }}</span>
-                </span>
-                <span v-else-if="s.scanStatus === 'failed'" class="scan-pill scan-pill-failed" :title="s.scanError || ''">
-                  <span class="scan-icon" aria-hidden="true">✗</span>
-                  <span class="scan-pill-text">{{ s.scanError ? `${t('sources.scanStatus.failed')} — ${s.scanError}` : t("sources.scanStatus.failed") }}</span>
-                </span>
-              </template>
-            </div>
-            <!-- Action row -->
-            <div v-if="isAdmin" class="source-actions">
-              <!-- P5/P10: scan buttons moved out of pill; rescan has own i18n key -->
-              <template v-if="(s.type === 'webdav' || s.type === 's3') && s.scanStatus !== 'running'">
-                <button
-                  :class="s.scanStatus === 'idle' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'"
-                  :title="t('sources.scanStatus.forceHint')"
-                  @click="scanSource(s, $event.shiftKey)"
-                >
-                  {{ s.scanStatus === 'completed' ? t('sources.scanStatus.rescan') : s.scanStatus === 'failed' ? t('sources.scanStatus.retry') : t('sources.scanStatus.idle') }}
-                </button>
-              </template>
-              <!-- 093f — Mirror to R2 button (webdav only) -->
-              <button
-                v-if="s.type === 'webdav' && !(mirrorFor(s)?.running)"
-                class="btn-secondary btn-sm"
-                @click="startMirror(s)"
-              >{{ t("sources.mirror.btn") }}</button>
-              <button
-                v-if="mirrorFor(s)?.running"
-                class="btn-danger btn-sm"
-                @click="stopMirror(s.id)"
-              >{{ t("sources.mirror.stop") }}</button>
-              <button class="btn-secondary btn-sm" @click="openEdit(s)">{{ t("common.edit") }}</button>
-              <button class="btn-danger btn-sm" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
-            </div>
-            <!-- 093f — Mirror progress -->
-            <div v-if="mirrorFor(s)" class="mirror-progress">
-              <div class="mirror-progress-meta">
-                {{ t("sources.mirror.progress", { done: mirrorFor(s)!.done, total: mirrorFor(s)!.total, failed: mirrorFor(s)!.failed }) }}
-              </div>
-              <div class="mirror-progress-bar">
-                <div class="mirror-progress-fill" :style="{ width: (mirrorFor(s)!.total > 0 ? (mirrorFor(s)!.done / mirrorFor(s)!.total * 100) : 0) + '%' }"></div>
-              </div>
-              <div v-if="mirrorFor(s)?.currentTitle" class="mirror-current">
-                {{ mirrorFor(s)!.currentTitle }}
-              </div>
-              <div v-if="mirrorFor(s)?.error" class="mirror-error">{{ mirrorFor(s)!.error }}</div>
-            </div>
+          <div class="source-badges">
+            <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
+            <span v-if="s.mode === 'sync_only'" class="status-badge mode-sync" :title="t('sources.mode.hint')">{{ t("sources.mode.syncOnly") }}</span>
+            <span v-if="s.type === 'webdav' && s.presignUsername" class="status-badge presign-set" :title="t('sources.presignStatusSet')">⊙ {{ t("sources.presignCreds") }}</span>
+            <template v-if="isAdmin && (s.type === 'webdav' || s.type === 's3')">
+              <span v-if="s.scanStatus === 'running'" class="scan-pill scan-pill-running">
+                <span class="scan-spinner" aria-hidden="true"></span>
+                <span class="scan-pill-text">{{ statusLabel(s) }}</span>
+              </span>
+              <span v-else-if="s.scanStatus === 'completed'" class="scan-pill scan-pill-completed">
+                <span class="scan-icon" aria-hidden="true">✓</span>
+                <span class="scan-pill-text">{{ statusLabel(s) }}</span>
+              </span>
+              <span v-else-if="s.scanStatus === 'failed'" class="scan-pill scan-pill-failed">
+                <span class="scan-icon" aria-hidden="true">✗</span>
+                <span class="scan-pill-text">{{ s.scanError ? s.scanError : t("sources.scanStatus.failed") }}</span>
+              </span>
+            </template>
           </div>
         </div>
-        <!-- Alias / display name -->
+        <!-- Info section -->
         <div class="source-name">{{ s.name || s.base_url }}</div>
-        <!-- URL (shown when alias is set) -->
         <div v-if="s.name" class="source-url">{{ s.base_url }}</div>
         <div class="source-meta">
           <span v-if="s.username">{{ t("sources.user") }}: {{ s.username }}</span>
           <span v-if="s.rootPath">{{ t("sources.root") }}: {{ s.rootPath }}</span>
-          <!-- 096: show region for S3 sources -->
           <span v-if="s.type === 's3'">{{ t("sources.s3Region") }}: {{ s.region }}</span>
           <span v-if="s.lastSync !== 'Never'">{{ t("sources.lastSync") }}: {{ s.lastSync }}</span>
           <span v-else class="text-muted">{{ t("sources.notSynced") }}</span>
         </div>
-        <!-- 060: scan history toggle (webdav + s3) -->
-        <div v-if="s.type === 'webdav' || s.type === 's3'" class="scan-history-toggle">
-          <button class="link-button" @click="toggleHistory(s.id)">
-            {{ expandedSources.has(s.id) ? t("sources.scanStatus.collapse") : t("sources.scanStatus.expand") }}
-            <span class="mono-subtle">[{{ (scanHistory[s.id] || []).length }}]</span>
-          </button>
+        <!-- Mirror progress (if active) -->
+        <div v-if="mirrorFor(s)" class="mirror-progress">
+          <div class="mirror-progress-meta">
+            {{ t("sources.mirror.progress", { done: mirrorFor(s)!.done, total: mirrorFor(s)!.total, failed: mirrorFor(s)!.failed }) }}
+          </div>
+          <div class="mirror-progress-bar">
+            <div class="mirror-progress-fill" :style="{ width: (mirrorFor(s)!.total > 0 ? (mirrorFor(s)!.done / mirrorFor(s)!.total * 100) : 0) + '%' }"></div>
+          </div>
+          <div v-if="mirrorFor(s)?.currentTitle" class="mirror-current">{{ mirrorFor(s)!.currentTitle }}</div>
+          <div v-if="mirrorFor(s)?.error" class="mirror-error">{{ mirrorFor(s)!.error }}</div>
         </div>
-        <div v-if="(s.type === 'webdav' || s.type === 's3') && expandedSources.has(s.id)" class="scan-history">
-          <div class="scan-history-title">{{ t("sources.scanStatus.history") }}</div>
-          <div v-if="!(scanHistory[s.id] && scanHistory[s.id].length)" class="scan-history-empty">{{ t("sources.scanStatus.historyEmpty") }}</div>
-          <table v-else class="scan-history-table">
-            <thead>
-              <tr>
-                <th>{{ t("sources.scanStatus.jobId") }}</th>
-                <th>{{ t("sources.scanStatus.status") }}</th>
-                <th>{{ t("sources.scanStatus.started") }}</th>
-                <th>{{ t("sources.scanStatus.progress") }}</th>
-                <th>{{ t("sources.scanStatus.duration") }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="j in scanHistory[s.id]" :key="j.jobId">
-                <td class="mono-cell">{{ j.jobId }}</td>
-                <td>
-                  <span :class="['status-badge', j.status === 'completed' ? 'success' : j.status === 'failed' ? 'error' : 'info']">{{ j.status }}</span>
-                </td>
-                <td class="mono-cell">{{ formatStarted(j.startedAt) }}</td>
-                <td class="mono-cell">{{ j.scanned }} / {{ j.total }}</td>
-                <td class="mono-cell">{{ formatDuration(j.startedAt, j.endedAt) }}</td>
-              </tr>
-            </tbody>
-          </table>
+        <!-- Bottom: action buttons (vertical) -->
+        <div v-if="isAdmin" class="source-actions-vertical">
+          <template v-if="(s.type === 'webdav' || s.type === 's3') && s.scanStatus !== 'running'">
+            <button
+              :class="s.scanStatus === 'idle' ? 'btn-primary' : 'btn-secondary'"
+              @click="scanSource(s, $event.shiftKey)"
+            >
+              {{ s.scanStatus === 'completed' ? t('sources.scanStatus.rescan') : s.scanStatus === 'failed' ? t('sources.scanStatus.retry') : t('sources.scanStatus.idle') }}
+            </button>
+          </template>
+          <button v-if="s.type === 'webdav' && !(mirrorFor(s)?.running)" class="btn-secondary" @click="startMirror(s)">{{ t("sources.mirror.btn") }}</button>
+          <button v-if="mirrorFor(s)?.running" class="btn-danger" @click="stopMirror(s.id)">{{ t("sources.mirror.stop") }}</button>
+          <button class="btn-secondary" @click="openEdit(s)">{{ t("common.edit") }}</button>
+          <button class="btn-danger" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
         </div>
         <div class="corner corner-tr"></div>
         <div class="corner corner-bl"></div>
@@ -741,7 +656,6 @@ onUnmounted(() => {
             <input v-model="editForm.region" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
             <span class="field-hint">{{ t("sources.s3RegionHint") }}</span>
           </div>
-          <!-- 097 — Read-only presign account (WebDAV only, always visible) -->
           <div v-if="editing?.type === 'webdav'" class="presign-always-section span-all">
             <div class="form-group">
               <label class="form-label">{{ t("sources.presignCreds") }} <span class="field-hint-inline">({{ t("common.optional", "可选") }})</span></label>
@@ -778,7 +692,7 @@ onUnmounted(() => {
 .page { max-width: 1000px; }
 .page-header-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 
-/* 068 — yellow caution variant for the plaintext badge. status-badge already
+/* yellow caution variant for the plaintext badge. status-badge already
    provides success/error/info; warn is added inline so we don't have to
    touch palette.css for this task. */
 .status-badge.warn {
@@ -867,18 +781,15 @@ onUnmounted(() => {
 }
 
 /* Action group: scan/rescan/retry + edit + delete */
-.source-actions {
-  display: flex;
-  align-items: stretch;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+.source-actions-vertical {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  margin-top: 0.8rem;
 }
-/* Ensure every button in the action row has equal height and centered text */
-.source-actions .btn-sm {
-  display: inline-flex;
-  align-items: center;
-  white-space: nowrap;
+.source-actions-vertical button {
+  text-align: center;
+  padding: 0.5rem 1rem;
 }
 
 /* 093f — Mirror to R2 progress */

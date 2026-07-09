@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 081 — Tests for the public /edgesonic/version endpoint.
 //
 // Coverage:
 //   1. GET /edgesonic/version → 200 + ok:true + version=WORKER_VERSION value

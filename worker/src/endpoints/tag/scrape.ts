@@ -17,7 +17,6 @@ import { Hono } from "hono";
 import type { User } from "../../types/entities";
 
 // ============================================================================
-// Task 040 — Metadata Scrape endpoints (proxy + audit + history).
 //
 // All three routes are SESSION_ONLY (see auth.ts). They emit JSON, not XML,
 // because they belong to the web-side admin surface — Subsonic clients have

@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 106/107 — Subsonic `f` format parameter middleware.
 //
 // The Subsonic API spec says: `f=xml` (default), `f=json`, or `f=jsonp`.
 // Before 106, EdgeSonic ignored `f` entirely and always returned XML.
@@ -27,7 +26,6 @@
 // subset. Binary endpoints (stream/getCoverArt/getAvatar/download) return
 // non-XML content types and are passed through untouched.
 //
-// 107 — Type alignment with real OpenSubsonic servers (verified against
 // Navidrome docs + the reference music-tag-web instance):
 //   * Numeric/boolean attributes must be emitted as JSON numbers/booleans
 //     (`"duration":235`, `"adminRole":true`), NOT strings. XML loses types,
@@ -146,7 +144,6 @@ const ARRAY_PAIRS = new Set([
 // Leaf text children whose values are numeric per spec.
 const INT_TEXT_TAGS = new Set(["versions"]);
 
-// 108 — containers whose standard list children must exist (as []) even when
 // the XML has no such elements. Verified against the reference server:
 // search results always carry artist/album/song arrays, empty or not, and
 // clients index into them without guarding.
@@ -156,7 +153,6 @@ const EMPTY_ARRAY_DEFAULTS: Record<string, string[]> = {
   searchResult3: ["artist", "album", "song"],
 };
 
-// 108 — leaf tags that must serialize as OBJECTS with a `value` key even
 // when they carry nothing but text. OpenSubsonic songLyrics `line` is
 // `{"start":..,"value":".."}`; an unsynced line without attrs must still be
 // `{"value":".."}`, not a bare string.
@@ -198,7 +194,6 @@ function nodeToObject(n: Node): Record<string, unknown> {
       ? items.map(leafOrObject)
       : leafOrObject(items[0]);
   }
-  // 108 — guarantee standard list children exist for known containers.
   for (const key of EMPTY_ARRAY_DEFAULTS[n.tag] ?? []) {
     if (!(key in obj)) obj[key] = [];
   }
@@ -207,7 +202,6 @@ function nodeToObject(n: Node): Record<string, unknown> {
 }
 
 function leafOrObject(n: Node): unknown {
-  // 108 — tags with object-shape or default-children contracts always go
   // through nodeToObject, even when they parsed as bare/empty leaves.
   if (n.tag in EMPTY_ARRAY_DEFAULTS || OBJECT_TEXT_TAGS.has(n.tag)) {
     const obj = nodeToObject(n);

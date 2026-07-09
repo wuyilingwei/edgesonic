@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — Subsonic protocol surface aggregate. Every route declared here is
 // mounted under `/rest/*` by router.ts and protected by the standard Subsonic
 // auth (token+salt / apikey / guestToken). Adding a Subsonic endpoint? Drop
 // the handler in a sibling file with a `/<name>` path, export the Hono router,
@@ -40,7 +39,6 @@ import { subsonicScanRoutes } from "./scan";
 
 export const subsonicRoutes = new Hono();
 
-// 107 — the f=json format middleware lives in ../../index.ts, mounted on
 // /rest/* BEFORE authMiddleware so auth-failure envelopes convert too.
 
 subsonicRoutes.route("/", pingRoutes);

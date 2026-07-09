@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 055 — Four-bucket API surface:
 //   /rest/*       Subsonic 1.16.1 + OpenSubsonic protocol
 //   /tag/*        Tag management   (web-session, edit_tags etc.)
 //   /storage/*    Storage management (web-session, manage_sources/files)

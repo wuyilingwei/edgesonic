@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 049 — Profile catalogue + ffmpeg arg builder.
 //
 // Profiles are the only thing engines, the Settings UI, and the
 // transcode_jobs table agree on. New profiles must be added here and

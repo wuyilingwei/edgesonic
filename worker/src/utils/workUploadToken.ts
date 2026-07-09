@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 053 — One-shot HMAC tokens for browser-pool transcode uploads.
 //
 // The browser-pool engine kicks off a transcode by writing a work_queue row
 // and handing the browser a URL like:

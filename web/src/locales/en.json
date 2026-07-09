@@ -365,8 +365,6 @@
     "common": {
       "title": "Common",
       "instance": "Instance",
-      "online": "ONLINE",
-      "unknown": "UNKNOWN",
       "language": "Interface Language",
       "languageDesc": "Display language of the web console",
       "featureFlags": "Feature Flags",

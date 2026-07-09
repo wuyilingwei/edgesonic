@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 038 — listAlbums filter SQL composition test. Verifies fromYear/toYear/genre/
 // musicFolderId influence the prepared SQL/binds as expected without hitting D1.
 // Run: npx tsx test/album_list_filters.test.ts
 

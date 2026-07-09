@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 107 — Subsonic XML/JSON 行为对齐测试
 //
 // Verifies the f=json conversion pipeline (middleware/format.ts) against the
 // OpenSubsonic spec + reference-server behaviour observed on

@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 035 — OpenSubsonic protocol declaration.
 //
 // Routes:
 //   - GET/POST /rest/getOpenSubsonicExtensions  (no auth — declared in auth.ts NO_AUTH_PATHS)

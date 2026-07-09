@@ -25,7 +25,6 @@ import { extractMetadata, isBrowserParse, suffixOf } from "../lib/metadata";
 
 const { t } = useI18n();
 const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, edgesonicPost, uploadFile, crossCopy, writeTags, submitMetadata, tidyFolder, restUrl, level, handleAuthError } = useAuth();
-// 056 — Worker pool surface: progress / speed / pause / recent chips.
 const workerPool = useWorkerPool();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
@@ -72,7 +71,6 @@ const browserScanProcessed = ref(0);
 const browserScanTagged = ref(0);
 const browserScanTotal = ref(0);
 
-// 051 — pending-instance queue surfaced by /storage/scan/pending. The badge in
 // the page header shows the current backlog; the auto-drain loop pulls one
 // batch at a time. The browser-auto behaviour is gated by the
 // scan_browser_auto feature flag (read once at load).
@@ -157,12 +155,10 @@ function selectSource(id: string) {
   currentSource.value = id;
   path.value = id === "r2" ? "music" : "";
   loadDir();
-  // 051 — refresh the pending badge whenever the storage source flips, so
   // the count tracks the active source.
   loadPending();
 }
 
-// 051 — pending list for the active source. Empty source ("r2" included) just
 // resets the badge — only WebDAV sources can have incremental scans populate
 // the queue. The endpoint validates the source server-side.
 async function loadPending() {
@@ -190,7 +186,6 @@ async function loadPending() {
   }
 }
 
-// 051 — read scan_browser_auto from feature flags so the page knows whether to
 // auto-drain. We deliberately don't gate by isSuperAdmin here; the user-level
 // switch is the feature flag itself (admin-only writeable, but everyone
 // honours the result).
@@ -318,7 +313,6 @@ async function runTagScan() {
   }
 }
 
-// 041 + 051 — browser-side metadata parse pump.
 //
 // Two modes:
 //   • pending-list mode (preferred, /storage/scan/pending) — drives the
@@ -368,7 +362,6 @@ async function runBrowserRead() {
   }
 }
 
-// 051 — Pull pending batches in a loop until the backlog is empty or every
 // item in the batch failed (defensive: avoids an infinite spin on bad data).
 async function drainPendingQueue() {
   browserScanning.value = true;
@@ -415,7 +408,6 @@ async function drainPendingQueue() {
   }
 }
 
-// 051 — auto-drain trigger. Page must be visible, the flag must be on, and
 // a non-zero pending count must exist. We delay by 5s after the user lands on
 // the page so a quick tab-flip doesn't spin up the loop unnecessarily.
 function scheduleAutoDrain() {
@@ -661,7 +653,6 @@ async function runTidyFolder() {
 
 function closeTidyFolder() { tidyOpen.value = false; }
 
-// ── 056 — work-queue HUD ───────────────────────────────────────────────────
 // HUD pulls /edgesonic/work/status every 30s so super-admins can watch the
 // queue counts + cancel stuck failures. Non-admins hit 403 → we just hide
 // the failed-list panel and rely on store-side stats for progress.
@@ -798,7 +789,6 @@ onMounted(async () => {
   await loadPending();
   document.addEventListener("visibilitychange", onVisibilityChange);
   scheduleAutoDrain();
-  // 056 — start the work/status poller (no-op for non-super-admin).
   document.addEventListener("visibilitychange", onWorkStatusVisibilityChange);
   startWorkStatusPolling();
 });
@@ -813,7 +803,6 @@ onUnmounted(() => {
   stopWorkStatusPolling();
 });
 
-// 051 — when the pending count drops to zero (or jumps after a manual scan)
 // re-evaluate whether auto-drain should kick in.
 watch(pendingCount, () => scheduleAutoDrain());
 </script>
@@ -838,7 +827,7 @@ watch(pendingCount, () => scheduleAutoDrain());
       </div>
     </div>
 
-    <!-- 056 — Work-queue HUD: progress + speed + pause + recent chips.
+    <!-- Work-queue HUD: progress + speed + pause + recent chips.
          Failed list panel only shows for super-admin (the /work/status
          endpoint is level=3, non-admins simply don't get the data). -->
     <div v-if="showWorkQueueHud" class="work-queue-card card">
@@ -1154,7 +1143,6 @@ watch(pendingCount, () => scheduleAutoDrain());
   letter-spacing: 0.05em;
   animation: pulse 2s ease-in-out infinite;
 }
-/* 051 — pending count badge in the header actions row */
 .pending-badge {
   font-family: var(--font-mono);
   font-size: var(--fs-xs);
@@ -1309,7 +1297,6 @@ watch(pendingCount, () => scheduleAutoDrain());
   color: var(--color-text-muted);
 }
 
-/* 042 — tidy folder modal */
 .tidy-modal { width: min(720px, 94vw); max-height: 90vh; overflow-y: auto; }
 .dry-run-row {
   display: flex; align-items: center; gap: 0.5rem;
@@ -1349,7 +1336,6 @@ watch(pendingCount, () => scheduleAutoDrain());
 }
 .te-msg.error { color: var(--color-status-error); }
 
-/* 056 — Work-queue HUD: progress bar + chips + failed-list panel. */
 .work-queue-card { margin-bottom: 1.25rem; padding: 0.85rem 1rem; }
 .work-queue-card .card-header {
   display: flex; align-items: center; justify-content: space-between;

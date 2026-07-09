@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 049 — Sandbox container entrypoint.
 //
 // Minimal http server that the Worker reaches through Sandbox SDK
 // exposePort(). One request → one ffmpeg child → streamed response.

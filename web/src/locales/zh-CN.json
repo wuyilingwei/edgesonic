@@ -365,8 +365,6 @@
     "common": {
       "title": "通用",
       "instance": "实例",
-      "online": "在线",
-      "unknown": "未知",
       "language": "界面语言",
       "languageDesc": "选择 Web 控制台显示语言",
       "featureFlags": "功能开关",

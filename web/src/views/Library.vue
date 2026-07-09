@@ -32,7 +32,6 @@ interface Artist { id: string; name: string; albumCount: string; }
 interface Album { id: string; name: string; artist: string; year: string; coverArt: string; songCount: string; }
 
 type Tab = "artists" | "albums" | "songs";
-// 076 — drop localStorage persistence: Library always defaults to "songs" so
 // users land on tracks (the most common entry point). Switching tabs is still
 // honored for the current session, but a re-mount resets to songs.
 const tab = ref<Tab>("songs");
@@ -60,7 +59,6 @@ const songsDone = ref(false);
 
 function switchTab(next: Tab) {
   tab.value = next;
-  // 076 — no longer persisted; see comment above the `tab` ref declaration.
   currentArtist.value = null;
   currentAlbum.value = null;
   albums.value = [];
@@ -339,7 +337,6 @@ onMounted(() => {
 });
 
 // ============================================================================
-// 061 — Share creation (song / album). Inline modal, no router push.
 //
 // Backend: GET /rest/createShare?id=<song|album>&description=&expires=<ms>
 // Returns: <shares><share id url description ...><entry .../></share></shares>
@@ -418,7 +415,6 @@ async function copyShareUrl() {
 }
 
 // ============================================================================
-// 069 — Add-to-Playlist affordance.
 //
 // Per-song button sits to the left of the 061 share-btn (also absolute, so the
 // existing --grid-cols template is untouched). Clicking opens a small modal

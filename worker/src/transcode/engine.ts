@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 049 — Transcode engine abstraction.
 //
 // This module defines the contract that every transcoder backend must
 // implement. Two backends ship with EdgeSonic:
@@ -107,7 +106,6 @@ export interface TranscodeEngine {
 }
 
 // Engine selector — read from features.transcode_engine.
-// 053 — `browser_pool` added: transcode tasks are queued via work_queue and
 // executed by browser-resident Web Workers (52b). Async-only — callers must
 // short-circuit on this kind instead of calling `engine.transcode()`.
 export type EngineKind = "sandbox" | "external" | "browser_pool" | "disabled";

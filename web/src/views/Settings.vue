@@ -25,7 +25,6 @@ import { useWorkerPool } from "../stores/workerPool";
 const router = useRouter();
 const { t, locale } = useI18n();
 const { isSuperAdmin, isAdmin, edgesonicFetch, edgesonicPost, logout, username, handleAuthError } = useAuth();
-// 052 — worker pool store. The Settings sub-block toggles participation and
 // surfaces live stats; admin sees a queue overview pulled from /work/status.
 const workerPool = useWorkerPool();
 
@@ -33,6 +32,14 @@ const workerPool = useWorkerPool();
 type SectionKey = "user" | "system" | "sessions" | "clients" | "permissions";
 const open = ref<Record<SectionKey, boolean>>({ user: true, system: false, sessions: false, clients: false, permissions: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
+
+// once whenever the section was open. Nested them into 4 thematic
+// second-level groups (same open/toggle shape as the top-level accordion,
+// just one step down visually) so an admin only has to expand what they
+// actually need. Instance ID stays unwrapped (it's a single read-only row).
+type SubSectionKey = "media" | "integrations" | "workers" | "featureFlags";
+const subOpen = ref<Record<SubSectionKey, boolean>>({ media: false, integrations: false, workers: false, featureFlags: false });
+function toggleSubSection(key: SubSectionKey) { subOpen.value[key] = !subOpen.value[key]; }
 
 // === Toast ===
 const toast = ref({ show: false, msg: "", type: "success" });
@@ -57,7 +64,6 @@ const loading = ref(true);
 const error = ref("");
 const copied = ref(false);
 
-// 049 — Transcode controls. The string-valued feature flags are pulled out of
 // featureStrings into local refs so the form is plain HTML; saveTranscode()
 // pushes them back via /rest/updateFeatureString.
 const transcodeEngine = ref<"sandbox" | "external" | "browser_pool" | "disabled">("disabled");
@@ -168,7 +174,6 @@ async function saveTranscode() {
   transcodeBusy.value = false;
 }
 
-// === 040 — Metadata scrape sources ===
 // scrape_enabled lives in the boolean `features` table; the priority list is
 // in feature_strings.scrape_enabled_sources. Save batches both like transcode.
 type ScrapeSourceKey = "netease" | "qmusic" | "kugou" | "kuwo" | "migu";
@@ -239,7 +244,6 @@ async function saveScrape() {
   scrapeBusy.value = false;
 }
 
-// === 043/110 — Last.fm API key (per-user setting) ===
 // Stored in user_settings.lastfm_api_key (per-user, not system-level).
 // Empty means the four getXxxInfo proxies stay quiet (Subsonic error code 30).
 const lastfmKeyInput = ref("");
@@ -272,7 +276,6 @@ async function saveLastfm() {
   lastfmBusy.value = false;
 }
 
-// === 051 — Scan settings ===
 // Four feature_strings drive the incremental WebDAV scanner + BROWSER READ
 // queue. Stored as strings so the same updateFeatureString endpoint works.
 const scanIntervalHours = ref<number>(1);
@@ -281,7 +284,6 @@ const scanRescanStrategy = ref<"auto" | "worker" | "browser">("auto");
 const scanBrowserAuto = ref<boolean>(true);
 const scanBusy = ref(false);
 
-// === 065 — Cross-Origin Isolation ===
 // COOP/COEP/CORP gating for SharedArrayBuffer + ffmpeg.wasm multi-thread.
 // `crossOriginIsolated` reflects the *current* page state (live), not the
 // feature flag — so the admin can see whether their last change took effect
@@ -313,7 +315,6 @@ async function saveCio() {
   cioBusy.value = false;
 }
 
-// === 091/092 — R2 + WebDAV presigned URL direct stream ===
 // Two feature flags + the R2 S3 secrets presence. The Dashboard surfaces a
 // "stream speed may be limited" hint when presign is inactive; this sub-block
 // is the admin-facing toggle + status readout.
@@ -368,7 +369,6 @@ async function saveWebdavPresign() {
   webdavPresignBusy.value = false;
 }
 
-// === 110 — metadata re-check cadence ===
 const metadataRecheckIntervalHours = ref<number>(24);
 const metadataRecheckIntervalBusy = ref(false);
 
@@ -431,7 +431,6 @@ async function saveScan() {
   scanBusy.value = false;
 }
 
-// === 054 — Cloudflare integration ===
 // Six endpoints under /edgesonic/cf/*. Token never echoed; UI shows tokenLast4
 // so the admin can recognise which token is live. All controls hidden when
 // the user is not super-admin (level<3).
@@ -458,7 +457,6 @@ const cronExpression = ref("");
 const cronBusy = ref(false);
 const cfAnalytics = ref<CfAnalytics | null>(null);
 const cfAnalyticsBusy = ref(false);
-// 067 — Post-deploy "restore default cron" trigger. wrangler deploy clears
 // the Worker's schedules; this button re-applies "0 */1 * * *" when the
 // schedules list is empty (no-op when admin already wrote a custom cadence).
 const cfEnsureCronBusy = ref(false);
@@ -547,7 +545,6 @@ async function saveCron() {
   cronBusy.value = false;
 }
 
-// 067 — Restore the default Worker schedule after a wrangler deploy.
 // Behaviour:
 //   - applied=true  → CF schedules were empty, default re-applied; toast OK
 //   - applied=false → schedules already populated, no change; informational toast
@@ -591,7 +588,6 @@ async function loadCfAnalytics() {
   cfAnalyticsBusy.value = false;
 }
 
-// === 052 — Worker pool ===
 // The local participate switch is the only writable control for non-admins.
 // Admins additionally see the per-status counts and per-user active load.
 const workerStatus = ref<{
@@ -643,7 +639,6 @@ async function onParticipateToggle(checked: boolean) {
   workerPool.setEnabled(checked);
 }
 
-// 088 — concurrent Web Worker count. The input mirrors workerPool.maxConcurrent
 // so the field shows the currently-live value on mount (and after a feature
 // reload) without an extra round-trip. saveMaxConcurrent() POSTs to
 // /features/updateString and rehydrates the store so future polls use the new
@@ -672,14 +667,6 @@ async function saveMaxConcurrent() {
   maxConcurrentBusy.value = false;
 }
 
-async function onPollNow() {
-  await workerPool.pollNow();
-  // If we're admin reload the status so the just-completed/failed task
-  // count moves in the table without a manual refresh.
-  if (isSuperAdmin.value) await loadWorkerStatus();
-}
-
-// 077 — admin trigger for /edgesonic/work/backfillCompleted. Replays
 // applyMetadataResult against every completed metadata row whose apply step
 // was skipped before 077 landed (~82 rows in the production deployment when
 // this code was written). Refreshes the queue overview when done so the
@@ -706,7 +693,6 @@ async function onBackfillCompleted() {
   workerBackfillBusy.value = false;
 }
 
-// 110 — admin trigger for /edgesonic/work/recheckMetadataNow. Runs the same
 // selection the cron tick (metadata_recheck_interval_hours) uses, bypassing
 // its cadence gate: dispatches a browser-pool metadata re-check for
 // tag_scanned=2 rows (unsupported container format) and tag_scanned=1 rows
@@ -734,7 +720,6 @@ async function onRecheckMetadataNow() {
   recheckMetadataBusy.value = false;
 }
 
-// 078 — maintenance: cleanup duplicate album cover bindings. Calls
 // /edgesonic/maintenance/cleanupDuplicateCovers, surfaces groups/cleared
 // counts in a toast, and tolerates 0/0 (no-op) gracefully. R2 objects are
 // NOT deleted — only the album.cover_r2_key column is freed for the freed
@@ -761,7 +746,6 @@ async function onCleanupDuplicateCovers() {
   cleanupCoversBusy.value = false;
 }
 
-// 080 — manually trigger the same logic 052a's workReclaim runs on cron.
 // Useful when CF schedules are empty (post-deploy, before ensureDefaultCron)
 // and a browser worker has left rows stuck in status='claimed'. The endpoint
 // returns the breakdown (reclaimed/requeued/failed) and we surface it in a
@@ -789,7 +773,6 @@ async function onReclaimStaleWork() {
   reclaimBusy.value = false;
 }
 
-// 082 — manually re-queue rows stuck at status='failed'. After a buggy bundle
 // burns through attempts the deterministic-id INSERT OR IGNORE means scan
 // can't dispatch them again; this knob flips them back to queued so a fresh
 // (presumably fixed) bundle can pick them up.
@@ -961,7 +944,6 @@ async function createCredential() {
   credBusy.value = false;
 }
 
-// 082 — Rename a credential's label in place. Triggered by the row input's
 // blur/Enter when the value differs from the persisted label. We snapshot the
 // original on focus so blur knows whether to fire — see the template's
 // @focus/@blur handlers below. On failure we revert the local mutation by
@@ -998,7 +980,6 @@ async function deleteCredential(id: string) {
   } catch { showToast(t("settings.clients.loadFailed"), "error"); }
 }
 
-// 092 — Update a credential's stream proxy strategy. Triggered by the
 // per-row <select>. Commits immediately; on failure reloads the list so
 // the dropdown snaps back to the persisted value.
 const STRATEGY_OPTIONS: Array<{ value: string; key: string }> = [
@@ -1029,9 +1010,7 @@ onMounted(() => {
   loadFeatures();
   loadSessions();
   loadCredentials();
-  // 052 — only super-admin sees the queue overview block; load it on mount.
   if (isSuperAdmin.value) loadWorkerStatus();
-  // 054 — pull CF status + existing cron + analytics for the super-admin.
   if (isSuperAdmin.value) {
     loadCfStatus();
     loadCfCron();
@@ -1068,6 +1047,46 @@ onMounted(() => {
             </select>
           </div>
         </div>
+
+        <div class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.lastfm.title") }}</span>
+            <span class="status-badge" :class="lastfmKeySet ? 'success' : 'muted'">
+              {{ lastfmKeySet ? t("settings.common.lastfm.setStatus") : t("settings.common.lastfm.unsetStatus") }}
+            </span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.lastfm.desc") }}
+          </p>
+          <label class="tc-row">
+            <span class="tc-key">{{ t("settings.common.lastfm.label") }}</span>
+            <input
+              v-model="lastfmKeyInput"
+              type="password"
+              class="form-input"
+              :placeholder="t('settings.common.lastfm.placeholder')"
+              autocomplete="off"
+            />
+          </label>
+          <div class="tc-actions">
+            <button
+              v-if="lastfmKeySet"
+              class="btn-secondary"
+              :disabled="lastfmBusy"
+              @click="clearLastfm"
+              style="margin-right: 0.6rem"
+            >
+              {{ t("settings.common.lastfm.clear") }}
+            </button>
+            <button
+              class="btn-primary"
+              :disabled="lastfmBusy || !lastfmKeyInput"
+              @click="saveLastfm"
+            >
+              {{ t("settings.common.lastfm.save") }}
+            </button>
+          </div>
+        </div>
       </div>
 
       <div class="corner corner-tl"></div>
@@ -1086,7 +1105,6 @@ onMounted(() => {
         <div class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.instance") }}</span>
-            <span class="status-badge" :class="instanceId ? 'success' : 'muted'">{{ instanceId ? t("settings.common.online") : t("settings.common.unknown") }}</span>
           </div>
           <div class="instance-row">
             <span class="mono-label">INSTANCE_ID</span>
@@ -1097,7 +1115,13 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 049 — Transcode controls -->
+        <div class="sub-section" :class="{ open: subOpen.media }">
+          <button class="sub-section-header" @click="toggleSubSection('media')">
+            <span class="sub-section-title">媒体处理与扫描</span>
+            <span class="sub-section-caret">{{ subOpen.media ? '−' : '+' }}</span>
+          </button>
+          <div v-show="subOpen.media" class="sub-section-body">
+
         <div class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.transcode.title") }}</span>
@@ -1183,7 +1207,6 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 040 — Metadata scrape sources -->
         <div class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.scrape.title") }}</span>
@@ -1232,48 +1255,6 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 043/110 — Last.fm API key (per-user setting) -->
-        <div class="sub-block">
-          <div class="sub-header">
-            <span class="mono-label">{{ t("settings.common.lastfm.title") }}</span>
-            <span class="status-badge" :class="lastfmKeySet ? 'success' : 'muted'">
-              {{ lastfmKeySet ? t("settings.common.lastfm.setStatus") : t("settings.common.lastfm.unsetStatus") }}
-            </span>
-          </div>
-          <p class="feature-desc tc-desc" style="margin-left:0">
-            {{ t("settings.common.lastfm.desc") }}
-          </p>
-          <label class="tc-row">
-            <span class="tc-key">{{ t("settings.common.lastfm.label") }}</span>
-            <input
-              v-model="lastfmKeyInput"
-              type="password"
-              class="form-input"
-              :placeholder="t('settings.common.lastfm.placeholder')"
-              autocomplete="off"
-            />
-          </label>
-          <div class="tc-actions">
-            <button
-              v-if="lastfmKeySet"
-              class="btn-secondary"
-              :disabled="lastfmBusy"
-              @click="clearLastfm"
-              style="margin-right: 0.6rem"
-            >
-              {{ t("settings.common.lastfm.clear") }}
-            </button>
-            <button
-              class="btn-primary"
-              :disabled="lastfmBusy || !lastfmKeyInput"
-              @click="saveLastfm"
-            >
-              {{ t("settings.common.lastfm.save") }}
-            </button>
-          </div>
-        </div>
-
-        <!-- 051 — Scan settings -->
         <div class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.scan.title") }}</span>
@@ -1347,8 +1328,16 @@ onMounted(() => {
             </div>
           </div>
         </div>
+          </div>
+        </div>
 
-        <!-- 065 — Cross-Origin Isolation (COOP/COEP) -->
+        <div class="sub-section" :class="{ open: subOpen.integrations }">
+          <button class="sub-section-header" @click="toggleSubSection('integrations')">
+            <span class="sub-section-title">系统集成</span>
+            <span class="sub-section-caret">{{ subOpen.integrations ? '−' : '+' }}</span>
+          </button>
+          <div v-show="subOpen.integrations" class="sub-section-body">
+
         <div class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.crossOriginIsolation.title") }}</span>
@@ -1385,7 +1374,6 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 054 — Cloudflare integration -->
         <div v-if="isSuperAdmin" class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.cf.title") }}</span>
@@ -1475,7 +1463,6 @@ onMounted(() => {
               </button>
             </div>
 
-            <!-- 067 — Post-deploy default cron restore -->
             <p class="feature-desc tc-desc" style="margin-top: 0.6rem; color: var(--color-accent-primary)">
               {{ t("settings.common.cf.ensureCronWarning") }}
             </p>
@@ -1516,7 +1503,6 @@ onMounted(() => {
            </div>
          </div>
 
-        <!-- 091/092 — R2 + WebDAV presigned URL direct stream -->
         <div v-if="isSuperAdmin" class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.presign.title") }}</span>
@@ -1583,8 +1569,16 @@ onMounted(() => {
             </div>
           </div>
         </div>
+          </div>
+        </div>
 
-        <!-- 052 — Worker pool -->
+        <div class="sub-section" :class="{ open: subOpen.workers }">
+          <button class="sub-section-header" @click="toggleSubSection('workers')">
+            <span class="sub-section-title">浏览器工作池</span>
+            <span class="sub-section-caret">{{ subOpen.workers ? '−' : '+' }}</span>
+          </button>
+          <div v-show="subOpen.workers" class="sub-section-body">
+
         <div class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.workerPool.title") }}</span>
@@ -1656,7 +1650,7 @@ onMounted(() => {
               <span class="feature-desc">{{ workerPollIntervalText }}</span>
             </div>
 
-            <!-- 088 — Concurrency knob. Admin-writable; non-admin sees the
+            <!-- Concurrency knob. Admin-writable; non-admin sees the
                  value but the input + save button are disabled. -->
             <div class="tc-row">
               <span class="tc-key">{{ t("settings.common.workerPool.maxConcurrent") }}</span>
@@ -1689,15 +1683,6 @@ onMounted(() => {
               <code class="feature-desc" style="color: var(--color-accent-primary)">{{ workerPool.lastError }}</code>
             </div>
 
-            <div class="tc-actions">
-              <button
-                class="btn-secondary"
-                :disabled="!workerPool.eligible || !workerPool.enabled"
-                @click="onPollNow"
-              >
-                {{ t("settings.common.workerPool.pollNow") }}
-              </button>
-            </div>
           </div>
 
           <!-- Admin queue overview -->
@@ -1726,7 +1711,7 @@ onMounted(() => {
               </span>
             </div>
 
-            <!-- 077 — backfill completed metadata rows that finished before the
+            <!-- backfill completed metadata rows that finished before the
                  /work/submit cascade was wired in. Admin-only; idempotent. -->
             <div class="tc-row" style="margin-top: 0.6rem">
               <span class="tc-key">{{ t("settings.common.workerPool.backfillLabel") }}</span>
@@ -1745,7 +1730,7 @@ onMounted(() => {
               <span v-if="workerBackfillToast" class="feature-desc" style="margin-left: 0.6rem">{{ workerBackfillToast }}</span>
             </div>
 
-            <!-- 110 — cron-driven metadata re-check: interval + manual trigger
+            <!-- cron-driven metadata re-check: interval + manual trigger
                  (unsupported-format retries + lyrics/disc backfill). -->
             <div class="tc-row" style="margin-top: 0.6rem">
               <span class="tc-key">{{ t("settings.common.workerPool.recheckLabel") }}</span>
@@ -1781,7 +1766,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 078 — Maintenance tools (super-admin only). Lives in Common because
+        <!-- Maintenance tools (super-admin only). Lives in Common because
              that's where 077 backfill lives; both are "fix the DB state" knobs
              tied to historical data drift. Each tool here MUST be idempotent
              and safe to re-run — no destructive cascades. -->
@@ -1810,7 +1795,7 @@ onMounted(() => {
             <span v-if="cleanupCoversToast" class="feature-desc" style="margin-left: 0.6rem">{{ cleanupCoversToast }}</span>
           </div>
 
-          <!-- 080 — manual reclaim of stale work_queue claims. Mirrors the
+          <!-- manual reclaim of stale work_queue claims. Mirrors the
                052a scheduled sweep so the operator has a "kick" button while
                CF cron schedules are empty (post-deploy / before ensureDefaultCron). -->
           <div class="tc-row">
@@ -1833,7 +1818,7 @@ onMounted(() => {
             {{ t("settings.common.maintenance.reclaimHint") }}
           </p>
 
-          <!-- 082 — re-queue rows stuck at status='failed'. Browser bundle
+          <!-- re-queue rows stuck at status='failed'. Browser bundle
                regressions can burn through attempts on every task; once they
                settle at 'failed' the deterministic-id scan can't dispatch
                them again until they're flipped back. -->
@@ -1857,6 +1842,15 @@ onMounted(() => {
             {{ t("settings.common.maintenance.resetFailedHint") }}
           </p>
         </div>
+          </div>
+        </div>
+
+        <div class="sub-section" :class="{ open: subOpen.featureFlags }">
+          <button class="sub-section-header" @click="toggleSubSection('featureFlags')">
+            <span class="sub-section-title">功能开关</span>
+            <span class="sub-section-caret">{{ subOpen.featureFlags ? '−' : '+' }}</span>
+          </button>
+          <div v-show="subOpen.featureFlags" class="sub-section-body">
 
         <!-- Feature flags -->
         <div class="sub-block">
@@ -1891,6 +1885,8 @@ onMounted(() => {
                 <span class="toggle-slider"></span>
               </label>
             </div>
+          </div>
+        </div>
           </div>
         </div>
       </div>
@@ -2009,7 +2005,7 @@ onMounted(() => {
           </div>
           <div v-for="cr in credentials" :key="cr.id" class="table-row">
             <span class="session-id" :title="cr.id">{{ cr.id }}</span>
-            <!-- 082 — inline label editor. blur and Enter commit; Esc reverts
+            <!-- inline label editor. blur and Enter commit; Esc reverts
                  by reloading the list. We keep the original value in a data-
                  attribute so the handler can detect "no change" cheaply. -->
             <span class="session-ua">
@@ -2025,7 +2021,7 @@ onMounted(() => {
             </span>
             <span class="session-time">{{ formatTs(cr.createdAt) }}</span>
             <span class="session-time">{{ cr.lastUsed ? formatTs(cr.lastUsed) : t("settings.clients.never") }}</span>
-            <!-- 092 — per-credential stream proxy strategy. 302 direct-stream
+            <!-- per-credential stream proxy strategy. 302 direct-stream
                  can be toggled per client for backward compatibility. -->
             <span class="session-strategy">
               <select
@@ -2106,6 +2102,39 @@ onMounted(() => {
 .sub-block:last-child { border-bottom: none; padding-bottom: 0; }
 .sub-header { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.6rem; }
 
+/* Second-level accordion nested inside SYSTEM's .section-body. Same
+   open/toggle shape as .settings-section, one visual step down: smaller
+   title, tighter letter-spacing, indented body so the .sub-block rows it
+   contains read as "inside a folder" rather than another full section. */
+.sub-section { margin: 0 0 0.9rem; border: 1px solid var(--color-border-subtle); border-radius: 2px; overflow: hidden; }
+.sub-section:last-child { margin-bottom: 0; }
+.sub-section-header {
+  width: 100%;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.7rem 0.9rem;
+  background: var(--color-bg-secondary);
+  border: none;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.sub-section-header:hover { background: var(--color-bg-tertiary); }
+.sub-section.open .sub-section-header { border-bottom: 1px solid var(--color-border-subtle); }
+.sub-section-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+.sub-section-caret {
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  color: var(--color-accent-primary);
+  width: 18px; text-align: center;
+}
+.sub-section-body { padding: 0.2rem 1rem 0.4rem; background: var(--color-bg-primary); }
+.sub-section-body .sub-block { padding-left: 0.2rem; padding-right: 0.2rem; }
+
 .instance-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; }
 .instance-id {
   font-family: var(--font-mono);
@@ -2152,7 +2181,7 @@ onMounted(() => {
 /* --- Subsonic clients --- */
 .cred-create { display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap; }
 .cred-label-input { flex: 1; min-width: 220px; }
-/* 082 — inline label editor inside the credential table row: tight padding so
+/* inline label editor inside the credential table row: tight padding so
    it doesn't push the row taller than the read-only siblings. */
 .cred-label-edit { width: 100%; padding: 0.25rem 0.4rem; font-size: 0.85rem; }
 .issued-panel {

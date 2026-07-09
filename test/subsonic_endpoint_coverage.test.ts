@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 106 — Subsonic 1.16.1 endpoint coverage test.
 //
 // Verifies that every endpoint defined in the Subsonic 1.16.1 spec is
 // registered at /rest/<name> AND /rest/<name>.view, accepting both GET and

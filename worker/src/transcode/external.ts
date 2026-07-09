@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 049 — ExternalTranscodeEngine.
 //
 // Calls a self-hosted Node + ffmpeg container (docker/external-transcoder)
 // over plain HTTPS, protected by a shared key sent in

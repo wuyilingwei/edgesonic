@@ -17,7 +17,6 @@
 // fronted by an in-isolate WeakMap memory cache (60s TTL).
 // See docs/DESIGN.md §3.3.
 //
-// 090 — KV layer removed (KV free-tier 100k reads/1k writes/day was exhausted).
 // Architecture: memory miss → D1 SELECT (one query loads ALL flags at once).
 // Staleness after an admin flip is bounded by MEM_TTL_MS (60s).
 

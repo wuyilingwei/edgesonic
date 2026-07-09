@@ -14,7 +14,6 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// 063 — Podcast subscriptions UI
 // ----------------------------------------------------------------------------
 // Mirrors Sources.vue card pattern: a header bar with primary actions on the
 // right, then a 2-column grid of channel cards. Each card shows up to the 5

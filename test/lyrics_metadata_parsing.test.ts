@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 109 — Coverage for the lyrics/metadata-parsing fixes:
 //   A. worker/src/utils/tags.ts — embedded lyrics (ID3v2 USLT, FLAC vorbis
 //      LYRICS/SYNCEDLYRICS/UNSYNCEDLYRICS) + disc number (TPOS/DISCNUMBER),
 //      previously declared but never parsed.
@@ -160,7 +159,6 @@ function buildStatsDb(): DatabaseSync {
     -- put never completed (Worker eviction / crash before cleanup ran).
     INSERT INTO song_instances (id, master_id, storage_uri, source_type, size, missing)
       VALUES ('si-stuck-claim', 'sm-3', 'r2://cache/webdav/sm-3.flac', 'cached', 209715200, 1);
-    -- 110 — a COMPLETED hotcache copy (missing=0, real bytes really in R2):
     -- still excluded from the 'r2' bucket because source_type='cached' is a
     -- transient WebDAV play-through cache, not a native R2 upload. 30 MB.
     INSERT INTO song_instances (id, master_id, storage_uri, source_type, size, missing)

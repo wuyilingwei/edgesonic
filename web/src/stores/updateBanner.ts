@@ -13,7 +13,6 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 081 — Update banner store.
 //
 // The poller in main.ts calls notify() with the latest version+startedAt
 // payload from /edgesonic/version. On the first call we capture the baseline;
