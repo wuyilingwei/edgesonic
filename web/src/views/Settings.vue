@@ -97,7 +97,7 @@ async function loadFeatures() {
     // 040: hydrate the scrape source priority list from feature_strings.
     hydrateScrapeFromFeatures();
     // 043: hydrate Last.fm key presence indicator.
-    hydrateLastfmFromFeatures();
+    void hydrateLastfmFromUserSetting();
     // 051: hydrate WebDAV scan cadence + BROWSER READ controls.
     hydrateScanFromFeatures();
     // 065: hydrate cross-origin isolation toggle.
@@ -224,25 +224,25 @@ async function saveScrape() {
   scrapeBusy.value = false;
 }
 
-// === 043 — Last.fm API key ===
-// Stored in feature_strings.lastfm_api_key. Empty means the four getXxxInfo
-// proxies stay quiet (Subsonic error code 30 to clients).
+// === 043/110 — Last.fm API key (per-user setting) ===
+// Stored in user_settings.lastfm_api_key (per-user, not system-level).
+// Empty means the four getXxxInfo proxies stay quiet (Subsonic error code 30).
 const lastfmKeyInput = ref("");
 const lastfmKeySet = ref(false);
 const lastfmBusy = ref(false);
 
-function hydrateLastfmFromFeatures() {
-  const stored = findFeatureString("lastfm_api_key", "");
-  lastfmKeySet.value = !!stored;
-  // We never put the actual key back in the input — keeps it from being
-  // accidentally re-saved or copied out of the DOM by a curious client.
+async function hydrateLastfmFromUserSetting() {
+  try {
+    const data = JSON.parse(await edgesonicFetch("features/userSetting?key=lastfm_api_key"));
+    if (data.ok) lastfmKeySet.value = !!data.set;
+  } catch { /* stay false */ }
   lastfmKeyInput.value = "";
 }
 
 async function saveLastfm() {
   lastfmBusy.value = true;
   try {
-    const data = JSON.parse(await edgesonicPost("features/updateString", {
+    const data = JSON.parse(await edgesonicPost("features/userSetting", {
       key: "lastfm_api_key",
       value: lastfmKeyInput.value,
     }));
@@ -803,7 +803,7 @@ async function onResetFailedWork() {
 async function clearLastfm() {
   lastfmBusy.value = true;
   try {
-    const data = JSON.parse(await edgesonicPost("features/updateString", {
+    const data = JSON.parse(await edgesonicPost("features/userSetting", {
       key: "lastfm_api_key",
       value: "",
     }));
@@ -1217,7 +1217,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- 043 — Last.fm API key -->
+        <!-- 043/110 — Last.fm API key (per-user setting) -->
         <div class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.lastfm.title") }}</span>
@@ -1235,7 +1235,6 @@ onMounted(() => {
               type="password"
               class="form-input"
               :placeholder="t('settings.common.lastfm.placeholder')"
-              :disabled="!isSuperAdmin"
               autocomplete="off"
             />
           </label>
@@ -1243,7 +1242,7 @@ onMounted(() => {
             <button
               v-if="lastfmKeySet"
               class="btn-secondary"
-              :disabled="!isSuperAdmin || lastfmBusy"
+              :disabled="lastfmBusy"
               @click="clearLastfm"
               style="margin-right: 0.6rem"
             >
@@ -1251,7 +1250,7 @@ onMounted(() => {
             </button>
             <button
               class="btn-primary"
-              :disabled="!isSuperAdmin || lastfmBusy || !lastfmKeyInput"
+              :disabled="lastfmBusy || !lastfmKeyInput"
               @click="saveLastfm"
             >
               {{ t("settings.common.lastfm.save") }}

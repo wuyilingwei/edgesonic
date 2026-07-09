@@ -16,22 +16,19 @@
 // curl probe could already infer from response timing.
 import { Hono } from "hono";
 
-// The worker process boots when Cloudflare cold-starts the isolate. The value
-// is captured once at module load; a redeploy creates a new isolate, so
-// `startedAt` changes on every deploy in addition to `WORKER_VERSION`.
+// 110 — EdgeSonic semantic version. Bumped with each release.
+const EDGESONIC_VERSION = "1.0.0";
+
 const STARTED_AT = new Date().toISOString();
 
 export const versionRoutes = new Hono<{ Bindings: Env }>();
 
 versionRoutes.get("/version", (c) => {
-  // env.WORKER_VERSION is configured via wrangler.toml [vars]. Bump it before
-  // each deploy (e.g. `wrangler deploy --var WORKER_VERSION:$(date +%s)`) so
-  // that long-lived tabs detect the new bundle even if the isolate happens to
-  // be warm-reused with the same startedAt.
   const version = c.env.WORKER_VERSION || "0";
   return c.json({
     ok: true,
     version,
+    edgesonicVersion: EDGESONIC_VERSION,
     buildTime: STARTED_AT,
     startedAt: STARTED_AT,
   });

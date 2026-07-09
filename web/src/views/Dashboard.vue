@@ -96,6 +96,43 @@ const r2presignStatus = ref<R2PresignStatus>("checking");
 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 
+// 110 — EdgeSonic version info + GitHub latest release check.
+const edgesonicVersion = ref("—");
+const workerVersion = ref("—");
+const latestVersion = ref("");
+const updateAvailable = ref(false);
+const updateChecking = ref(false);
+
+async function loadVersionInfo() {
+  try {
+    const r = await fetch("/edgesonic/version", { cache: "no-store" });
+    if (r.ok) {
+      const j = await r.json() as { ok?: boolean; edgesonicVersion?: string; version?: string };
+      if (j.ok) {
+        edgesonicVersion.value = j.edgesonicVersion ?? "—";
+        workerVersion.value = j.version ?? "—";
+      }
+    }
+  } catch { /* stay quiet */ }
+
+  // Check GitHub for latest release (only if repo is wuyilingwei/edgesonic).
+  // This is a public API call, no auth needed.
+  updateChecking.value = true;
+  try {
+    const r2 = await fetch("https://api.github.com/repos/wuyilingwei/edgesonic/releases/latest", { cache: "no-store" });
+    if (r2.ok) {
+      const rel = await r2.json() as { tag_name?: string };
+      const tag = rel.tag_name?.replace(/^v/, "") ?? "";
+      latestVersion.value = tag;
+      if (tag && edgesonicVersion.value !== "—" && tag !== edgesonicVersion.value) {
+        updateAvailable.value = true;
+      }
+    }
+  } catch { /* offline or rate-limited — stay quiet */ } finally {
+    updateChecking.value = false;
+  }
+}
+
 // 083 — Super-admin "System Activity" panel: work-pool card + scan status row.
 // Both refresh on a 30s timer (paused while the tab is hidden) so an admin
 // just sitting on the Dashboard sees a live signal of how the metadata
@@ -395,6 +432,8 @@ onMounted(async () => {
     // 101 — storage stats (super-admin only, one-shot, no polling needed)
     void loadStorageStats();
   }
+  // 110 — version info + update check (all users)
+  void loadVersionInfo();
 });
 
 onUnmounted(() => {
@@ -662,40 +701,29 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Admin Quick Info -->
-    <div v-if="isAdmin" class="grid grid-2" style="margin-top: 1rem">
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">{{ t("dashboard.recentAlbums") }}</span>
-        </div>
-        <div v-if="loading" class="recent-skeleton">
-          <div v-for="i in 3" :key="i" class="skeleton" style="height:2rem; margin-bottom:0.5rem; border-radius:2px"></div>
-        </div>
-        <div v-else-if="recentAlbums.length" class="recent-table" style="--grid-cols: 2fr 1fr auto">
-          <div class="table-header"><span>{{ t("dashboard.colName") }}</span><span>{{ t("dashboard.colArtist") }}</span><span>{{ t("dashboard.colYear") }}</span></div>
-          <div v-for="a in recentAlbums" :key="a.id" class="table-row">
-            <span class="row-name">{{ a.name }}</span>
-            <span class="row-sub">{{ a.artist }}</span>
-            <span class="row-mono">{{ a.year }}</span>
-          </div>
-        </div>
-        <div v-else class="empty-state">
-          <div class="empty-state-icon">◌</div>
-          <div>{{ t("dashboard.noAlbums") }}</div>
-        </div>
+    <!-- System Info (all logged-in users) -->
+    <div class="card" style="margin-top: 1rem">
+      <div class="card-header">
+        <span class="card-title">{{ t("dashboard.systemInfo") }}</span>
       </div>
-
-      <div class="card">
-        <div class="card-header">
-          <span class="card-title">{{ t("dashboard.systemInfo") }}</span>
-        </div>
-        <div class="info-list">
-          <div class="info-row"><span class="info-key">{{ t("dashboard.infoUsers") }}</span><span class="info-val">{{ stats.users }}</span></div>
-          <div class="info-row"><span class="info-key">{{ t("dashboard.infoSources") }}</span><span class="info-val">{{ stats.sources }}</span></div>
-          <div class="info-row"><span class="info-key">{{ t("dashboard.infoApiVersion") }}</span><span class="info-val">1.16.1</span></div>
-          <div class="info-row"><span class="info-key">{{ t("dashboard.infoPlatform") }}</span><span class="info-val">Cloudflare Workers</span></div>
-        </div>
+      <div class="info-grid">
+        <div class="info-row"><span class="info-key">EdgeSonic</span><span class="info-val">v{{ edgesonicVersion }}</span></div>
+        <div class="info-row"><span class="info-key">{{ t("dashboard.infoApiVersion") }}</span><span class="info-val">1.16.1</span></div>
+        <div class="info-row"><span class="info-key">{{ t("dashboard.infoPlatform") }}</span><span class="info-val">Cloudflare Workers</span></div>
+        <div class="info-row"><span class="info-key">Worker Build</span><span class="info-val">{{ workerVersion }}</span></div>
+        <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoUsers") }}</span><span class="info-val">{{ stats.users }}</span></div>
+        <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoSources") }}</span><span class="info-val">{{ stats.sources }}</span></div>
       </div>
+      <div v-if="latestVersion" class="update-check-row">
+        <span class="info-key">GitHub Latest</span>
+        <span class="info-val">
+          <a v-if="updateAvailable" href="https://github.com/wuyilingwei/edgesonic/releases/latest" target="_blank" rel="noopener" class="update-link">
+            v{{ latestVersion }} — 有新版本可用
+          </a>
+          <span v-else class="update-current">v{{ latestVersion }} — 已是最新</span>
+        </span>
+      </div>
+      <div v-else-if="updateChecking" class="update-check-row muted">检查更新中…</div>
     </div>
 
     <!-- 101 — Storage & R2 Cost Estimation (super-admin only, at bottom) -->
@@ -811,6 +839,12 @@ onUnmounted(() => {
 .row-mono { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); }
 
 .info-list { display: flex; flex-direction: column; }
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0;
+}
+.info-grid .info-row { border-bottom: 1px solid var(--color-border-subtle); }
 .info-row {
   display: flex; justify-content: space-between;
   padding: 0.6rem 0;
@@ -819,6 +853,15 @@ onUnmounted(() => {
 .info-row:last-child { border-bottom: none; }
 .info-key { font-family: var(--font-mono); font-size: var(--fs-sm); letter-spacing: 0.1em; color: var(--color-text-muted); }
 .info-val { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-primary); }
+
+.update-check-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.6rem 0; margin-top: 0.3rem;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.update-link { color: var(--color-accent); text-decoration: none; font-family: var(--font-mono); font-size: var(--fs-sm); }
+.update-link:hover { text-decoration: underline; }
+.update-current { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); }
 
 /* 080 — Cron warning banner. Orange/amber accent for the "empty schedules"
    case (an actionable problem), muted/info accent for the "CF unconfigured"
