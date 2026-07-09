@@ -7,6 +7,7 @@ import { crossOriginIsolationMiddleware } from "./middleware/cross_origin_isolat
 import { refreshAllChannels } from "./utils/podcastSync";
 import { maybeRunScheduledScan } from "./utils/scheduledScan";
 import { reclaimStaleWork } from "./utils/workReclaim";
+import { maybeRunMetadataRecheck } from "./utils/metadataRecheck";
 import { webLoginRoutes } from "./endpoints/edgesonic/auth";
 import { sharePublicRoutes } from "./endpoints/share_public";
 
@@ -126,6 +127,14 @@ export default {
     ctx.waitUntil(
       reclaimStaleWork(env).catch((e) => {
         console.error("scheduled reclaimStaleWork failed:", e);
+      }),
+    );
+    // 110 — dispatch a browser-pool metadata re-check for song_instances the
+    // worker's embedded parser couldn't read (other formats) or that are
+    // missing lyrics/disc despite the album already having a cover.
+    ctx.waitUntil(
+      maybeRunMetadataRecheck(env, ctx).catch((e) => {
+        console.error("scheduled maybeRunMetadataRecheck failed:", e);
       }),
     );
   },
