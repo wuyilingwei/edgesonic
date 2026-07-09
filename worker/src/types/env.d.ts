@@ -1,6 +1,7 @@
 interface Env {
   DB: D1Database;
-  KV: KVNamespace;
+  // 110 — KV binding removed. All former KV usage migrated to D1 (task 090).
+  // The KV namespace can be deleted from the Cloudflare dashboard.
   MUSIC_BUCKET: R2Bucket;
   INSTANCE_ID: string;
   MAX_PROXY_DEPTH?: string;
