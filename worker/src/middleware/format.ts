@@ -81,7 +81,7 @@ const INT_KEYS = new Set([
   "year", "bitRate", "bitDepth", "samplingRate", "channelCount", "size",
   "playCount", "userRating", "visitCount", "position", "currentIndex",
   "offset", "totalHits", "code", "folder", "maxBitRate", "minutes",
-  "avatarLastChanged",
+  "avatarLastChanged", "start",
 ]);
 
 const FLOAT_KEYS = new Set(["averageRating"]);
@@ -90,7 +90,7 @@ const BOOL_KEYS = new Set([
   "isDir", "isVideo", "valid", "public", "openSubsonic", "scanning",
   "scrobblingEnabled", "adminRole", "settingsRole", "downloadRole",
   "uploadRole", "playlistRole", "coverArtRole", "commentRole", "podcastRole",
-  "streamRole", "jukeboxRole", "shareRole", "videoConversionRole",
+  "streamRole", "jukeboxRole", "shareRole", "videoConversionRole", "synced",
 ]);
 
 function typeValue(key: string, v: string): unknown {
@@ -146,6 +146,22 @@ const ARRAY_PAIRS = new Set([
 // Leaf text children whose values are numeric per spec.
 const INT_TEXT_TAGS = new Set(["versions"]);
 
+// 108 — containers whose standard list children must exist (as []) even when
+// the XML has no such elements. Verified against the reference server:
+// search results always carry artist/album/song arrays, empty or not, and
+// clients index into them without guarding.
+const EMPTY_ARRAY_DEFAULTS: Record<string, string[]> = {
+  searchResult: ["match"],
+  searchResult2: ["artist", "album", "song"],
+  searchResult3: ["artist", "album", "song"],
+};
+
+// 108 — leaf tags that must serialize as OBJECTS with a `value` key even
+// when they carry nothing but text. OpenSubsonic songLyrics `line` is
+// `{"start":..,"value":".."}`; an unsynced line without attrs must still be
+// `{"value":".."}`, not a bare string.
+const OBJECT_TEXT_TAGS = new Set(["line"]);
+
 // ---------------------------------------------------------------------------
 // Lightweight Subsonic XML → JSON converter.
 // ---------------------------------------------------------------------------
@@ -182,11 +198,22 @@ function nodeToObject(n: Node): Record<string, unknown> {
       ? items.map(leafOrObject)
       : leafOrObject(items[0]);
   }
+  // 108 — guarantee standard list children exist for known containers.
+  for (const key of EMPTY_ARRAY_DEFAULTS[n.tag] ?? []) {
+    if (!(key in obj)) obj[key] = [];
+  }
   if (n.text.trim()) obj.value = n.text.trim();
   return obj;
 }
 
 function leafOrObject(n: Node): unknown {
+  // 108 — tags with object-shape or default-children contracts always go
+  // through nodeToObject, even when they parsed as bare/empty leaves.
+  if (n.tag in EMPTY_ARRAY_DEFAULTS || OBJECT_TEXT_TAGS.has(n.tag)) {
+    const obj = nodeToObject(n);
+    if (OBJECT_TEXT_TAGS.has(n.tag) && !("value" in obj)) obj.value = "";
+    return obj;
+  }
   if (n.children.length === 0 && Object.keys(n.attrs).length === 0) {
     // Pure text leaf (e.g. <genre>Rock</genre> → "Rock") OR empty element
     // (e.g. <playlists></playlists> → {}). An empty element with no text

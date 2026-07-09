@@ -27,9 +27,11 @@
 //   * apiKeyAuthentication v1 — auth.ts supports `?apiKey=...` lookup via KV
 //   * tokenInfo v1            — this file
 //   * formPost v1             — all mutating Subsonic endpoints accept POST
+//   * songLyrics v1           — 108: getLyricsBySongId emits spec-shaped
+//     structuredLyrics ({start,value} lines); clients only call it when the
+//     extension is advertised, which is why lyrics never showed in players.
 //
 // NOT advertised (kept honest):
-//   * songLyrics       — 036
 //   * transcodeOffset  — 036
 //   * indexBasedQueue  — no client implementation yet
 
@@ -59,6 +61,7 @@ const EXTENSIONS: Array<{ name: string; versions: number[] }> = [
   { name: "apiKeyAuthentication", versions: [1] },
   { name: "tokenInfo", versions: [1] },
   { name: "formPost", versions: [1] },
+  { name: "songLyrics", versions: [1] },
 ];
 
 const extensionsHandler = (c: import("hono").Context) => {

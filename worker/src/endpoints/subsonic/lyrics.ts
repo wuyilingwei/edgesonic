@@ -217,16 +217,19 @@ const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
 
   const lyrics = await resolveLyrics(env, env.DB, master.id, artistName, master.title, master.lyrics);
 
-  // OpenSubsonic `songLyrics` shape:
+  // OpenSubsonic `songLyrics` shape (108 — aligned with the spec clients
+  // actually parse):
   //   <lyricsList>
-  //     <structuredLyrics displayArtist="..." displayTitle="..." lang="xxx" synced="false">
-  //       <line>line text</line>
-  //       ...
+  //     <structuredLyrics displayArtist="..." displayTitle="..." lang="xxx" synced="true|false">
+  //       <line start="8120">line text</line>   (start = ms offset, synced only)
   //     </structuredLyrics>
   //   </lyricsList>
+  // JSON: line entries are {"start":8120,"value":"..."} objects. Before 108
+  // we emitted the raw LRC blob line-by-line (metadata tags included, no
+  // start offsets) with synced="false" — clients showed tag soup or nothing.
   // When we have no lyrics, the spec allows an empty <lyricsList/> — that's
   // what clients use to render "no lyrics available" cleanly.
-  const lines: string[] = lyrics ? lyrics.split(/\r?\n/).filter((l) => l.length > 0) : [];
+  const parsed = lyrics ? parseLrc(lyrics) : { synced: false, lines: [] };
 
   return c.text(
     subsonicOK({
@@ -237,9 +240,12 @@ const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
                 displayArtist: artistName,
                 displayTitle: master.title,
                 lang: "xxx",
-                synced: "false",
+                synced: parsed.synced ? "true" : "false",
               },
-              line: lines.map((text) => ({ _text: text })),
+              line: parsed.lines.map((l) => ({
+                _attributes: l.start !== undefined ? { start: l.start } : {},
+                _text: l.value,
+              })),
             },
           }
         : { _attributes: {} },
@@ -248,6 +254,46 @@ const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
     { "Content-Type": "application/xml; charset=UTF-8" },
   );
 };
+
+// ---------------------------------------------------------------------------
+// 108 — LRC → structured lines.
+// Timestamped lines ("[mm:ss.xx]text", repeated timestamps allowed) become
+// {start: ms, value} entries sorted by start; pure metadata tag lines
+// ("[ti:..]", "[ar:..]", "[by:..]", "[offset:..]"...) are dropped; if the
+// blob has no timestamps at all, every non-empty line passes through
+// unsynced (plain-text lyrics from external fetchers).
+// ---------------------------------------------------------------------------
+const LRC_TS = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+
+export function parseLrc(lyrics: string): {
+  synced: boolean;
+  lines: Array<{ start?: number; value: string }>;
+} {
+  const out: Array<{ start?: number; value: string }> = [];
+  let synced = false;
+  for (const raw of lyrics.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const stamps = [...line.matchAll(LRC_TS)];
+    if (stamps.length > 0 && line.startsWith("[")) {
+      const text = line.replace(LRC_TS, "").trim();
+      for (const m of stamps) {
+        const frac = (m[3] ?? "0").padEnd(3, "0").slice(0, 3);
+        out.push({
+          start: parseInt(m[1], 10) * 60000 + parseInt(m[2], 10) * 1000 + parseInt(frac, 10),
+          value: text,
+        });
+      }
+      synced = true;
+      continue;
+    }
+    // Metadata tag line like [ti:xxx] / [by:xxx] — not lyrics content.
+    if (/^\[[a-zA-Z#][^\]]*\]$/.test(line)) continue;
+    out.push({ value: line });
+  }
+  if (synced) out.sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+  return { synced, lines: out };
+}
 
 // ============================================================================
 // Route registration — Subsonic clients hit both /rest/<name> and the legacy

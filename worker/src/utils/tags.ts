@@ -24,11 +24,12 @@ export interface SongTags {
   albumArtist?: string;
   genre?: string;
   track?: number;
+  disc?: number;
   year?: number;
-  // 036 — full LRC / plain-text lyrics block. The scan-time parsers
-  // (parseID3v2 / parseFLAC / parseWAV) never set this — only the writeTags
-  // chain (tagedit.ts) consumes it as a request field and persists to
-  // song_masters.lyrics in D1.
+  // 109 — embedded lyrics: ID3v2 USLT frame / FLAC VORBIS_COMMENT
+  // LYRICS|UNSYNCEDLYRICS|SYNCEDLYRICS key. Callers (endpoints/tag/read.ts)
+  // persist this to song_masters.lyrics, guarded so it never overwrites an
+  // existing value (a NetEase fetch or user edit outranks an embedded tag).
   lyrics?: string;
 }
 
@@ -81,11 +82,44 @@ function parseID3v2(buf: Uint8Array): SongTags | null {
       case "TALB": tags.album = text(); found = true; break;
       case "TCON": tags.genre = text().replace(/^\(\d+\)/, ""); found = true; break;
       case "TRCK": { const n = parseInt(text(), 10); if (n) tags.track = n; found = true; break; }
+      case "TPOS": { const n = parseInt(text(), 10); if (n) tags.disc = n; found = true; break; }
       case "TYER": case "TDRC": { const y = parseInt(text().substring(0, 4), 10); if (y) tags.year = y; found = true; break; }
+      // 109 — USLT (unsynchronized lyrics/text transcription): encoding(1) +
+      // language(3, ignored) + short content descriptor (null-terminated per
+      // the same encoding) + the actual lyrics text. First USLT frame wins.
+      case "USLT": { if (!tags.lyrics) { const t = decodeUslt(body); if (t) tags.lyrics = t; } found = true; break; }
     }
     pos += 10 + frameSize;
   }
   return found ? clean(tags) : null;
+}
+
+function decodeUslt(body: Uint8Array): string {
+  if (body.length < 5) return "";
+  const enc = body[0];
+  // language occupies bytes 1-3; the descriptor + lyrics start at byte 4.
+  const rest = body.subarray(4);
+  const wide = enc === 1 || enc === 2; // UTF-16 variants use a 2-byte NUL terminator
+  let i = 0;
+  if (wide) {
+    while (i + 1 < rest.length && !(rest[i] === 0 && rest[i + 1] === 0)) i += 2;
+    i += 2;
+  } else {
+    while (i < rest.length && rest[i] !== 0) i++;
+    i += 1;
+  }
+  if (i >= rest.length) return "";
+  return decodeID3Text(concatEncByte(enc, rest.subarray(i)));
+}
+
+// decodeID3Text expects [encByte, ...data] — USLT's lyrics segment has no
+// leading encoding byte of its own (it's declared once at the frame start),
+// so re-prepend it to reuse the same decoder + smartDecode fallback.
+function concatEncByte(enc: number, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(data.length + 1);
+  out[0] = enc;
+  out.set(data, 1);
+  return out;
 }
 
 function decodeID3Text(body: Uint8Array): string {
@@ -163,7 +197,14 @@ function parseVorbisComment(buf: Uint8Array): SongTags | null {
       case "ALBUMARTIST": tags.albumArtist = val; found = true; break;
       case "GENRE": tags.genre = val; found = true; break;
       case "TRACKNUMBER": { const n = parseInt(val, 10); if (n) tags.track = n; found = true; break; }
+      case "DISCNUMBER": { const n = parseInt(val, 10); if (n) tags.disc = n; found = true; break; }
       case "DATE": case "YEAR": { const y = parseInt(val.substring(0, 4), 10); if (y) tags.year = y; found = true; break; }
+      // 109 — Mp3tag/foobar2000 write LYRICS or UNSYNCEDLYRICS; SYNCEDLYRICS
+      // holds genuine LRC (with [mm:ss.xx] tags) when present, which is
+      // strictly better — prefer it, then LYRICS, then UNSYNCEDLYRICS.
+      case "SYNCEDLYRICS": tags.lyrics = val; found = true; break;
+      case "LYRICS": if (!tags.lyrics) tags.lyrics = val; found = true; break;
+      case "UNSYNCEDLYRICS": if (!tags.lyrics) tags.lyrics = val; found = true; break;
     }
   }
   return found ? clean(tags) : null;

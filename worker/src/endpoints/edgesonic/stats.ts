@@ -33,6 +33,15 @@ statsRoutes.get("/stats/storage", async (c) => {
 
   const db = c.env.DB;
 
+  // 109 — exclude missing=1 rows. hotCacheWebdav (103) claims a row (storage_uri
+  // already r2://..., size copied from the WebDAV source as a placeholder) BEFORE
+  // the R2 put succeeds, then flips missing=0 + writes the real size on success.
+  // A Worker eviction between the claim and the put (or any other abandoned
+  // claim not cleaned up by the catch block) leaves a stuck missing=1 row whose
+  // placeholder size is really the WebDAV file's size — summing it here
+  // attributed that WebDAV-sourced byte count to the 'r2' bucket even though
+  // nothing was ever written to R2 for it. Every other song_instances query in
+  // this codebase already filters missing=0; this was the one that didn't.
   const breakdownResult = await db.prepare(`
     SELECT
       CASE
@@ -46,6 +55,7 @@ statsRoutes.get("/stats/storage", async (c) => {
       COUNT(*)                        AS count,
       SUM(COALESCE(size, 0))          AS bytes
     FROM song_instances
+    WHERE missing = 0
     GROUP BY source_type
     ORDER BY bytes DESC
   `).all<{ source_type: string; count: number; bytes: number }>();

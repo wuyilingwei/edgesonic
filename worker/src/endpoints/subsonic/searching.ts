@@ -43,10 +43,22 @@ const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 
 // search2 and search3 share the same ID3-organised query path; only the
 // response root element differs (searchResult2 vs searchResult3).
+// 108 — clients enumerate the whole library with an "empty" query + counts,
+// but what they actually SEND varies: Symfonium/DSub send the literal
+// two-character string `""`, others send `*` or a bare empty param. Navidrome
+// normalises all of these to the match-everything query; mirror that.
+export function normalizeQuery(raw: string): string {
+  const q = raw.trim();
+  if (q === `""` || q === "''" || q === "*") return "";
+  // strip one layer of wrapping quotes: `"beatles"` → `beatles`
+  const m = /^"(.*)"$/.exec(q);
+  return m ? m[1] : q;
+}
+
 const search23Handler = (tag: "searchResult2" | "searchResult3") =>
   async (c: Context): Promise<Response> => {
     // Empty query = full listing (Navidrome-compatible) — the web Songs view relies on it
-    const query = c.req.query("query") || "";
+    const query = normalizeQuery(c.req.query("query") || "");
 
     const artistCount = parseInt(c.req.query("artistCount") || "20", 10);
     const artistOffset = parseInt(c.req.query("artistOffset") || "0", 10);

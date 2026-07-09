@@ -57,7 +57,8 @@ export function isBrowserParse(suffix: string): boolean {
 // 字段对齐策略（见 049/findings.md D + 041/findings.md）：
 //   - logical：title/artist/album/albumArtist/genre/year/track/disc → song_masters
 //   - physical：duration/bitrate/sampleRate/channels → song_instances
-//   - lyrics：透传不入 D1（song_masters 暂无该列；036 接管）
+//   - lyrics：109 起持久化到 song_masters.lyrics（applyMetadataResult 用
+//     COALESCE(NULLIF(lyrics,''), ?) 只填空列，不覆盖已有的用户编辑/外部抓取结果）
 //   - container/codec：只用于诊断/未来回填；后端目前忽略
 // ============================================================================
 export interface ExtractedMetadata {
@@ -102,20 +103,50 @@ export async function extractMetadata(file: File): Promise<ExtractedMetadata> {
   if (typeof format.sampleRate === "number") out.sampleRate = format.sampleRate;
   if (typeof format.numberOfChannels === "number") out.channels = format.numberOfChannels;
 
-  // music-metadata 给的是 string[] 或带 syncedLyrics 的 Lyrics[]；统一拍成一段纯文本
-  if (Array.isArray(common.lyrics) && common.lyrics.length > 0) {
-    const first = common.lyrics[0] as unknown;
-    if (typeof first === "string") {
-      out.lyrics = first;
-    } else if (first && typeof first === "object") {
-      const obj = first as { text?: string; syncText?: Array<{ text?: string }> };
-      if (obj.text) out.lyrics = obj.text;
-      else if (Array.isArray(obj.syncText)) out.lyrics = obj.syncText.map((s) => s.text || "").join("\n");
-    }
-  }
+  const ly = lyricsTagsToText(common.lyrics);
+  if (ly) out.lyrics = ly;
 
   if (format.container) out.container = format.container;
   if (format.codec) out.codec = format.codec;
 
   return out;
+}
+
+// ============================================================================
+// lyricsTagsToText — shared by extractMetadata() (this file, 041 local scan)
+// and taskExecutor.ts (052b browser worker pool) so both paths flatten
+// music-metadata's `common.lyrics` the same way.
+// ----------------------------------------------------------------------------
+// music-metadata's ILyricsTag shape: { text?, syncText?: {text,timestamp}[] }
+// (some builds instead hand back a bare string[]). Preference order:
+//   1. An entry with syncText → rebuild LRC `[mm:ss.xx]line` per timestamp so
+//      the backend's parseLrc (worker/src/endpoints/subsonic/lyrics.ts, 108)
+//      round-trips it back into per-line start offsets for Subsonic clients.
+//      Before 109 we only joined the plain text, discarding every timestamp.
+//   2. An entry with plain `.text`.
+//   3. A bare string element.
+// ============================================================================
+export function lyricsTagsToText(lyrics: unknown): string | undefined {
+  if (!Array.isArray(lyrics) || lyrics.length === 0) return undefined;
+  for (const entry of lyrics) {
+    if (typeof entry === "string" && entry.trim()) return entry.trim();
+    if (!entry || typeof entry !== "object") continue;
+    const tag = entry as { text?: string; syncText?: Array<{ text?: string; timestamp?: number }> };
+    if (Array.isArray(tag.syncText) && tag.syncText.length > 0) {
+      const lines = tag.syncText
+        .filter((l) => l.text && l.text.trim())
+        .map((l) => `[${msToLrcTimestamp(l.timestamp ?? 0)}]${l.text!.trim()}`);
+      if (lines.length > 0) return lines.join("\n");
+    }
+    if (tag.text && tag.text.trim()) return tag.text.trim();
+  }
+  return undefined;
+}
+
+function msToLrcTimestamp(ms: number): string {
+  const cs = Math.max(0, Math.round(ms / 10));
+  const m = Math.floor(cs / 6000);
+  const s = Math.floor((cs % 6000) / 100);
+  const c = cs % 100;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(c).padStart(2, "0")}`;
 }

@@ -119,6 +119,7 @@ function buildDb() {
       genre TEXT,
       compilation INTEGER DEFAULT 0,
       participants TEXT,
+      lyrics TEXT,
       created_at INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT 0
     );
@@ -206,8 +207,8 @@ console.log("happy path: existing instance + full tags:");
       bitrate: 256,
       sampleRate: 44100,
       channels: 2,
-      lyrics: "la la la",      // accepted but not persisted
-      container: "MPEG 4",     // ditto
+      lyrics: "la la la",      // 109 — now persisted (COALESCE-guarded)
+      container: "MPEG 4",     // still diagnostic-only
       codec: "ALAC",           // ditto
     },
   });
@@ -227,6 +228,7 @@ console.log("happy path: existing instance + full tags:");
   assert(sm.duration === 240, "master duration updated");
   assert(sm.artist_id === body.artistId, "master.artist_id relinked");
   assert(sm.album_id === body.albumId, "master.album_id relinked");
+  assert(sm.lyrics === "la la la", "109 — lyrics persisted alongside the logical relink");
 
   // D1: song_instances physical params + tag_scanned
   const si = sqlite.prepare("SELECT * FROM song_instances WHERE id='inst-1'").get() as any;
@@ -294,14 +296,25 @@ console.log("missing body / missing tags → 400:");
   const r2 = await post("/tag/submit", { instanceId: "inst-1" });
   assert(r2.status === 400, `missing tags → 400 (got ${r2.status})`);
 
-  // All whitespace + invalid numerics → still "No usable tag fields"
+  // All whitespace + invalid numerics + NO lyrics → still "No usable tag fields"
   const r3 = await post("/tag/submit", {
     instanceId: "inst-1",
-    tags: { title: "   ", artist: "", year: 0, track: -1, lyrics: "still has text but no logical field" },
+    tags: { title: "   ", artist: "", year: 0, track: -1 },
   });
   assert(r3.status === 400, `whitespace-only logical fields → 400 (got ${r3.status})`);
   const b3 = await r3.json() as any;
   assert(/no usable/i.test(b3.error), `error: "No usable tag fields" (got ${b3.error})`);
+
+  // 109 — lyrics alone now counts as usable: a re-scan that only turned up an
+  // embedded LYRICS/USLT tag (no title/artist change) must not 400 either, or
+  // the lyrics never reach applyMetadataResult at all.
+  const r4 = await post("/tag/submit", {
+    instanceId: "inst-1",
+    tags: { title: "   ", artist: "", year: 0, track: -1, lyrics: "lyrics-only submission" },
+  });
+  assert(r4.status === 200, `lyrics-only submission → 200 (got ${r4.status})`);
+  const sm4 = sqlite.prepare("SELECT lyrics FROM song_masters WHERE id='sg-1'").get() as any;
+  assert(sm4.lyrics === "lyrics-only submission", "109 — lyrics-only submission persists lyrics");
 }
 
 console.log("findInstanceByUri: exact uri match:");
