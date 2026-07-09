@@ -328,74 +328,84 @@ onMounted(async () => {
       } catch { /* leave stats.users at 0 on parse failure */ }
     }
 
-    // Count songs from album details
-    let songCount = 0;
-    for (const album of recentAlbums.value.slice(0, 3)) {
-      const albumXml = await authFetch("getAlbum", { id: album.id });
-      songCount += (albumXml.match(/<song\s/g) || []).length;
-    }
-    stats.value.songs = songCount;
+    // Count songs from album details — fired concurrently (was a serial
+    // await-in-a-for-loop that queued 3 round-trips back to back for no
+    // reason; they're independent reads).
+    const albumSongCounts = await Promise.all(
+      recentAlbums.value.slice(0, 3).map(async (album) => {
+        try {
+          const albumXml = await authFetch("getAlbum", { id: album.id });
+          return (albumXml.match(/<song\s/g) || []).length;
+        } catch {
+          return 0;
+        }
+      }),
+    );
+    stats.value.songs = albumSongCounts.reduce((a, b) => a + b, 0);
   } catch {
     // Network error or auth failure — leave stats at 0, UI shows skeleton
   } finally {
     loading.value = false;
   }
 
-  // 080 — super-admin only: read CF schedules and decide whether to show the
-  // "cron missing" banner. We do this AFTER the main stats so the banner
-  // can't block the dashboard if CF API is slow. Errors are swallowed (the
-  // banner just doesn't appear) because Settings → CF is the canonical place
-  // to debug CF API issues.
-  if (isSuperAdmin.value) {
-    try {
-      const text = await edgesonicFetch("cf/getCron");
-      const parsed = JSON.parse(text) as { ok?: boolean; schedules?: Array<{ cron: string }>; error?: string };
-      if (parsed.ok === true) {
-        const schedules = Array.isArray(parsed.schedules) ? parsed.schedules : [];
-        cronStatus.value = schedules.length === 0 ? "empty" : "ok";
-      } else if (typeof parsed.error === "string" && /CF_API_TOKEN|CF_ACCOUNT_ID|not configured/i.test(parsed.error)) {
-        // 054 returns 400 with this wording when env secrets are missing.
-        cronStatus.value = "unconfigured";
-      } else {
-        cronStatus.value = "error";
-      }
-    } catch {
-      cronStatus.value = "error";
-    }
-  } else {
-    cronStatus.value = "ok";
-  }
-
-  // 091 — super-admin only: check R2 presign status. Done after cron so it
-  // can't block the main stats. Quiet on error (Settings is the debug surface).
-  if (isSuperAdmin.value) {
-    try {
-      const text = await edgesonicFetch("r2presign/status");
-      const parsed = JSON.parse(text) as { ok?: boolean; active?: boolean };
-      if (parsed.ok) {
-        r2presignStatus.value = parsed.active ? "active" : "inactive";
-      } else {
-        r2presignStatus.value = "error";
-      }
-    } catch {
-      r2presignStatus.value = "error";
-    }
-  } else {
-    r2presignStatus.value = "active";
-  }
-
-  // 083 — kick off the activity panel after cron status resolves so the
-  // initial paint isn't blocked by two extra round-trips. Polling is
-  // intentionally super-admin only (the endpoints also gate at level≥3) —
-  // for everyone else the panel is hidden via v-if.
+  // 112 — cron / R2-presign / activity-panel / storage-stats are independent
+  // reads that used to be awaited one after another (cron, then presign, then
+  // — only after both resolved — the activity panel and storage stats kicked
+  // off). Each `await` blocked the next fetch from even starting, so on a
+  // slow CF API call every other Dashboard card queued up behind it instead
+  // of loading in parallel. None of these depend on each other's result, so
+  // they're now all fired at once (matching the fire-and-forget `void`
+  // pattern refreshActivity/loadStorageStats already used).
+  void loadCronStatus();
+  void loadR2PresignStatus();
   if (isSuperAdmin.value) {
     void refreshActivity();
     startActivityPolling();
     document.addEventListener("visibilitychange", onActivityVisibility);
-    // 101 — storage stats (super-admin only, one-shot, no polling needed)
     void loadStorageStats();
   }
 });
+
+// 080 — super-admin only: read CF schedules and decide whether to show the
+// "cron missing" banner. Errors are swallowed (the banner just doesn't
+// appear) because Settings → CF is the canonical place to debug CF API issues.
+async function loadCronStatus() {
+  if (!isSuperAdmin.value) {
+    cronStatus.value = "ok";
+    return;
+  }
+  try {
+    const text = await edgesonicFetch("cf/getCron");
+    const parsed = JSON.parse(text) as { ok?: boolean; schedules?: Array<{ cron: string }>; error?: string };
+    if (parsed.ok === true) {
+      const schedules = Array.isArray(parsed.schedules) ? parsed.schedules : [];
+      cronStatus.value = schedules.length === 0 ? "empty" : "ok";
+    } else if (typeof parsed.error === "string" && /CF_API_TOKEN|CF_ACCOUNT_ID|not configured/i.test(parsed.error)) {
+      // 054 returns 400 with this wording when env secrets are missing.
+      cronStatus.value = "unconfigured";
+    } else {
+      cronStatus.value = "error";
+    }
+  } catch {
+    cronStatus.value = "error";
+  }
+}
+
+// 091 — super-admin only: check R2 presign status. Quiet on error (Settings
+// is the debug surface).
+async function loadR2PresignStatus() {
+  if (!isSuperAdmin.value) {
+    r2presignStatus.value = "active";
+    return;
+  }
+  try {
+    const text = await edgesonicFetch("r2presign/status");
+    const parsed = JSON.parse(text) as { ok?: boolean; active?: boolean };
+    r2presignStatus.value = parsed.ok ? (parsed.active ? "active" : "inactive") : "error";
+  } catch {
+    r2presignStatus.value = "error";
+  }
+}
 
 onUnmounted(() => {
   stopActivityPolling();
