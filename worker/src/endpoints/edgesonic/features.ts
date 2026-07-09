@@ -383,3 +383,45 @@ featuresRoutes.post("/features/secrets/set", async (c) => {
   ).bind(key, body.value, now).run();
   return c.json({ ok: true, key, set: !!body.value });
 });
+
+// 110 — User-level settings (per-user, not system-wide).
+// Currently used for lastfm_api_key so each user can set their own Last.fm key.
+// Any authenticated user can read/write their own settings; no admin required.
+featuresRoutes.get("/features/userSetting", async (c) => {
+  const user = c.get("user");
+  const key = c.req.query("key") || "lastfm_api_key";
+  const row = await c.env.DB.prepare(
+    "SELECT value FROM user_settings WHERE username = ? AND key = ?"
+  ).bind(user.username, key).first<{ value: string }>();
+  return c.json({
+    ok: true,
+    key,
+    set: !!(row && row.value),
+  });
+});
+
+featuresRoutes.post("/features/userSetting", async (c) => {
+  const user = c.get("user");
+  let body: { key?: string; value?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ ok: false, error: "Invalid JSON body" }, 400);
+  }
+  const key = body.key || "lastfm_api_key";
+  if (typeof body.value !== "string") {
+    return c.json({ ok: false, error: "value must be a string (use empty string to clear)" }, 400);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  if (body.value) {
+    await c.env.DB.prepare(
+      `INSERT INTO user_settings (username, key, value, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(username, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    ).bind(user.username, key, body.value, now).run();
+  } else {
+    await c.env.DB.prepare(
+      "DELETE FROM user_settings WHERE username = ? AND key = ?"
+    ).bind(user.username, key).run();
+  }
+  return c.json({ ok: true, key, set: !!body.value });
+});
