@@ -119,6 +119,10 @@ const STRING_FEATURE_KEYS = new Set([
     // allowlist, so /features/updateString 404'd on it ("Unknown feature")
     // even though the row exists and is read fine via getFeatureString.
     "r2_free_allocation_gb",
+    // 113 — cadence (hours) for the cron-driven batch scan that backfills
+    // song_masters.lyrics from a sibling .lrc file for songs that were never
+    // caught by 094's scan-time/on-demand sidecar checks. 0=disabled.
+    "lrc_backfill_interval_hours",
   ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -209,6 +213,14 @@ function validateFeatureString(key: string, value: string): string | null {
       if (!/^\d+$/.test(value)) return "r2_free_allocation_gb must be a non-negative integer";
       const n = parseInt(value, 10);
       if (n < 0 || n > 1000) return "r2_free_allocation_gb must be between 0 and 1000";
+      return null;
+    }
+    case "lrc_backfill_interval_hours": {
+      // 113 — same shape as metadata_recheck_interval_hours: non-negative
+      // integer, 0-168 (one week).
+      if (!/^\d+$/.test(value)) return "lrc_backfill_interval_hours must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 0 || n > 168) return "lrc_backfill_interval_hours must be between 0 and 168";
       return null;
     }
     case "worker_poll_interval_seconds": {
