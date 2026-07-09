@@ -63,15 +63,28 @@ function stableParamString(params: Record<string, string | number | undefined>):
   return JSON.stringify(entries);
 }
 
-// Core fetch primitive. Reads api_key from features, hits D1 lastfm_cache
-// first, then reaches out to ws.audioscrobbler.com on a miss. Always JSON.
+// Core fetch primitive. Reads api_key from user_settings (per-user) first,
+// falls back to feature_strings.lastfm_api_key (system-level). Hits D1
+// lastfm_cache first, then reaches out to ws.audioscrobbler.com on a miss.
 // 090 — Cache moved from KV (24h TTL) to D1 `lastfm_cache` table.
+// 110 — API key moved from system-level to per-user setting.
 export async function lastfmFetch(
   env: Env,
   method: string,
   params: Record<string, string | number | undefined>,
+  username?: string,
 ): Promise<Record<string, unknown>> {
-  const apiKey = (await getFeatureString(env, "lastfm_api_key", "")).trim();
+  // 110 — Try user-level key first, fall back to system-level.
+  let apiKey = "";
+  if (username) {
+    const userRow = await env.DB.prepare(
+      "SELECT value FROM user_settings WHERE username = ? AND key = 'lastfm_api_key'"
+    ).bind(username).first<{ value: string }>();
+    if (userRow?.value) apiKey = userRow.value.trim();
+  }
+  if (!apiKey) {
+    apiKey = (await getFeatureString(env, "lastfm_api_key", "")).trim();
+  }
   if (!apiKey) throw new LastfmUnconfigured();
 
   // Cache key omits the api_key itself; rotating the key shouldn't invalidate
@@ -181,8 +194,8 @@ export interface LastfmArtistInfo {
   images: LastfmImage;
 }
 
-export async function getArtistInfo(env: Env, name: string): Promise<LastfmArtistInfo | null> {
-  const data = await lastfmFetch(env, "artist.getInfo", { artist: name, autocorrect: 1 });
+export async function getArtistInfo(env: Env, name: string, username?: string): Promise<LastfmArtistInfo | null> {
+  const data = await lastfmFetch(env, "artist.getInfo", { artist: name, autocorrect: 1 }, username);
   const artist = data.artist as Record<string, unknown> | undefined;
   if (!artist) return null;
   const bio = (artist.bio as Record<string, unknown> | undefined) ?? {};
@@ -207,8 +220,8 @@ export interface LastfmAlbumInfo {
   images: LastfmImage;
 }
 
-export async function getAlbumInfo(env: Env, artist: string, album: string): Promise<LastfmAlbumInfo | null> {
-  const data = await lastfmFetch(env, "album.getInfo", { artist, album, autocorrect: 1 });
+export async function getAlbumInfo(env: Env, artist: string, album: string, username?: string): Promise<LastfmAlbumInfo | null> {
+  const data = await lastfmFetch(env, "album.getInfo", { artist, album, autocorrect: 1 }, username);
   const al = data.album as Record<string, unknown> | undefined;
   if (!al) return null;
   const wiki = (al.wiki as Record<string, unknown> | undefined) ?? {};
@@ -235,10 +248,11 @@ export async function getSimilarArtists(
   env: Env,
   name: string,
   limit: number,
+  username?: string,
 ): Promise<LastfmSimilarArtist[]> {
   const data = await lastfmFetch(env, "artist.getSimilar", {
     artist: name, limit, autocorrect: 1,
-  });
+  }, username);
   const wrap = data.similarartists as Record<string, unknown> | undefined;
   const arr = wrap?.artist;
   if (!Array.isArray(arr)) return [];
@@ -266,10 +280,11 @@ export async function getSimilarTracks(
   artist: string,
   track: string,
   limit: number,
+  username?: string,
 ): Promise<LastfmSimilarTrack[]> {
   const data = await lastfmFetch(env, "track.getSimilar", {
     artist, track, limit, autocorrect: 1,
-  });
+  }, username);
   const wrap = data.similartracks as Record<string, unknown> | undefined;
   const arr = wrap?.track;
   if (!Array.isArray(arr)) return [];
@@ -299,10 +314,11 @@ export async function getTopTracks(
   env: Env,
   artist: string,
   limit: number,
+  username?: string,
 ): Promise<LastfmTopTrack[]> {
   const data = await lastfmFetch(env, "artist.getTopTracks", {
     artist, limit, autocorrect: 1,
-  });
+  }, username);
   const wrap = data.toptracks as Record<string, unknown> | undefined;
   const arr = wrap?.track;
   if (!Array.isArray(arr)) return [];

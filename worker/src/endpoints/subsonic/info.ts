@@ -13,8 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// ============================================================================
-// Task 043 — Third-party metadata proxy (last.fm).
+﻿// ============================================================================
+// Task 043 鈥?Third-party metadata proxy (last.fm).
 //
 // Exposes the four Subsonic "info" endpoint families:
 //   getArtistInfo  / getArtistInfo2
@@ -24,10 +24,10 @@
 //
 // All routes funnel through the last.fm client in worker/src/lib/lastfm.ts.
 // When the api_key feature is empty, the client throws LastfmUnconfigured and
-// we map that to Subsonic error code 30 ("not supported") — that way clients
+// we map that to Subsonic error code 30 ("not supported") 鈥?that way clients
 // get a polite "feature off" response instead of a 500.
 //
-// Auth: these endpoints are *not* in SESSION_ONLY_PATHS — they're plain
+// Auth: these endpoints are *not* in SESSION_ONLY_PATHS 鈥?they're plain
 // browsing data, identical access surface to getArtist / getAlbum.
 // ============================================================================
 
@@ -36,6 +36,7 @@ import type { Context } from "hono";
 import { createQueries } from "../../db/queries";
 import { subsonicOK } from "../../utils/xml";
 import { subsonicError } from "../../auth";
+import type { User } from "../../types/entities";
 import { mapSong } from "../../types/subsonic";
 import {
   LastfmUnconfigured,
@@ -48,17 +49,17 @@ import {
 } from "../../lib/lastfm";
 import type { Artist, SongMaster } from "../../types/entities";
 
-export const infoRoutes = new Hono<{ Bindings: Env }>();
+export const infoRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
 const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 const attrs = (o: object) => ({
   _attributes: o as Record<string, string | number | boolean | undefined>,
 });
 
-// Wrap an async handler so any LastfmUnconfigured → code 30, any
-// LastfmFetchError → code 0, anything else → code 0 with truncated message.
+// Wrap an async handler so any LastfmUnconfigured 鈫?code 30, any
+// LastfmFetchError 鈫?code 0, anything else 鈫?code 0 with truncated message.
 async function safeRun(
-  c: Context<{ Bindings: Env }>,
+  c: Context<{ Bindings: Env; Variables: { user: User } }>,
   fn: () => Promise<Response>,
 ): Promise<Response> {
   try {
@@ -122,7 +123,7 @@ async function findSongByTitleAndArtist(
 // getArtistInfo / getArtistInfo2
 // ---------------------------------------------------------------------------
 async function artistInfoHandler(
-  c: Context<{ Bindings: Env }>,
+  c: Context<{ Bindings: Env; Variables: { user: User } }>,
   tag: "artistInfo" | "artistInfo2",
 ): Promise<Response> {
   return safeRun(c, async () => {
@@ -138,8 +139,8 @@ async function artistInfoHandler(
     const includeNotPresent = (c.req.query("includeNotPresent") || "").toLowerCase() === "true";
 
     const [info, similar] = await Promise.all([
-      lastfmGetArtistInfo(c.env, artist.name),
-      lastfmGetSimilarArtists(c.env, artist.name, count).catch((e) => {
+      lastfmGetArtistInfo(c.env, artist.name, (c.get("user") as User | undefined)?.username),
+      lastfmGetSimilarArtists(c.env, artist.name, count, (c.get("user") as User | undefined)?.username).catch((e) => {
         // similarArtists failing shouldn't kill the whole response; biography
         // alone is still useful. Bubble up only LastfmUnconfigured.
         if (e instanceof LastfmUnconfigured) throw e;
@@ -180,7 +181,7 @@ async function artistInfoHandler(
 // getAlbumInfo / getAlbumInfo2
 // ---------------------------------------------------------------------------
 async function albumInfoHandler(
-  c: Context<{ Bindings: Env }>,
+  c: Context<{ Bindings: Env; Variables: { user: User } }>,
 ): Promise<Response> {
   return safeRun(c, async () => {
     const id = c.req.query("id");
@@ -204,7 +205,7 @@ async function albumInfoHandler(
       return c.text(subsonicOK({ albumInfo: {} }), 200, XML);
     }
 
-    const info = await lastfmGetAlbumInfo(c.env, artistName, album.name);
+    const info = await lastfmGetAlbumInfo(c.env, artistName, album.name, (c.get("user") as User | undefined)?.username);
     const inner: Record<string, unknown> = {
       albumInfo: {
         ...(info?.notes ? { notes: { _text: info.notes } } : {}),
@@ -225,7 +226,7 @@ async function albumInfoHandler(
 // getSimilarSongs / getSimilarSongs2
 // ---------------------------------------------------------------------------
 async function similarSongsHandler(
-  c: Context<{ Bindings: Env }>,
+  c: Context<{ Bindings: Env; Variables: { user: User } }>,
   tag: "similarSongs" | "similarSongs2",
 ): Promise<Response> {
   return safeRun(c, async () => {
@@ -246,12 +247,12 @@ async function similarSongsHandler(
     const countRaw = parseInt(c.req.query("count") || "50", 10);
     const count = Math.max(1, Math.min(isNaN(countRaw) ? 50 : countRaw, 200));
 
-    const similar = await lastfmGetSimilarTracks(c.env, artistRow.name, song.title, count);
+    const similar = await lastfmGetSimilarTracks(c.env, artistRow.name, song.title, count, (c.get("user") as User | undefined)?.username);
     const matched: Array<SongMaster & { artist_name?: string; album_name?: string }> = [];
     for (const s of similar) {
       if (!s.artist) continue;
       const row = await findSongByTitleAndArtist(c.env.DB, s.name, s.artist);
-      // Subsonic spec: drop unmatched silently — clients can't play foreign ids.
+      // Subsonic spec: drop unmatched silently 鈥?clients can't play foreign ids.
       if (row) matched.push(row);
     }
 
@@ -273,7 +274,7 @@ async function similarSongsHandler(
 // (registration at file bottom)
 
 // ---------------------------------------------------------------------------
-// getTopSongs (047 — local-first, last.fm fallback)
+// getTopSongs (047 鈥?local-first, last.fm fallback)
 //
 // Strategy:
 //   1. D1 first: select up to `count` song_masters for this artist ranked by
@@ -284,7 +285,7 @@ async function similarSongsHandler(
 //      local list (dedupe by master id).
 //   3. last.fm being unconfigured is NOT an error here: we silently keep
 //      whatever the D1 step produced. Other last.fm fetch failures degrade
-//      the same way — partial result over no result.
+//      the same way 鈥?partial result over no result.
 // ---------------------------------------------------------------------------
 const getTopSongsHandler = async (c: Context): Promise<Response> => {
   const artist = c.req.query("artist");
@@ -303,10 +304,10 @@ const getTopSongsHandler = async (c: Context): Promise<Response> => {
 
   // Step 2: top up from last.fm if room remains. Swallow LastfmUnconfigured
   // (lets the endpoint work in the no-key configuration) and LastfmFetchError
-  // (transient network blip — keep whatever we have).
+  // (transient network blip 鈥?keep whatever we have).
   if (matched.length < count) {
     try {
-      const top = await lastfmGetTopTracks(c.env, artist, count);
+      const top = await lastfmGetTopTracks(c.env, artist, count, (c.get("user") as User | undefined)?.username);
       for (const t of top) {
         if (matched.length >= count) break;
         const row = await findSongByTitleAndArtist(c.env.DB, t.name, t.artist || artist);
@@ -318,7 +319,7 @@ const getTopSongsHandler = async (c: Context): Promise<Response> => {
     } catch (e) {
       if (!(e instanceof LastfmUnconfigured) && !(e instanceof LastfmFetchError)) {
         // Unexpected failure: surface via safeRun-style error wrapper, but
-        // only when we have NO local rows — otherwise prefer partial result.
+        // only when we have NO local rows 鈥?otherwise prefer partial result.
         if (matched.length === 0) {
           const msg = e instanceof Error ? e.message : String(e);
           return c.text(subsonicError(0, msg.slice(0, 200)), 200, XML);
@@ -342,7 +343,7 @@ const getTopSongsHandler = async (c: Context): Promise<Response> => {
 };
 
 // ============================================================================
-// Route registration — Subsonic clients hit both /rest/<name> and the legacy
+// Route registration 鈥?Subsonic clients hit both /rest/<name> and the legacy
 // `.view` suffix; both GET and POST are valid per spec.
 // ============================================================================
 function register(path: string, handler: (c: Context) => Promise<Response> | Response) {

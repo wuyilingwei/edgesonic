@@ -42,10 +42,9 @@ binding = "DB"
 database_name = "edgesonic-db"
 database_id = "<YOUR_D1_DATABASE_ID>"
 
-# KV Namespace
-[[kv_namespaces]]
-binding = "KV"
-id = "<YOUR_KV_NAMESPACE_ID>"
+# 110 — KV namespace removed (all usage migrated to D1 in task 090).
+# To clean up: delete the KV namespace from the Cloudflare dashboard if it
+# still exists from a previous deployment.
 
 # R2 Bucket
 [[r2_buckets]]
