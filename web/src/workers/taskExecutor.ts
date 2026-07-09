@@ -81,6 +81,20 @@ self.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
   (self as unknown as Worker).postMessage({ ok: false, error: clampMsg(msg) });
 });
 
+// 116 — locate the first `moof` (movie fragment) box in an MP4 buffer.
+// Returns the byte offset where that box STARTS (its 4-byte size field, i.e.
+// 4 bytes before the "moof" 4CC), or -1 when no fragment is present. Used by
+// the fMP4 parse fallback in runMetadata.
+function firstMoofBoxStart(buf: Uint8Array): number {
+  // 'm','o','o','f'
+  for (let i = 4; i < buf.length - 3; i++) {
+    if (buf[i] === 0x6d && buf[i + 1] === 0x6f && buf[i + 2] === 0x6f && buf[i + 3] === 0x66) {
+      return i - 4;
+    }
+  }
+  return -1;
+}
+
 // ---------------------------------------------------------------------------
 // metadata — fetch the first 512KB of the source URI, parseBuffer it, return
 // the compact tag set that endpoints/tag/submit.ts expects.
@@ -133,10 +147,32 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
   // ship it back to the worker for R2 storage + album.cover_r2_key update.
   // skipCovers was previously true, which left every album with cover_r2_key
   // NULL → getCoverArt 404 for the whole library.
-  const meta = await parseBuffer(buf, {
-    mimeType: headResp.headers.get("content-type") || undefined,
-    size: totalSize > buf.length ? totalSize : undefined,
-  }, { duration: true, skipCovers: false });
+  const mimeType = headResp.headers.get("content-type") || undefined;
+  let meta;
+  try {
+    meta = await parseBuffer(buf, {
+      mimeType,
+      size: totalSize > buf.length ? totalSize : undefined,
+    }, { duration: true, skipCovers: false });
+  } catch (e) {
+    // 116 — fragmented-MP4 fallback. music-metadata (≤11.13.0) throws
+    // "Missing sampleDuration and no defaultSampleDuration in track fragment
+    // header" while walking `moof` fragments of some fMP4 .m4a files — AFTER
+    // it has already read the complete tag set (moov/udta/ilst, including
+    // ©lyr lyrics) that physically precedes the first fragment. Verified on a
+    // production sample: truncating the buffer just before the first `moof`
+    // box lets the same parser return title/artist/album/lyrics cleanly.
+    // The fallback is gated on actually finding a `moof` box (the fMP4
+    // discriminator) rather than on the error message text, which is brittle
+    // across library versions. Duration is intentionally not requested here —
+    // fMP4 duration lives in the fragments we just cut off.
+    const cut = firstMoofBoxStart(buf);
+    if (cut <= 16) throw e; // not fragmented MP4 → not our case, propagate
+    meta = await parseBuffer(buf.slice(0, cut), {
+      mimeType,
+      size: cut,
+    }, { duration: false, skipCovers: false });
+  }
 
   // Extract first embedded picture (APIC for ID3, PICTURE for FLAC, etc).
   // Cap at 200KB so result_json stays under the column cap. If the picture is
