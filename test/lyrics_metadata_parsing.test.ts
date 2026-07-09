@@ -147,19 +147,24 @@ function buildStatsDb(): DatabaseSync {
     CREATE TABLE feature_strings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER DEFAULT 0);
     CREATE TABLE song_instances (
       id TEXT PRIMARY KEY, master_id TEXT NOT NULL, storage_uri TEXT NOT NULL,
-      size INTEGER, missing INTEGER DEFAULT 0
+      source_type TEXT NOT NULL DEFAULT 'original', size INTEGER, missing INTEGER DEFAULT 0
     );
-    -- Confirmed R2 storage: 100 MB.
-    INSERT INTO song_instances (id, master_id, storage_uri, size, missing)
-      VALUES ('si-r2-ok', 'sm-1', 'r2://music/a.flac', 104857600, 0);
+    -- Confirmed native R2 upload: 100 MB.
+    INSERT INTO song_instances (id, master_id, storage_uri, source_type, size, missing)
+      VALUES ('si-r2-ok', 'sm-1', 'r2://music/a.flac', 'original', 104857600, 0);
     -- A genuine WebDAV source row: 50 MB (the "real" library size on WebDAV).
-    INSERT INTO song_instances (id, master_id, storage_uri, size, missing)
-      VALUES ('si-webdav', 'sm-2', 'webdav://src-1/b.flac', 52428800, 0);
+    INSERT INTO song_instances (id, master_id, storage_uri, source_type, size, missing)
+      VALUES ('si-webdav', 'sm-2', 'webdav://src-1/b.flac', 'original', 52428800, 0);
     -- Stuck hotcache claim: storage_uri already r2://..., size copied from the
     -- WebDAV source as a placeholder (200 MB), but missing=1 because the R2
     -- put never completed (Worker eviction / crash before cleanup ran).
-    INSERT INTO song_instances (id, master_id, storage_uri, size, missing)
-      VALUES ('si-stuck-claim', 'sm-3', 'r2://cache/webdav/sm-3.flac', 209715200, 1);
+    INSERT INTO song_instances (id, master_id, storage_uri, source_type, size, missing)
+      VALUES ('si-stuck-claim', 'sm-3', 'r2://cache/webdav/sm-3.flac', 'cached', 209715200, 1);
+    -- 110 — a COMPLETED hotcache copy (missing=0, real bytes really in R2):
+    -- still excluded from the 'r2' bucket because source_type='cached' is a
+    -- transient WebDAV play-through cache, not a native R2 upload. 30 MB.
+    INSERT INTO song_instances (id, master_id, storage_uri, source_type, size, missing)
+      VALUES ('si-hotcache-done', 'sm-4', 'r2://cache/webdav/sm-4.flac', 'cached', 31457280, 0);
   `);
   return sqlite;
 }
@@ -265,7 +270,7 @@ async function main() {
   }
 
   // -------------------------------------------------------------------------
-  console.log("\nC. stats.ts — R2 breakdown excludes missing=1 rows");
+  console.log("\nC. stats.ts — R2 breakdown excludes missing=1 rows + cached copies");
   {
     const sqlite = buildStatsDb();
     const { get } = makeStatsApp(sqlite, 3);
@@ -274,11 +279,14 @@ async function main() {
     assert(res.status === 200 && body.ok, "200 ok");
     const r2 = body.breakdown.find((r) => r.source_type === "r2");
     const webdav = body.breakdown.find((r) => r.source_type === "webdav");
-    assert(r2?.bytes === 104857600, "r2 bucket only counts the genuinely-cached row (100MB), not the stuck claim");
-    assert(r2?.count === 1, "r2 bucket count excludes the stuck missing=1 claim row");
+    const cached = body.breakdown.find((r) => r.source_type === "cached");
+    assert(r2?.bytes === 104857600, "r2 bucket only counts the native upload (100MB) — not the stuck claim or the completed hotcache copy");
+    assert(r2?.count === 1, "r2 bucket count excludes both the stuck missing=1 claim and the completed cached row");
     assert(webdav?.bytes === 52428800, "webdav bucket unaffected (its own 50MB, not inflated by the stuck claim)");
+    assert(cached?.bytes === 31457280, "110 — completed hotcache copy (missing=0) lands in its own 'cached' bucket, not 'r2'");
+    assert(cached?.count === 1, "cached bucket count excludes the still-in-flight (missing=1) claim row");
     const totalBytes = body.breakdown.reduce((s, r) => s + r.bytes, 0);
-    assert(totalBytes === 104857600 + 52428800, "stuck claim's 200MB placeholder never appears in ANY bucket total");
+    assert(totalBytes === 104857600 + 52428800 + 31457280, "stuck claim's 200MB placeholder never appears in ANY bucket total");
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PASS");

@@ -511,6 +511,24 @@ workRoutes.post("/work/backfillCompleted",
   return c.json({ ok: true, processed, applied, failed, errors });
 });
 
+// ---------------------------------------------------------------------------
+// POST /edgesonic/work/recheckMetadataNow
+// ---------------------------------------------------------------------------
+// 110 — Manual trigger for the same selection+dispatch the cron tick runs
+// (maybeRunMetadataRecheck / utils/metadataRecheck.ts), bypassing the
+// metadata_recheck_interval_hours cadence gate so an admin can kick off a
+// re-check immediately instead of waiting up to 24h. Same permission gate as
+// the other work-queue admin endpoints.
+workRoutes.post("/work/recheckMetadataNow",
+  permissionMiddleware("dispatch_work"),
+  async (c) => {
+    const env = c.env as Env;
+    const { runMetadataRecheck } = await import("../../utils/metadataRecheck");
+    const result = await runMetadataRecheck(env.DB);
+    return c.json({ ok: true, ...result });
+  },
+);
+
 // ===========================================================================
 // dispatchWork helper — shared with scan.ts (background batch dispatch).
 // ===========================================================================

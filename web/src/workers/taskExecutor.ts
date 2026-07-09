@@ -126,12 +126,31 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
     throw new Error(`stream fetch failed: HTTP ${headResp.status}`);
   }
   const buf = new Uint8Array(await headResp.arrayBuffer());
+
+  // 111 — WAV duration was coming back as ~3 seconds for multi-minute files.
+  // Root cause: music-metadata's WaveParser clamps the "data" chunk length to
+  // `tokenizer.fileInfo.size - position` when the declared chunk is bigger
+  // than what's available — and parseBuffer(), given nothing but this 512KB
+  // slice, sets fileInfo.size to the SLICE'S length (512KB), not the true
+  // remote file size. It then computes duration from that clamped (tiny)
+  // chunk length, landing on "however many seconds of PCM fit in 512KB"
+  // (~3s at CD quality) regardless of the file's real length. Passing the
+  // true size (Content-Range's total, falling back to the dispatch payload's
+  // `size`) fixes this at the source for WAV and any other format whose
+  // duration/bitrate math depends on tokenizer.fileInfo.size.
+  const contentRange = headResp.headers.get("content-range");
+  const rangeTotalMatch = contentRange ? /\/(\d+)\s*$/.exec(contentRange) : null;
+  const totalSize = rangeTotalMatch
+    ? parseInt(rangeTotalMatch[1], 10)
+    : (Number(payload.size) || 0);
+
   // 093e — parse WITH covers so we can extract the embedded album art and
   // ship it back to the worker for R2 storage + album.cover_r2_key update.
   // skipCovers was previously true, which left every album with cover_r2_key
   // NULL → getCoverArt 404 for the whole library.
   const meta = await parseBuffer(buf, {
     mimeType: headResp.headers.get("content-type") || undefined,
+    size: totalSize > buf.length ? totalSize : undefined,
   }, { duration: true, skipCovers: false });
 
   // Extract first embedded picture (APIC for ID3, PICTURE for FLAC, etc).

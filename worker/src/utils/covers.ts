@@ -41,12 +41,12 @@ interface SourceRow {
 export async function resolveAlbumCover(env: Env, albumId: string): Promise<string | null> {
   const db = env.DB;
   const inst = await db.prepare(
-    `SELECT si.storage_uri FROM song_instances si
+    `SELECT si.storage_uri, si.size FROM song_instances si
      JOIN song_masters sm ON sm.id = si.master_id
      WHERE sm.album_id = ? AND si.missing = 0
      ORDER BY CASE WHEN si.storage_uri LIKE 'webdav://%' THEN 0 ELSE 1 END
      LIMIT 1`
-  ).bind(albumId).first<{ storage_uri: string }>();
+  ).bind(albumId).first<{ storage_uri: string; size: number | null }>();
   if (!inst) return null;
 
   let image: { body: ReadableStream<Uint8Array> | Uint8Array; contentType: string } | null = null;
@@ -65,13 +65,13 @@ export async function resolveAlbumCover(env: Env, albumId: string): Promise<stri
     const baseUrl = src.base_url.replace(/\/+$/, "") + (root ? `/${root}` : "");
     const auth = `Basic ${btoa(`${src.username || ""}:${src.password || ""}`)}`;
 
-    image = await extractEmbedded((range) => fetchWebdavRange(baseUrl, auth, filePath, range));
+    image = await extractEmbedded((range) => fetchWebdavRange(baseUrl, auth, filePath, range), inst.size ?? undefined);
   } else if (inst.storage_uri.startsWith("r2://")) {
     const key = inst.storage_uri.substring(5);
     image = await extractEmbedded(async (range) => {
       const obj = await env.MUSIC_BUCKET.get(key, { range });
       return obj ? new Uint8Array(await obj.arrayBuffer()) : null;
-    });
+    }, inst.size ?? undefined);
   }
 
   if (!image) return null;
@@ -84,17 +84,37 @@ export async function resolveAlbumCover(env: Env, albumId: string): Promise<stri
 
 async function extractEmbedded(
   fetchRange: (range: { offset: number; length: number }) => Promise<Uint8Array | null>,
+  totalSize?: number,
 ): Promise<{ body: Uint8Array; contentType: string } | null> {
   const head = await fetchRange({ offset: 0, length: HEAD_BYTES });
   if (!head || head.length === 0) return null;
-  const pic = locateEmbeddedPicture(head);
+
+  // 111 — many WAV rippers append their "id3 "/"ID3 " chunk (which may carry
+  // an APIC picture) AFTER the audio "data" payload, well past a head-only
+  // window on anything but a tiny file. Fetch a tail slice too whenever we
+  // know the file is bigger than one head window (a smaller file's "tail"
+  // would just re-fetch bytes already in head — skip the redundant request).
+  let tail: Uint8Array | undefined;
+  let tailStart = 0;
+  if (totalSize && totalSize > HEAD_BYTES * 2) {
+    tailStart = totalSize - HEAD_BYTES;
+    tail = (await fetchRange({ offset: tailStart, length: HEAD_BYTES })) ?? undefined;
+  }
+
+  const pic = locateEmbeddedPicture(head, tail);
   if (!pic || pic.length > MAX_PICTURE_BYTES) return null;
 
-  // Fully contained in the head slice — no extra request needed
-  if (pic.offset + pic.length <= head.length) {
-    return { body: head.subarray(pic.offset, pic.offset + pic.length), contentType: pic.mime };
+  // pic.offset is relative to whichever buffer matched (head, or tail when
+  // pic.source === "tail") — translate to an absolute file offset only when
+  // we need a follow-up fetch beyond what's already in hand.
+  const buf = pic.source === "tail" ? tail! : head;
+  const absoluteOffset = pic.source === "tail" ? tailStart + pic.offset : pic.offset;
+
+  // Fully contained in the buffer we already fetched — no extra request needed
+  if (pic.offset + pic.length <= buf.length) {
+    return { body: buf.subarray(pic.offset, pic.offset + pic.length), contentType: pic.mime };
   }
-  const data = await fetchRange({ offset: pic.offset, length: pic.length });
+  const data = await fetchRange({ offset: absoluteOffset, length: pic.length });
   if (!data || data.length < pic.length) return null;
   return { body: data, contentType: pic.mime };
 }

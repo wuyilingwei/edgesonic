@@ -138,6 +138,10 @@ const STRING_FEATURE_KEYS = new Set([
     // (Worker binding fast path / R2 presign 302) instead of the throttled
     // proxied WebDAV path. Default '0' — it consumes R2 storage.
     "enable_webdav_hotcache",
+    // 110 — cadence (hours) for the cron-driven metadata re-check that
+    // dispatches unsupported-format / lyrics-or-disc-incomplete song_instances
+    // to the browser worker pool for a second music-metadata pass. 0=disabled.
+    "metadata_recheck_interval_hours",
   ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -219,6 +223,13 @@ function validateFeatureString(key: string, value: string): string | null {
       // 103 — only '0' or '1'. Mirrors enable_webdav_presign shape.
       if (value !== "0" && value !== "1") return "enable_webdav_hotcache must be '0' or '1'";
       return null;
+    case "metadata_recheck_interval_hours": {
+      // 110 — same shape as scan_interval_hours: non-negative integer, 0-168.
+      if (!/^\d+$/.test(value)) return "metadata_recheck_interval_hours must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 0 || n > 168) return "metadata_recheck_interval_hours must be between 0 and 168";
+      return null;
+    }
     case "worker_poll_interval_seconds": {
       // Stored as a stringified integer in [30, 3600]. Anything lower hammers
       // D1 / KV; anything higher means a job sits in the queue for an hour.
