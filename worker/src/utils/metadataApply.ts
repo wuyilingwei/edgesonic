@@ -43,7 +43,7 @@ export interface SubmittedMetadata {
   bitrate?: number;      // kbps
   sampleRate?: number;   // Hz
   channels?: number;
-  lyrics?: string;       // accepted but NOT persisted (song_masters has no lyrics column yet — 036)
+  lyrics?: string;       // 109 — persisted to song_masters.lyrics (COALESCE-guarded, see applyMetadataResult)
   container?: string;
   codec?: string;
 }
@@ -61,6 +61,7 @@ export interface MetaCommon {
   year?: unknown;
   track?: unknown;
   disc?: unknown;
+  lyrics?: unknown;
 }
 export interface MetaFormat {
   bitrate?: unknown;
@@ -126,6 +127,20 @@ export async function applyMetadataResult(
     masterId = master.id;
   } else {
     masterId = inst.master_id;
+  }
+
+  // 109 — lyrics is not a "logical" field for the relink gate above (relink
+  // decides artist/album linkage; lyrics never should), so it needs its own
+  // write independent of hasLogical — a submission carrying ONLY lyrics (no
+  // title/artist/etc, e.g. a re-scan that only turned up an embedded LYRICS
+  // tag) must still land. COALESCE(NULLIF(lyrics,''), ?) only fills an EMPTY
+  // column: a user-authored edit or a NetEase/.lrc-sidecar fetch (036/094)
+  // already in song_masters.lyrics is never clobbered by a lower-priority
+  // embedded tag on a later re-scan.
+  if (tags.lyrics) {
+    await db.prepare(
+      "UPDATE song_masters SET lyrics = COALESCE(NULLIF(lyrics, ''), ?), updated_at = ? WHERE id = ?",
+    ).bind(tags.lyrics, Math.floor(Date.now() / 1000), inst.master_id).run();
   }
 
   // Update physical params on the instance row (only fields the payload had).
@@ -243,6 +258,7 @@ function mergeToSubmitted(c: MetaCommon, f: MetaFormat): SubmittedMetadata {
   const year = toPosInt(c.year);     if (year !== null) out.year  = year;
   const track = toPosInt(c.track);   if (track !== null) out.track = track;
   const disc = toPosInt(c.disc);     if (disc !== null) out.disc  = disc;
+  const ly = trimStr(c.lyrics);      if (ly) out.lyrics = ly;
 
   const dur = toPosNum(f.duration);  if (dur !== null) out.duration   = dur;
   const br = toPosNum(f.bitrate);    if (br !== null) out.bitrate    = br;

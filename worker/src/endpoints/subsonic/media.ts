@@ -347,7 +347,14 @@ const streamHandler = async (c: Context) => {
       if (isBrowserSession) {
         // fall through to in-Worker stream
       } else {
-        const presignOn = await getFeatureString(env, "enable_webdav_presign", "1");
+        // 108 — default OFF. The userinfo redirect (user:pass@host) is
+        // rejected by ExoPlayer/AVFoundation/okhttp-based Subsonic clients
+        // too, not just browsers — external players got a 302 they couldn't
+        // follow and reported "unable to load media". It also hands the
+        // WebDAV credentials to every streaming client. Admins with a
+        // controlled client set can still re-enable via feature_strings
+        // (migration 0035 flips existing '1' rows to '0').
+        const presignOn = await getFeatureString(env, "enable_webdav_presign", "0");
         const schemeAllowed = strategy === "always" || strategy === "webdav_only";
         if (presignOn === "1" && schemeAllowed) {
           try {

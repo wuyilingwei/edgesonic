@@ -18,6 +18,8 @@ import { fileURLToPath } from "node:url";
 import { xmlToJson } from "../worker/src/middleware/format";
 import { subsonicOK, SERVER_TYPE, SERVER_VERSION } from "../worker/src/utils/xml";
 import { mapSong } from "../worker/src/types/subsonic";
+import { normalizeQuery } from "../worker/src/endpoints/subsonic/searching";
+import { parseLrc } from "../worker/src/endpoints/subsonic/lyrics";
 import type { SongMaster } from "../worker/src/types/entities";
 
 let passed = 0;
@@ -168,6 +170,85 @@ const indexSrc = readFileSync(join(here, "../worker/src/index.ts"), "utf-8");
 const fmtPos = indexSrc.indexOf('app.use("/rest/*", formatMiddleware)');
 const authPos = indexSrc.indexOf('app.use("/rest/*", authMiddleware)');
 assert(fmtPos !== -1 && authPos !== -1 && fmtPos < authPos, "formatMiddleware mounted before authMiddleware");
+
+// ---------------------------------------------------------------------------
+section("9. 108 — search empty-array defaults + query normalization");
+assert(normalizeQuery('""') === "", `literal "" → empty`);
+assert(normalizeQuery("''") === "", "literal '' → empty");
+assert(normalizeQuery("*") === "", "* → empty");
+assert(normalizeQuery('"beatles"') === "beatles", "wrapping quotes stripped");
+assert(normalizeQuery("beatles") === "beatles", "plain query untouched");
+const srXml = subsonicOK({
+  searchResult3: { song: [{ _attributes: { id: "sm-1", isDir: "false", title: "T" } }] },
+});
+const sr = conv(srXml).searchResult3;
+assert(Array.isArray(sr.song) && sr.song.length === 1, "searchResult3.song array");
+assert(Array.isArray(sr.artist) && sr.artist.length === 0, "missing artist defaults to []");
+assert(Array.isArray(sr.album) && sr.album.length === 0, "missing album defaults to []");
+const srEmptyXml = subsonicOK({ searchResult3: {} });
+const srE = conv(srEmptyXml).searchResult3;
+assert(Array.isArray(srE.artist) && Array.isArray(srE.album) && Array.isArray(srE.song),
+  "fully-empty searchResult3 still has three [] keys");
+
+// ---------------------------------------------------------------------------
+section("10. 108 — songLyrics: structured lines, synced/start typing");
+const lrc = "[ti:九光年宇宙]\n[ar:星尘]\n[by:someone]\n[00:00.00]第一句\n[00:08.12]✡\n[01:02.5]第三句";
+const pl = parseLrc(lrc);
+assert(pl.synced === true, "LRC detected as synced");
+assert(pl.lines.length === 3, "metadata tags dropped, 3 lyric lines kept");
+assert(pl.lines[0].start === 0 && pl.lines[0].value === "第一句", "line 1 start/value");
+assert(pl.lines[1].start === 8120, "mm:ss.xx → ms (8120)");
+assert(pl.lines[2].start === 62500, "[01:02.5] → 62500ms (padded fraction)");
+const plain = parseLrc("just a line\nanother line");
+assert(plain.synced === false && plain.lines.length === 2 && plain.lines[0].start === undefined,
+  "plain text stays unsynced without start");
+const lyrXml = subsonicOK({
+  lyricsList: {
+    structuredLyrics: {
+      _attributes: { displayArtist: "A", displayTitle: "T", lang: "xxx", synced: "true" },
+      line: [
+        { _attributes: { start: 0 }, _text: "第一句" },
+        { _attributes: { start: 8120 }, _text: "✡" },
+      ],
+    },
+  },
+});
+const ll = conv(lyrXml).lyricsList;
+assert(Array.isArray(ll.structuredLyrics), "structuredLyrics is array");
+assert(ll.structuredLyrics[0].synced === true, "synced is boolean");
+assert(Array.isArray(ll.structuredLyrics[0].line), "line is array");
+assert(ll.structuredLyrics[0].line[0].start === 0 && ll.structuredLyrics[0].line[0].value === "第一句",
+  "line objects carry {start:number, value}");
+const unsyncedXml = subsonicOK({
+  lyricsList: {
+    structuredLyrics: {
+      _attributes: { displayArtist: "A", displayTitle: "T", lang: "xxx", synced: "false" },
+      line: [{ _attributes: {}, _text: "plain line" }],
+    },
+  },
+});
+const ul = conv(unsyncedXml).lyricsList.structuredLyrics[0].line;
+assert(typeof ul[0] === "object" && ul[0].value === "plain line",
+  "unsynced line is still a {value} object, not a bare string");
+
+// ---------------------------------------------------------------------------
+section("11. 108 — mapSong physical fields + webdav presign default off");
+const physRow = { ...songRow, inst_suffix: "flac", inst_content_type: "audio/flac",
+  inst_bit_rate: 971, inst_size: 32406488, inst_duration: 207,
+  inst_storage_uri: "webdav://src-1/music/像素荒原/6 谜.flac" };
+const physChild = mapSong(physRow, "al-9");
+assert(physChild.suffix === "flac", "mapSong suffix");
+assert(physChild.contentType === "audio/flac", "mapSong contentType");
+assert(physChild.bitRate === 971, "mapSong bitRate");
+assert(physChild.size === 32406488, "mapSong size");
+assert(physChild.path === "music/像素荒原/6 谜.flac", "path strips scheme + source id");
+assert(mapSong({ ...physRow, duration: null }, "al-9").duration === 207,
+  "master duration null → instance duration fallback");
+const mediaSrc = readFileSync(join(here, "../worker/src/endpoints/subsonic/media.ts"), "utf-8");
+assert(mediaSrc.includes('getFeatureString(env, "enable_webdav_presign", "0")'),
+  "webdav presign code default is 0");
+const migration35 = readFileSync(join(here, "../worker/migrations/0035_webdav_presign_default_off.sql"), "utf-8");
+assert(migration35.includes("SET value = '0'"), "migration 0035 flips existing rows to 0");
 
 // ---------------------------------------------------------------------------
 console.log(`\n${passed + failed} checks, ${passed} passed, ${failed} failed`);

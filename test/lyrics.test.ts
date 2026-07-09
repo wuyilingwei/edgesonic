@@ -82,6 +82,12 @@ function buildDb() {
       created_at INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT 0
     );
+    -- 108 -- song listings LEFT JOIN the preferred instance for physical fields
+    CREATE TABLE song_instances (
+      id TEXT PRIMARY KEY, master_id TEXT NOT NULL, storage_uri TEXT NOT NULL DEFAULT '',
+      suffix TEXT DEFAULT '', content_type TEXT, bit_rate INTEGER, size INTEGER,
+      duration INTEGER, missing INTEGER DEFAULT 0
+    );
     -- 107 — getSongMaster now LEFT JOINs albums for Child.album display names.
     CREATE TABLE albums (
       id TEXT PRIMARY KEY,

@@ -125,13 +125,17 @@ function cleanInput(t: SubmittedMetadata): SubmittedMetadata {
   if (Number.isFinite(t.sampleRate) && (t.sampleRate as number) > 0) out.sampleRate = t.sampleRate;
   if (Number.isFinite(t.channels)   && (t.channels   as number) > 0) out.channels   = t.channels;
 
-  // lyrics + container/codec: accept-but-not-persist (kept on payload for future 036 plumbing)
+  // 109 — lyrics is persisted (applyMetadataResult, COALESCE-guarded so it
+  // never overwrites an existing value); container/codec stay diagnostic-only.
   if (t.lyrics?.trim())    out.lyrics    = t.lyrics.trim();
   if (t.container?.trim()) out.container = t.container.trim();
   if (t.codec?.trim())     out.codec     = t.codec.trim();
   return out;
 }
 
+// 109 — lyrics counts as a usable field on its own: a re-scan that only
+// turned up an embedded LYRICS/USLT tag (no title/artist change) must not
+// 400 here, or the lyrics never reach applyMetadataResult at all.
 function hasAnyLogical(t: SubmittedMetadata): boolean {
-  return !!(t.title || t.artist || t.album || t.albumArtist || t.genre || t.year || t.track || t.disc);
+  return !!(t.title || t.artist || t.album || t.albumArtist || t.genre || t.year || t.track || t.disc || t.lyrics);
 }

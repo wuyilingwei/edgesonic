@@ -34,7 +34,7 @@ export interface SubsonicChild {
   track?: number; discNumber?: number; year?: number; genre?: string;
   coverArt?: string; size?: number; contentType?: string;
   suffix?: string; duration?: number; bitRate?: number;
-  created?: string; type?: string;
+  path?: string; created?: string; type?: string;
   isVideo: boolean;
   starred?: string;
   userRating?: number;
@@ -80,8 +80,16 @@ export function mapAlbum(a: Album, artistName?: string, annotation?: AnnotationL
 // 107 — song rows joined with artists/albums carry the display names; the
 // mapper picks them up when present. Before 107 `album` was set to the album
 // ID (parentId), which broke every client that displays Child.album as text.
+// 108 — rows may also carry preferred-instance physical fields (inst_*, see
+// queries.ts SongPhysical); clients gate playback on suffix/contentType/
+// bitRate/size/path, so emit them whenever the row has them.
 export function mapSong(
-  s: SongMaster & { artist_name?: string | null; album_name?: string | null },
+  s: SongMaster & {
+    artist_name?: string | null; album_name?: string | null;
+    inst_suffix?: string | null; inst_content_type?: string | null;
+    inst_bit_rate?: number | null; inst_size?: number | null;
+    inst_duration?: number | null; inst_storage_uri?: string | null;
+  },
   parentId: string,
   annotation?: AnnotationLite,
 ): SubsonicChild {
@@ -96,12 +104,27 @@ export function mapSong(
     discNumber: s.disc ?? undefined,
     genre: s.genre ?? undefined,
     coverArt: s.album_id.startsWith("al-") ? s.album_id : `al-${s.album_id}`,
-    duration: s.duration ?? undefined,
+    duration: s.duration ?? s.inst_duration ?? undefined,
+    suffix: s.inst_suffix ?? undefined,
+    contentType: s.inst_content_type ?? undefined,
+    bitRate: s.inst_bit_rate ?? undefined,
+    size: s.inst_size ?? undefined,
+    path: pathFromStorageUri(s.inst_storage_uri),
     created: formatISODate(s.created_at),
     type: "music",
     isVideo: false,
   };
   return applyAnnotation(obj, annotation);
+}
+
+// Child.path — clients (DSub cache layout, Symfonium dedup) want a stable
+// file-ish path. Strip the scheme + source-id prefix off the storage URI
+// (`webdav://<sourceId>/a/b.flac` → `a/b.flac`); the remainder is opaque but
+// stable, which is all the spec asks for.
+function pathFromStorageUri(uri: string | null | undefined): string | undefined {
+  if (!uri) return undefined;
+  const m = /^[a-z0-9+.-]+:\/\/[^/]+\/(.+)$/i.exec(uri);
+  return m ? m[1] : undefined;
 }
 
 function formatISODate(ts: number): string {

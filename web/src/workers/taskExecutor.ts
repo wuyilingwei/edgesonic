@@ -15,6 +15,7 @@
 // player UI MUST stay responsive; offloading is the cheap insurance.
 
 import { parseBuffer } from "music-metadata";
+import { lyricsTagsToText } from "../lib/metadata";
 
 // Wire shape — matches the `tasks[]` returned by /edgesonic/work/poll. Kept
 // minimal here because the worker can only trust what the Worker handed it
@@ -153,6 +154,11 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
       year:        meta.common.year ? String(meta.common.year) : "",
       track:       meta.common.track?.no ? String(meta.common.track.no) : "",
       disc:        meta.common.disk?.no ? String(meta.common.disk.no) : "",
+      // 109 — the browser worker pool never read common.lyrics at all before
+      // this; songs scanned via work_queue (the primary multi-format path,
+      // 052a/052b) never got embedded lyrics into D1. lyricsTagsToText is
+      // shared with the 041 local-scan path (web/src/lib/metadata.ts).
+      lyrics:      lyricsTagsToText(meta.common.lyrics) || "",
       duration:    meta.format.duration ? Math.round(meta.format.duration) : 0,
       bitrate:     meta.format.bitrate ? Math.round(meta.format.bitrate / 1000) : 0,
       sampleRate:  meta.format.sampleRate || 0,

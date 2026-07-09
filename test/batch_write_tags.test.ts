@@ -118,6 +118,7 @@ function buildDb() {
       content_type TEXT,
       size INTEGER DEFAULT 0,
       bit_rate INTEGER DEFAULT 0,
+      duration INTEGER,
       missing INTEGER DEFAULT 0,
       tag_scanned INTEGER DEFAULT 0,
       created_at INTEGER DEFAULT 0,

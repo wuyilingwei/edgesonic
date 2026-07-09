@@ -41,10 +41,17 @@ tagReadRoutes.get("/read", permissionMiddleware("manage_sources"), async (c) => 
       if (slices) {
         const tags = parseTags(slices.head, slices.tail);
         if (tags && (tags.title || tags.artist || tags.album)) {
+          // 109 — link artist_id to the TRACK artist (tags.artist), matching
+          // the pre-existing behaviour; album_artist_id is a SEPARATE column
+          // that was never populated by this endpoint even though the schema
+          // and the browser-pool path (relinkArtistAlbum) both use it. Only
+          // set it when the file actually declared TPE2/ALBUMARTIST — leaving
+          // it NULL for ordinary (non-compilation) rips, same as relinkArtistAlbum.
           const artistName = tags.albumArtist || tags.artist || "Unknown Artist";
           const albumName = tags.album || "Unknown Album";
           const artistId = "ar-" + md5(artistName).substring(0, 10);
           const albumId = "al-" + md5(artistName + " " + albumName).substring(0, 10);
+          const albumArtistId = tags.albumArtist ? artistId : null;
           touchedAlbums.add(albumId);
 
           const stmts: D1PreparedStatement[] = [
@@ -54,14 +61,18 @@ tagReadRoutes.get("/read", permissionMiddleware("manage_sources"), async (c) => 
               .bind(albumId, albumName, albumName.toLowerCase(), tags.year ?? null, tags.genre ?? null, now, now),
             db.prepare(
               `UPDATE song_masters SET
-                 album_id = ?, artist_id = ?,
+                 album_id = ?, artist_id = ?, album_artist_id = COALESCE(?, album_artist_id),
                  title = COALESCE(?, title), sort_title = COALESCE(?, sort_title),
-                 track = COALESCE(?, track), genre = COALESCE(?, genre), updated_at = ?
+                 track = COALESCE(?, track), disc = COALESCE(?, disc), genre = COALESCE(?, genre),
+                 lyrics = COALESCE(NULLIF(lyrics, ''), ?),
+                 updated_at = ?
                WHERE id = ?`
             ).bind(
-              albumId, artistId,
+              albumId, artistId, albumArtistId,
               tags.title ?? null, tags.title ? tags.title.toLowerCase() : null,
-              tags.track ?? null, tags.genre ?? null, now, row.master_id,
+              tags.track ?? null, tags.disc ?? null, tags.genre ?? null,
+              tags.lyrics ?? null,
+              now, row.master_id,
             ),
           ];
           await db.batch(stmts);
