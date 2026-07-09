@@ -712,9 +712,11 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
 INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
   ('enable_r2_presign', '0', 'R2 presigned URL direct stream (0=off, 1=on; needs R2 S3 secrets)', unixepoch());
 
--- 0030: 092 WebDAV presign (default ON — WebDAV benefits more than R2)
+-- 0030: 092 WebDAV presign — 0035/108: default OFF. The userinfo redirect
+-- (user:pass@host) is rejected by browsers/ExoPlayer/AVFoundation and leaks
+-- WebDAV credentials to streaming clients; in-Worker proxy is the default.
 INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
-  ('enable_webdav_presign', '1', 'WebDAV presigned URL direct stream (0=off, 1=on; per-credential strategy still applies)', unixepoch());
+  ('enable_webdav_presign', '0', 'WebDAV presigned URL direct stream (0=off, 1=on; leaks creds to clients — see 108)', unixepoch());
 
 -- 0034: 103 WebDAV play-through hot cache (default OFF — consumes R2 storage)
 INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES

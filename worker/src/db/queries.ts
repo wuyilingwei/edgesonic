@@ -6,6 +6,36 @@ export interface SongNames {
   album_name: string | null;
 }
 
+// 108 — physical-file fields from the preferred playable instance, joined
+// onto song_masters rows. Subsonic clients gate playback decisions on
+// Child.suffix / contentType / bitRate / size / path, so every song listing
+// needs them. Instance preference mirrors getSongInstances: R2 copies first
+// (Worker fast path), then highest bit_rate.
+export interface SongPhysical {
+  inst_suffix: string | null;
+  inst_content_type: string | null;
+  inst_bit_rate: number | null;
+  inst_size: number | null;
+  inst_duration: number | null;
+  inst_storage_uri: string | null;
+}
+
+export type SongRow = SongMaster & SongNames & SongPhysical;
+
+const SONG_ROW_COLS = `sm.*, ar.name AS artist_name, al.name AS album_name,
+       si.suffix AS inst_suffix, si.content_type AS inst_content_type,
+       si.bit_rate AS inst_bit_rate, si.size AS inst_size,
+       si.duration AS inst_duration, si.storage_uri AS inst_storage_uri`;
+
+const SONG_ROW_JOINS = `LEFT JOIN artists ar ON ar.id = sm.artist_id
+       LEFT JOIN albums al ON al.id = sm.album_id
+       LEFT JOIN song_instances si ON si.id = (
+         SELECT id FROM song_instances
+         WHERE master_id = sm.id AND missing = 0
+         ORDER BY CASE WHEN storage_uri LIKE 'r2://%' THEN 0 ELSE 1 END ASC,
+                  bit_rate DESC
+         LIMIT 1)`;
+
 export function createQueries(db: D1Database) {
   return {
     // Artists
@@ -218,34 +248,32 @@ export function createQueries(db: D1Database) {
       return result.results;
     },
 
-    async getSongsByGenre(genre: string, count: number, offset: number): Promise<SongMaster[]> {
+    // 108 — genre listing now carries names + physical fields like every
+    // other song listing (it fed bare rows to mapSong before).
+    async getSongsByGenre(genre: string, count: number, offset: number): Promise<SongRow[]> {
       const result = await db.prepare(
-        "SELECT * FROM song_masters WHERE genre = ? ORDER BY sort_title ASC LIMIT ? OFFSET ?"
-      ).bind(genre, count, offset).all<SongMaster>();
+        `SELECT ${SONG_ROW_COLS} FROM song_masters sm ${SONG_ROW_JOINS}
+         WHERE sm.genre = ? ORDER BY sm.sort_title ASC LIMIT ? OFFSET ?`
+      ).bind(genre, count, offset).all<SongRow>();
       return result.results;
     },
 
     // Song Masters
     // 107 — join artist/album display names so mapSong can emit the
     // spec-required Child.artist / Child.album text fields everywhere.
-    async getSongMaster(id: string): Promise<(SongMaster & SongNames) | null> {
+    // 108 — also join the preferred instance's physical fields (SongPhysical).
+    async getSongMaster(id: string): Promise<SongRow | null> {
       return db.prepare(
-        `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
-         FROM song_masters sm
-         LEFT JOIN artists ar ON ar.id = sm.artist_id
-         LEFT JOIN albums al ON al.id = sm.album_id
+        `SELECT ${SONG_ROW_COLS} FROM song_masters sm ${SONG_ROW_JOINS}
          WHERE sm.id = ?`
-      ).bind(id).first<SongMaster & SongNames>();
+      ).bind(id).first<SongRow>();
     },
 
-    async getSongMastersByAlbum(albumId: string): Promise<(SongMaster & SongNames)[]> {
+    async getSongMastersByAlbum(albumId: string): Promise<SongRow[]> {
       const result = await db.prepare(
-        `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
-         FROM song_masters sm
-         LEFT JOIN artists ar ON ar.id = sm.artist_id
-         LEFT JOIN albums al ON al.id = sm.album_id
+        `SELECT ${SONG_ROW_COLS} FROM song_masters sm ${SONG_ROW_JOINS}
          WHERE sm.album_id = ? ORDER BY sm.disc ASC, sm.track ASC`
-      ).bind(albumId).all<SongMaster & SongNames>();
+      ).bind(albumId).all<SongRow>();
       return result.results;
     },
 
@@ -253,21 +281,18 @@ export function createQueries(db: D1Database) {
     // 084 — D1 SQLite has a ~100 bind variable cap per statement. Batch ≤ 80
     // so callers like /rest/getNowPlaying (KV active streams) and bookmarks
     // listings don't crash with "too many SQL variables" on large inputs.
-    async getSongMastersByIds(ids: string[]): Promise<(SongMaster & SongNames)[]> {
+    async getSongMastersByIds(ids: string[]): Promise<SongRow[]> {
       if (ids.length === 0) return [];
       const uniq = Array.from(new Set(ids));
       const BATCH = 80;
-      const rows: (SongMaster & SongNames)[] = [];
+      const rows: SongRow[] = [];
       for (let i = 0; i < uniq.length; i += BATCH) {
         const batch = uniq.slice(i, i + BATCH);
         const placeholders = batch.map(() => "?").join(",");
         const result = await db.prepare(
-          `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
-           FROM song_masters sm
-           LEFT JOIN artists ar ON ar.id = sm.artist_id
-           LEFT JOIN albums al ON al.id = sm.album_id
+          `SELECT ${SONG_ROW_COLS} FROM song_masters sm ${SONG_ROW_JOINS}
            WHERE sm.id IN (${placeholders})`
-        ).bind(...batch).all<SongMaster & SongNames>();
+        ).bind(...batch).all<SongRow>();
         rows.push(...result.results);
       }
       return rows;
@@ -303,7 +328,7 @@ export function createQueries(db: D1Database) {
     } = {}): Promise<{
       artists: Artist[];
       albums: Album[];
-      songs: Array<SongMaster & { artist_name: string | null; album_name: string | null }>;
+      songs: SongRow[];
     }> {
       const like = `%${query}%`;
       const [artists, albums, songs] = await Promise.all([
@@ -314,13 +339,10 @@ export function createQueries(db: D1Database) {
           "SELECT * FROM albums WHERE name LIKE ? ORDER BY sort_name ASC LIMIT ? OFFSET ?"
         ).bind(like, opts.albumCount ?? 20, opts.albumOffset ?? 0).all<Album>(),
         db.prepare(
-          `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
-           FROM song_masters sm
-           LEFT JOIN artists ar ON ar.id = sm.artist_id
-           LEFT JOIN albums al ON al.id = sm.album_id
+          `SELECT ${SONG_ROW_COLS} FROM song_masters sm ${SONG_ROW_JOINS}
            WHERE sm.title LIKE ? ORDER BY sm.sort_title ASC LIMIT ? OFFSET ?`
         ).bind(like, opts.songCount ?? 20, opts.songOffset ?? 0)
-          .all<SongMaster & { artist_name: string | null; album_name: string | null }>(),
+          .all<SongRow>(),
       ]);
       return {
         artists: artists.results,
@@ -457,18 +479,15 @@ export function createQueries(db: D1Database) {
       return result.results;
     },
 
-    async getStarredSongs(
-      userId: string,
-    ): Promise<Array<SongMaster & { artist_name: string | null; album_name: string | null }>> {
+    async getStarredSongs(userId: string): Promise<SongRow[]> {
       const result = await db.prepare(
-        `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
+        `SELECT ${SONG_ROW_COLS}
          FROM song_masters sm
          JOIN annotations an ON an.item_id = sm.id AND an.item_type = 'song'
-         LEFT JOIN artists ar ON ar.id = sm.artist_id
-         LEFT JOIN albums al ON al.id = sm.album_id
+         ${SONG_ROW_JOINS}
          WHERE an.user_id = ? AND an.starred = 1
          ORDER BY an.starred_at DESC`
-      ).bind(userId).all<SongMaster & { artist_name: string | null; album_name: string | null }>();
+      ).bind(userId).all<SongRow>();
       return result.results;
     },
 
@@ -479,7 +498,7 @@ export function createQueries(db: D1Database) {
       genre?: string;
       fromYear?: number;
       toYear?: number;
-    }): Promise<Array<SongMaster & { artist_name: string | null; album_name: string | null }>> {
+    }): Promise<SongRow[]> {
       const where: string[] = [];
       const binds: unknown[] = [];
       if (opts.genre) {
@@ -497,13 +516,10 @@ export function createQueries(db: D1Database) {
       const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
       binds.push(opts.size);
       const result = await db.prepare(
-        `SELECT sm.*, ar.name AS artist_name, al.name AS album_name
-         FROM song_masters sm
-         LEFT JOIN artists ar ON ar.id = sm.artist_id
-         LEFT JOIN albums al ON al.id = sm.album_id
+        `SELECT ${SONG_ROW_COLS} FROM song_masters sm ${SONG_ROW_JOINS}
          ${whereSql}
          ORDER BY RANDOM() LIMIT ?`
-      ).bind(...binds).all<SongMaster & { artist_name: string | null; album_name: string | null }>();
+      ).bind(...binds).all<SongRow>();
       return result.results;
     },
 
@@ -515,13 +531,19 @@ export function createQueries(db: D1Database) {
     async getTopSongsByArtist(
       artistName: string,
       limit: number,
-    ): Promise<Array<SongMaster & { artist_name: string | null; album_name: string | null }>> {
+    ): Promise<SongRow[]> {
       const result = await db.prepare(
-        `SELECT sm.*, ar.name AS artist_name, al.name AS album_name,
+        `SELECT ${SONG_ROW_COLS},
                 COALESCE(SUM(an.play_count), 0) AS total_plays
          FROM song_masters sm
          JOIN artists ar ON ar.id = sm.artist_id
          LEFT JOIN albums al ON al.id = sm.album_id
+         LEFT JOIN song_instances si ON si.id = (
+           SELECT id FROM song_instances
+           WHERE master_id = sm.id AND missing = 0
+           ORDER BY CASE WHEN storage_uri LIKE 'r2://%' THEN 0 ELSE 1 END ASC,
+                    bit_rate DESC
+           LIMIT 1)
          LEFT JOIN annotations an
            ON an.item_id = sm.id AND an.item_type = 'song'
          WHERE LOWER(ar.name) = LOWER(?) OR ar.name LIKE ?
@@ -529,7 +551,7 @@ export function createQueries(db: D1Database) {
          ORDER BY total_plays DESC, sm.created_at DESC
          LIMIT ?`
       ).bind(artistName, artistName, limit)
-        .all<SongMaster & { artist_name: string | null; album_name: string | null; total_plays: number }>();
+        .all<SongRow & { total_plays: number }>();
       return result.results;
     },
 
