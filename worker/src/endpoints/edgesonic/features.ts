@@ -114,6 +114,11 @@ const STRING_FEATURE_KEYS = new Set([
     // dispatches unsupported-format / lyrics-or-disc-incomplete song_instances
     // to the browser worker pool for a second music-metadata pass. 0=disabled.
     "metadata_recheck_interval_hours",
+    // 101 — GB of R2 free tier allocated to EdgeSonic for stats.ts's monthly
+    // cost estimate (migration 0033 seeds the row). Never added to this
+    // allowlist, so /features/updateString 404'd on it ("Unknown feature")
+    // even though the row exists and is read fine via getFeatureString.
+    "r2_free_allocation_gb",
   ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -194,6 +199,16 @@ function validateFeatureString(key: string, value: string): string | null {
       if (!/^\d+$/.test(value)) return "metadata_recheck_interval_hours must be a non-negative integer";
       const n = parseInt(value, 10);
       if (n < 0 || n > 168) return "metadata_recheck_interval_hours must be between 0 and 168";
+      return null;
+    }
+    case "r2_free_allocation_gb": {
+      // 101 — GB of R2's free tier the admin allocates to EdgeSonic's cost
+      // estimate. Positive integer; 1000 is a generous ceiling (Cloudflare's
+      // published free tier is 10 GB, but self-hosters may have a paid plan
+      // with a larger effective allowance).
+      if (!/^\d+$/.test(value)) return "r2_free_allocation_gb must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 0 || n > 1000) return "r2_free_allocation_gb must be between 0 and 1000";
       return null;
     }
     case "worker_poll_interval_seconds": {
