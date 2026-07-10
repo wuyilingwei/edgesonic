@@ -729,6 +729,13 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
    'Hours between automatic browser-pool metadata re-checks for unsupported-format or lyrics/disc-incomplete songs (0=disabled)',
    unixepoch());
 
+-- 0038: 113 periodic batch LRC sidecar backfill for the pre-existing library.
+-- Default 24h; 0 disables.
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('lrc_backfill_interval_hours', '24',
+   'Hours between automatic batch scans for sibling .lrc sidecar files on songs still missing lyrics (0=disabled)',
+   unixepoch());
+
 -- ============================================================================
 -- ============================================================================
 -- Stored as plain TEXT for now; admin-gated endpoints read/write only.
