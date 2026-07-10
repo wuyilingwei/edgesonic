@@ -594,6 +594,15 @@ onUnmounted(() => {
             >
               {{ s.scanStatus === 'completed' ? t('sources.scanStatus.rescan') : s.scanStatus === 'failed' ? t('sources.scanStatus.retry') : t('sources.scanStatus.idle') }}
             </button>
+            <!-- 118 — the force-rescan gesture used to be Shift+click on the
+                 button above with zero UI discoverability (the forceHint
+                 locale string was defined but never rendered anywhere).
+                 Give it a real, visible button. -->
+            <button
+              class="btn-secondary"
+              :title="t('sources.scanStatus.forceRescanHint')"
+              @click="scanSource(s, true)"
+            >{{ t("sources.scanStatus.forceRescan") }}</button>
           </template>
           <button v-if="s.type === 'webdav' && !(mirrorFor(s)?.running)" class="btn-secondary" @click="startMirror(s)">{{ t("sources.mirror.btn") }}</button>
           <button v-if="mirrorFor(s)?.running" class="btn-danger" @click="stopMirror(s.id)">{{ t("sources.mirror.stop") }}</button>

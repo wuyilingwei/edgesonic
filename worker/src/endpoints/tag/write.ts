@@ -8,6 +8,7 @@ import { requiredPrefixLen, rebuildTagPrefix } from "../../utils/tagwrite";
 import type { TagWriteCover } from "../../utils/tagwrite";
 import { encodePath } from "../storage/scan";
 import type { SongTags } from "../../utils/tags";
+import { dispatchWorkBatch } from "../edgesonic/work";
 
 export const tagEditRoutes = new Hono();
 
@@ -151,6 +152,62 @@ tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) =
   }
 
   return c.json({ ok: true, results, succeeded, failed });
+});
+
+// ============================================================================
+// POST /tag/rescan  body: { ids: string[] }
+// 118 — Library.vue batch toolbar "重新扫描" action. For each master id,
+// resets tag_scanned=0 on its 'original' instances (transcoded/cached
+// derivatives are skipped — re-reading a transcode output's tags is
+// meaningless, we want the true source file re-parsed) and force-redispatches
+// a metadata work_queue task with upsert:true so an instance whose task_queue
+// row already reached a terminal state actually comes back to 'queued'
+// instead of the INSERT OR IGNORE dedupKey no-op (see work.ts DispatchInput).
+// ============================================================================
+tagEditRoutes.post("/rescan", permissionMiddleware("edit_tags"), async (c) => {
+  const env = c.env as Env;
+  const db = env.DB;
+  const queries = createQueries(db);
+
+  const body = await c.req.json<{ ids?: string[] }>().catch(() => null);
+  if (!body || !Array.isArray(body.ids) || body.ids.length === 0) {
+    return c.json({ ok: false, error: "Missing ids" }, 400);
+  }
+  if (body.ids.length > BATCH_MAX) {
+    return c.json({ ok: false, error: `Batch size exceeds limit (${BATCH_MAX})` }, 400);
+  }
+
+  const targets: Array<{ instanceId: string; uri: string; suffix: string; size: number }> = [];
+  let skipped = 0;
+  for (const masterId of body.ids) {
+    const instances = await queries.getSongInstances(masterId);
+    const originals = instances.filter((i) => i.source_type === "original");
+    if (originals.length === 0) { skipped++; continue; }
+    for (const inst of originals) {
+      targets.push({ instanceId: inst.id, uri: inst.storage_uri, suffix: inst.suffix, size: inst.size ?? 0 });
+    }
+  }
+  if (targets.length === 0) {
+    return c.json({ ok: false, error: "No eligible (original) instances found for the given ids" }, 404);
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const resetStmts = targets.map((t) =>
+    db.prepare("UPDATE song_instances SET tag_scanned = 0, updated_at = ? WHERE id = ?").bind(now, t.instanceId));
+  for (let i = 0; i < resetStmts.length; i += 80) {
+    await db.batch(resetStmts.slice(i, i + 80));
+  }
+
+  const dispatchedIds = await dispatchWorkBatch(db, targets.map((t) => ({
+    taskType: "metadata",
+    payload: { instanceId: t.instanceId, sourceUri: t.uri, suffix: t.suffix, size: t.size },
+    requiredCaps: ["music-metadata"],
+    priority: 3, // ahead of routine scan dispatch (priority 5) — user explicitly asked for this
+    dedupKey: t.instanceId,
+    upsert: true,
+  })));
+
+  return c.json({ ok: true, dispatched: dispatchedIds.length, skipped });
 });
 
 // ============================================================================
