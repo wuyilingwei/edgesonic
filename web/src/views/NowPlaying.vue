@@ -208,11 +208,17 @@ onUnmounted(() => {
 const coverFailed = ref(false);
 const track = computed(() => player.current);
 // coverArtUrl generates a fresh random salt each call; calling it in the
-// template directly (e.g. :src="coverArtUrl(track.coverArt, 400)") re-fetches
+// template directly (e.g. :src="coverArtUrl(track.coverArt, 512)") re-fetches
 // the cover image 4×/s because timeupdate → progressPct triggers re-render.
+//
+// 400 isn't in the backend's ALLOWED_COVER_SIZES allow-list (64/96/128/192/
+// 256/384/512 — media.ts parseCoverSize), so a request with size=400 silently
+// fell through to the uncached "serve the original file" path: every play
+// served the full-size original instead of a cached thumbnail. 512 is the
+// closest allowed size at or above this box's ~280px CSS width.
 const coverSrc = computed(() => {
   const tr = track.value;
-  return tr?.coverArt ? coverArtUrl(tr.coverArt, 400) : "";
+  return tr?.coverArt ? coverArtUrl(tr.coverArt, 512) : "";
 });
 watch(coverSrc, () => { coverFailed.value = false; });
 
