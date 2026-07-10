@@ -66,6 +66,50 @@ function parseLrcDual(text: string): LyricLine[] {
   return ordered.sort((a, b) => a.time - b.time);
 }
 
+// Parse getLyricsBySongId's <structuredLyrics><line start="8120">text</line></...>
+// XML. The real per-line timestamp lives in the `start` ms attribute — the
+// server (worker/src/endpoints/subsonic/lyrics.ts) already strips any
+// "[mm:ss]" bracket tag out of the line text before emitting it, so re-deriving
+// timestamps from the text with parseLrcDual's bracket regex (as this used to
+// do) could never match anything. Every line silently got time=0, hasSynced
+// was permanently false, and auto-scroll/click-to-seek never actually engaged
+// even though the code for both was otherwise correct.
+function parseStructuredLines(inner: string): LyricLine[] {
+  const lineRe = /<line(?:\s+start="(\d+)")?[^>]*>([^<]*)<\/line>/g;
+  let m: RegExpExecArray | null;
+  const raw: { time: number; text: string; hasTime: boolean }[] = [];
+  while ((m = lineRe.exec(inner)) !== null) {
+    const hasTime = m[1] !== undefined;
+    const content = decodeEntities(m[2]).trim();
+    if (!content) continue;
+    raw.push({ time: hasTime ? parseInt(m[1], 10) / 1000 : 0, text: content, hasTime });
+  }
+  const hasTs = raw.some((r) => r.hasTime);
+  if (!hasTs) {
+    // Unsynced lyrics: every line is its own entry, no timestamp grouping.
+    return raw.map((r) => ({ time: 0, text: r.text }));
+  }
+  // Synced: consecutive lines sharing the same timestamp are the
+  // original+translation LRC convention — group the second under the first.
+  const byTime = new Map<number, { text: string; tr?: string }>();
+  const ordered: LyricLine[] = [];
+  for (const r of raw) {
+    const existing = byTime.get(r.time);
+    if (existing) {
+      if (!existing.tr) existing.tr = r.text;
+    } else {
+      const entry = { text: r.text, tr: undefined as string | undefined };
+      byTime.set(r.time, entry);
+      ordered.push({ time: r.time, text: r.text });
+    }
+  }
+  for (const [time, entry] of byTime.entries()) {
+    const idx = ordered.findIndex((l) => l.time === time);
+    if (idx >= 0) ordered[idx].tr = entry.tr;
+  }
+  return ordered.sort((a, b) => a.time - b.time);
+}
+
 // Detect if LRC has translation lines (same timestamp appears twice)
 function extractTranslation(text: string): string | null {
   const re = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)/g;
@@ -93,13 +137,7 @@ watch(() => player.current?.id, async (id) => {
     const xml = await authFetch("getLyricsBySongId", { id });
     const inner = parseXmlInner(xml, "structuredLyrics");
     if (inner) {
-      const lineRe = /<line[^>]*>([^<]*)<\/line>/g;
-      let m: RegExpExecArray | null;
-      const text: string[] = [];
-      while ((m = lineRe.exec(inner)) !== null) {
-        text.push(decodeEntities(m[1]));
-      }
-      lyrics.value = parseLrcDual(text.join("\n"));
+      lyrics.value = parseStructuredLines(inner);
     } else {
       // fallback: getLyrics by artist+title
       const t = player.current;
