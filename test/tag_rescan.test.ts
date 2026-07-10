@@ -1,4 +1,4 @@
-// 118 — POST /tag/rescan (Library.vue batch toolbar "重新扫描" action).
+// POST /tag/rescan (Library.vue batch toolbar "重新扫描" action).
 // Given a set of song master ids, resets tag_scanned=0 on their 'original'
 // instances (skipping transcoded/cached derivatives) and force-redispatches
 // a work_queue metadata task per instance with upsert:true, so an instance

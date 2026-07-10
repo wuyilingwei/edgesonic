@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatDuration } from "../api";
 import { usePlayerStore, type Track } from "../stores/player";
@@ -37,10 +37,52 @@ const albumOffset = ref(0);
 const albumsDone = ref(false);
 
 // === Songs tab (paged flat list over the whole library) ===
-const SONG_PAGE = 500;
+// 122 — bumped from 500 to 1000 per Rosmontis ("默认拉取1k"): the list is a
+// flat alphabetical dump so larger pages both cut the number of round-trips
+// and make the load-more IntersectionObserver less trigger-happy on arrival.
+const SONG_PAGE = 1000;
 const allSongs = ref<Track[]>([]);
 const songOffset = ref(0);
 const songsDone = ref(false);
+
+// IntersectionObserver sentinel elements for the two paged tabs. A single
+// observer watches whichever sentinel is currently in the DOM (only one is
+// visible at a time since tabs are v-if mutually exclusive); hitting it with
+// root=viewport triggers the matching loadMore automatically — Rosmontis no
+// longer has to click "加载更多" by hand.
+const songListEnd = ref<HTMLElement | null>(null);
+const albumListEnd = ref<HTMLElement | null>(null);
+let io: IntersectionObserver | null = null;
+function guardLoad(kind: "songs" | "albums"): void {
+  if (loading.value) return;
+  if (kind === "songs") {
+    if (songsDone.value) return;
+    void loadMoreSongs();
+  } else {
+    if (albumsDone.value) return;
+    void loadMoreAlbums();
+  }
+}
+function setupObserver(): void {
+  if (io || typeof IntersectionObserver === "undefined") return;
+  io = new IntersectionObserver((entries) => {
+    for (const ent of entries) {
+      if (!ent.isIntersecting) continue;
+      const el = ent.target as HTMLElement;
+      const kind = el.dataset.kind as "songs" | "albums" | undefined;
+      if (kind) guardLoad(kind);
+    }
+  }, { rootMargin: "600px 0px 0px 0px" });
+  if (songListEnd.value) io.observe(songListEnd.value);
+  if (albumListEnd.value) io.observe(albumListEnd.value);
+}
+function refreshTargets(): void {
+  if (!io) return;
+  // observe() on an already-observed element is a no-op, so this is safe to
+  // call from watch(tab) — the sentinel only exists when its tab is active.
+  if (songListEnd.value) io.observe(songListEnd.value);
+  if (albumListEnd.value) io.observe(albumListEnd.value);
+}
 
 function switchTab(next: Tab) {
   tab.value = next;
@@ -205,7 +247,7 @@ function openBatchEditor() {
   editorOpen.value = true;
 }
 
-// 118 — batch toolbar "重新扫描": force-requeue the selected songs' original
+// batch toolbar "重新扫描": force-requeue the selected songs' original
 // instances for metadata re-parsing (resets tag_scanned=0 + redispatches a
 // work_queue task with upsert:true so an already-completed row actually
 // comes back to 'queued'). No modal needed — just a transient inline status
@@ -345,6 +387,22 @@ onMounted(() => {
   else if (tab.value === "albums") loadMoreAlbums();
   else loadMoreSongs();
   setTimeout(() => { songsHintFaded.value = true; }, 5000);
+  // 122 — set up the infinite-scroll observer now that the first sentinel
+  // (songs tab, the default) is in the DOM. switchTab's watch below
+  // re-observes whichever sentinel becomes live when the user picks a
+  // different tab.
+  setupObserver();
+});
+
+// 122 — re-observe the new tab's sentinel after switchTab inserts it. Vue
+// updates the ref before `nextTick` resolves, so by the time this watch
+// fires the sentinel is mounted and `io.observe` can take effect.
+watch(() => tab.value, () => {
+  refreshTargets();
+});
+
+onUnmounted(() => {
+  if (io) { io.disconnect(); io = null; }
 });
 
 // ============================================================================
@@ -653,7 +711,11 @@ async function submitCreateAndAdd() {
       </div>
       <div class="load-more">
         <span v-if="loading" class="mono-label">{{ t("common.loading") }}</span>
-        <button v-else-if="!albumsDone" class="btn-secondary" @click="loadMoreAlbums">{{ t("library.loadMore") }}</button>
+        <!-- 122 — invisible IntersectionObserver sentinel replaces the
+             manual "加载更多" button. Pulled into the viewport by the
+             album grid's natural flow when the user scrolls near the end;
+             the observer fires loadMoreAlbums automatically. -->
+        <div ref="albumListEnd" class="scroll-sentinel" data-kind="albums" aria-hidden="true"></div>
       </div>
     </div>
 
@@ -737,7 +799,8 @@ async function submitCreateAndAdd() {
       </div>
       <div class="load-more">
         <span v-if="loading" class="mono-label">{{ t("common.loading") }}</span>
-        <button v-else-if="!songsDone" class="btn-secondary" @click="loadMoreSongs">{{ t("library.loadMore") }}</button>
+        <!-- 122 — infinite-scroll sentinel (see album tab sibling). -->
+        <div ref="songListEnd" class="scroll-sentinel" data-kind="songs" aria-hidden="true"></div>
       </div>
     </div>
     <!-- Tag editor (single + batch) -->
@@ -860,7 +923,6 @@ async function submitCreateAndAdd() {
 </template>
 
 <style scoped>
-.library { max-width: 1200px; }
 .breadcrumb { margin-bottom: 0.25rem; }
 .breadcrumb a { color: var(--color-text-muted); cursor: pointer; }
 .breadcrumb a:hover { color: var(--color-accent-primary); }
@@ -888,6 +950,10 @@ async function submitCreateAndAdd() {
 .view-tab.active { color: var(--color-accent-primary); border-bottom-color: var(--color-accent-primary); }
 
 .load-more { display: flex; justify-content: center; padding: 1.25rem 0 0.5rem; }
+/* 122 — invisible IntersectionObserver sentinel: must occupy vertical space
+   inside the scroll flow so the observer can see it approach the viewport.
+   1px tall is enough; a tiny margin keeps it clear of grid/table borders. */
+.scroll-sentinel { width: 1px; height: 1px; margin: 0; padding: 0; }
 
 /* artists */
 .artist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1rem; align-items: start; }

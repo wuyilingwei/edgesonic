@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { md5 } from "./utils/md5";
 import { getFeature, parseChain } from "./utils/features";
+import { hasPermission } from "./utils/permissions";
 import { SERVER_TYPE, SERVER_VERSION } from "./utils/xml";
 import type { User } from "./types/entities";
 
@@ -363,60 +364,31 @@ export const authMiddleware = createMiddleware<{
 // ============================================================================
 // Permission Middleware
 // ============================================================================
+// The per-permission RPH sliding-window rate limit that used to live
+// here was removed (Rosmontis: authorisation should just be "does this level
+// have this permission", no per-permission hourly throttling). The enabled check
+// now goes through the shared hasPermission() helper (utils/permissions.ts)
+// so both this middleware and in-handler degradation checks (shares.ts /
+// playlists.ts / now_playing.ts / users.ts) read from the same source —
+// PERMISSIONS_OVERRIDE env var first, D1 user_permissions as fallback.
 export const permissionMiddleware = (requiredPermission: string) =>
   createMiddleware<{
     Bindings: Env;
     Variables: { user: User; authMethod: AuthMethod; streamProxyStrategy?: string };
   }>(async (c, next) => {
     const user = c.get("user");
-    const db = c.env.DB;
-
-    const perm = await db
-      .prepare("SELECT enabled, max_rph FROM user_permissions WHERE level = ? AND permission = ?")
-      .bind(user.level, requiredPermission)
-      .first<{ enabled: number; max_rph: number }>();
+    const enabled = await hasPermission(c.env, user, requiredPermission);
 
     // Management routes (/edgesonic/, /tag/, /storage/) consume JSON; Subsonic
     // /rest/* routes expect XML. Use the request path to pick the right format.
     const reqPath = c.req.path;
     const isMgmt = reqPath.startsWith("/edgesonic/") || reqPath.startsWith("/tag/") || reqPath.startsWith("/storage/");
 
-    if (!perm || !perm.enabled) {
+    if (!enabled) {
       if (isMgmt) return c.json({ ok: false, error: "Not authorized" }, 403);
       return c.text(subsonicError(50, "Not authorized"), 403, {
         "Content-Type": "application/xml; charset=UTF-8",
       });
-    }
-
-    if (perm.max_rph > 0) {
-      // Logic: read current row; if window_start is >3600s ago, reset window.
-      // Otherwise reject if count >= max_rph, else increment.
-      const nowSec = Math.floor(Date.now() / 1000);
-      const rl = await db
-        .prepare("SELECT window_start, count FROM rate_limits WHERE username = ? AND permission = ?")
-        .bind(user.username, requiredPermission)
-        .first<{ window_start: number; count: number }>();
-
-      const windowStart = rl ? rl.window_start : 0;
-      const currentCount = rl ? rl.count : 0;
-      const windowExpired = nowSec - windowStart >= 3600;
-
-      if (!windowExpired && currentCount >= perm.max_rph) {
-        if (isMgmt) return c.json({ ok: false, error: "Rate limit exceeded" }, 429);
-        return c.text(subsonicError(50, "Rate limit exceeded"), 429, {
-          "Content-Type": "application/xml; charset=UTF-8",
-        });
-      }
-
-      const newWindowStart = windowExpired ? nowSec : windowStart;
-      const newCount = windowExpired ? 1 : currentCount + 1;
-      await db
-        .prepare(
-          "INSERT INTO rate_limits (username, permission, window_start, count) VALUES (?, ?, ?, ?)" +
-          " ON CONFLICT(username, permission) DO UPDATE SET window_start = excluded.window_start, count = excluded.count"
-        )
-        .bind(user.username, requiredPermission, newWindowStart, newCount)
-        .run();
     }
 
     return next();

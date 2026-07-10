@@ -580,8 +580,6 @@ onMounted(load);
 </template>
 
 <style scoped>
-.page { max-width: 1000px; }
-
 .share-list { display: flex; flex-direction: column; gap: 0.9rem; }
 .share-card {
   display: flex; flex-direction: column; gap: 0.65rem;

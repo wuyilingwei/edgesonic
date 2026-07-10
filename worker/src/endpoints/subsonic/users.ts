@@ -26,6 +26,11 @@ const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 
 type C = Context<{ Bindings: Env; Variables: { user: User } }>;
 
+// Mirrors the same constraint in endpoints/edgesonic/users.ts — admin/
+// super-admin accounts can only be created, edited, or removed by a
+// super-admin, not by any manage_users holder (grantable down to level 1).
+const ADMIN_TIER_LEVEL = 2;
+
 // Read a body field from either the query string or a POST form body. Subsonic
 // clients send params as query (?username=...) or form fields (POST body).
 async function readParam(c: C, name: string): Promise<string | undefined> {
@@ -85,7 +90,7 @@ const getUserHandler = async (c: C): Promise<Response> => {
 
   // Non-admin querying another user 鈫?deny (Subsonic convention).
   if (target !== caller.username) {
-    const canManage = await hasPermission(db, caller, "manage_users");
+    const canManage = await hasPermission(c.env, caller, "manage_users");
     if (!canManage) {
       return c.text(subsonicError(50, "Not authorized to view other users"), 403, XML);
     }
@@ -160,9 +165,12 @@ const createUserHandler = async (c: C): Promise<Response> => {
   // Permission gate (the permissionMiddleware for manage_users is NOT applied
   // here because Subsonic CUD endpoints use token auth, not sessions; we gate
   // inline so the route is reachable by token+salt clients).
-  const canManage = await hasPermission(db, caller, "manage_users");
+  const canManage = await hasPermission(c.env, caller, "manage_users");
   if (!canManage) {
     return c.text(subsonicError(50, "manage_users permission required"), 403, XML);
+  }
+  if (level >= ADMIN_TIER_LEVEL && caller.level < 3) {
+    return c.text(subsonicError(50, "Only a super-admin can create admin/super-admin accounts"), 403, XML);
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -185,7 +193,7 @@ const updateUserHandler = async (c: C): Promise<Response> => {
     return c.text(subsonicError(10, "Missing username"), 400, XML);
   }
 
-  const canManage = await hasPermission(db, caller, "manage_users");
+  const canManage = await hasPermission(c.env, caller, "manage_users");
   if (!canManage) {
     return c.text(subsonicError(50, "manage_users permission required"), 403, XML);
   }
@@ -201,6 +209,19 @@ const updateUserHandler = async (c: C): Promise<Response> => {
     return c.text(subsonicError(0, "Cannot promote yourself to superadmin"), 200, XML);
   }
 
+  // Constraint C 鈥?manage_users below super-admin can't touch an existing
+  // admin/super-admin account or promote anyone into the admin tier.
+  const existingTarget = await db
+    .prepare("SELECT level FROM users WHERE username = ?")
+    .bind(username)
+    .first<{ level: number }>();
+  const targetIsOrBecomesAdminTier =
+    (existingTarget && existingTarget.level >= ADMIN_TIER_LEVEL) ||
+    (levelParam !== null && levelParam >= ADMIN_TIER_LEVEL);
+  if (targetIsOrBecomesAdminTier && caller.level < 3) {
+    return c.text(subsonicError(50, "Only a super-admin can manage admin/super-admin accounts"), 403, XML);
+  }
+
   if (password) {
     await db
       .prepare("UPDATE users SET master_password = ?, updated_at = ? WHERE username = ?")
@@ -212,18 +233,12 @@ const updateUserHandler = async (c: C): Promise<Response> => {
       return c.text(subsonicError(10, "Invalid level (0-3)"), 400, XML);
     }
     // Constraint A 鈥?keep at least one superadmin.
-    if (levelParam < 3) {
-      const target = await db
-        .prepare("SELECT level FROM users WHERE username = ?")
-        .bind(username)
-        .first<{ level: number }>();
-      if (target && target.level === 3) {
-        const cnt = await db
-          .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
-          .first<{ cnt: number }>();
-        if ((cnt?.cnt ?? 0) <= 1) {
-          return c.text(subsonicError(0, "Must keep at least one superadmin"), 200, XML);
-        }
+    if (levelParam < 3 && existingTarget?.level === 3) {
+      const cnt = await db
+        .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
+        .first<{ cnt: number }>();
+      if ((cnt?.cnt ?? 0) <= 1) {
+        return c.text(subsonicError(0, "Must keep at least one superadmin"), 200, XML);
       }
     }
     await db
@@ -233,18 +248,12 @@ const updateUserHandler = async (c: C): Promise<Response> => {
   }
   if (enabledParam !== undefined) {
     const enabled = enabledParam === "true" || enabledParam === "1";
-    if (!enabled) {
-      const target = await db
-        .prepare("SELECT level FROM users WHERE username = ?")
-        .bind(username)
-        .first<{ level: number }>();
-      if (target && target.level === 3) {
-        const cnt = await db
-          .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
-          .first<{ cnt: number }>();
-        if ((cnt?.cnt ?? 0) <= 1) {
-          return c.text(subsonicError(0, "Must keep at least one superadmin"), 200, XML);
-        }
+    if (!enabled && existingTarget?.level === 3) {
+      const cnt = await db
+        .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
+        .first<{ cnt: number }>();
+      if ((cnt?.cnt ?? 0) <= 1) {
+        return c.text(subsonicError(0, "Must keep at least one superadmin"), 200, XML);
       }
     }
     await db
@@ -265,16 +274,21 @@ const deleteUserHandler = async (c: C): Promise<Response> => {
     return c.text(subsonicError(10, "Missing username"), 400, XML);
   }
 
-  const canManage = await hasPermission(db, caller, "manage_users");
+  const canManage = await hasPermission(c.env, caller, "manage_users");
   if (!canManage) {
     return c.text(subsonicError(50, "manage_users permission required"), 403, XML);
   }
 
-  // Constraint A 鈥?keep at least one superadmin.
   const target = await db
     .prepare("SELECT level FROM users WHERE username = ?")
     .bind(username)
     .first<{ level: number }>();
+  // Constraint C 鈥?manage_users below super-admin can't remove an
+  // admin/super-admin account.
+  if (target && target.level >= ADMIN_TIER_LEVEL && caller.level < 3) {
+    return c.text(subsonicError(50, "Only a super-admin can delete admin/super-admin accounts"), 403, XML);
+  }
+  // Constraint A 鈥?keep at least one superadmin.
   if (target && target.level === 3) {
     const cnt = await db
       .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")

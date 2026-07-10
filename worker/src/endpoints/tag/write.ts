@@ -156,7 +156,7 @@ tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) =
 
 // ============================================================================
 // POST /tag/rescan  body: { ids: string[] }
-// 118 — Library.vue batch toolbar "重新扫描" action. For each master id,
+// Library.vue batch toolbar "重新扫描" action. For each master id,
 // resets tag_scanned=0 on its 'original' instances (transcoded/cached
 // derivatives are skipped — re-reading a transcode output's tags is
 // meaningless, we want the true source file re-parsed) and force-redispatches

@@ -1,16 +1,13 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatSize } from "../api";
-import { useWorkerPool } from "../stores/workerPool";
 import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
 import type { ScrapeResult } from "../lib/scrape";
-import { extractMetadata, isBrowserParse, suffixOf } from "../lib/metadata";
 
 const { t } = useI18n();
-const { authFetch, storageFetch, storagePost, tagFetch, edgesonicFetch, edgesonicPost, uploadFile, crossCopy, writeTags, submitMetadata, tidyFolder, restUrl, level, handleAuthError } = useAuth();
-const workerPool = useWorkerPool();
+const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, tidyFolder, restUrl, level } = useAuth();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
 interface DirEntry { name: string; }
@@ -48,30 +45,11 @@ const scanning = ref(false);
 const scanProcessed = ref(0);
 const scanRemaining = ref<number | null>(null);
 
-// Browser-side tag parse (041): for OGG/Opus/M4A/APE/... — the Worker tag
-// parser only knows MP3/FLAC/WAV, so we let music-metadata (wasm-free, ~350KB
-// gzip) handle the long tail right in the user's browser.
-const browserScanning = ref(false);
-const browserScanProcessed = ref(0);
-const browserScanTagged = ref(0);
-const browserScanTotal = ref(0);
-
-// the page header shows the current backlog; the auto-drain loop pulls one
-// batch at a time. The browser-auto behaviour is gated by the
-// scan_browser_auto feature flag (read once at load).
-interface PendingItem {
-  instanceId: string;
-  masterId: string;
-  sourceId: string;
-  storageUri: string;
-  suffix: string;
-  size: number;
-}
+// Files still awaiting metadata parse show up as a "待解析" badge in the
+// page header — draining is handled entirely by the background browser
+// worker pool (see stores/workerPool.ts + workers/taskExecutor.ts), this
+// page only reads the count.
 const pendingCount = ref(0);
-const pendingItems = ref<PendingItem[]>([]);
-const scanBrowserAutoEnabled = ref(false);
-const PENDING_BATCH = 50;
-let autoTriggerHandle: number | null = null;
 
 // R2 file operations state
 const renamingFile = ref<string | null>(null); // file name currently being renamed
@@ -114,6 +92,12 @@ async function loadSources() {
     const xml = await storageFetch("sources/list");
     sources.value = parseXmlAttrs(xml, "source")
       .filter((s) => s.enabled === "true" || s.enabled === "1")
+      // R2 already has its own dedicated hardcoded tab above (id='r2',
+      // wired to the isR2/r2Key() code path) — /storage/sources/list may
+      // also include a synthesised R2 row (id='r2-local') so it's editable
+      // from the Sources page. Filtering it out here avoids rendering two
+      // separate "R2" tabs for what the user experiences as one storage.
+      .filter((s) => s.type !== "r2")
       .map((s) => ({ id: s.id || "", type: s.type || "", name: s.name || "", baseUrl: s.baseUrl || "" }));
   } catch { sources.value = []; }
 }
@@ -149,44 +133,17 @@ function selectSource(id: string) {
 async function loadPending() {
   if (!currentSource.value || currentSource.value === "r2") {
     pendingCount.value = 0;
-    pendingItems.value = [];
     return;
   }
   try {
     const text = await storageFetch("scan/pending", {
       source: currentSource.value,
-      limit: String(PENDING_BATCH),
+      limit: "1",
     });
     const data = JSON.parse(text);
-    if (data?.ok) {
-      pendingCount.value = data.total ?? 0;
-      pendingItems.value = (data.items || []) as PendingItem[];
-    } else {
-      pendingCount.value = 0;
-      pendingItems.value = [];
-    }
+    pendingCount.value = data?.ok ? (data.total ?? 0) : 0;
   } catch {
     pendingCount.value = 0;
-    pendingItems.value = [];
-  }
-}
-
-// auto-drain. We deliberately don't gate by isSuperAdmin here; the user-level
-// switch is the feature flag itself (admin-only writeable, but everyone
-// honours the result).
-async function loadScanFeatureFlags() {
-  try {
-    const text = await edgesonicFetch("features/list");
-    const data = JSON.parse(text);
-    if (data?.ok) {
-      const strs = (data.featureStrings || []) as Array<{ key: string; value: string }>;
-      const v = strs.find((s) => s.key === "scan_browser_auto")?.value;
-      scanBrowserAutoEnabled.value = v !== "0";
-    }
-  } catch {
-    // Non-admin users hit 403 on features/list; treat as auto-disabled which
-    // mirrors the safer default for unsupervised cellular browsers.
-    scanBrowserAutoEnabled.value = false;
   }
 }
 
@@ -295,133 +252,6 @@ async function runTagScan() {
   } finally {
     scanning.value = false;
     scanRemaining.value = null;
-  }
-}
-
-//
-// Two modes:
-//   • pending-list mode (preferred, /storage/scan/pending) — drives the
-//     incremental scanner backlog: instances whose tag_scanned=0 (either
-//     because the WebDAV scanner just imported them or because their ETag /
-//     lastModified / size changed). Iterates batches of PENDING_BATCH until
-//     the queue empties or the user navigates away.
-//   • directory fallback — when the active source has no pending items
-//     (or we're on R2), parse every browser-parseable file in the current
-//     directory listing. Original 041 behaviour, preserved so a fresh
-//     upload still gets tags before the next scan tick.
-async function runBrowserRead() {
-  if (browserScanning.value) return;
-  // Prefer the pending list if it exists for the current source.
-  if (pendingItems.value.length > 0) {
-    await drainPendingQueue();
-    return;
-  }
-  // Fallback: scan the directory listing.
-  const targets = files.value.filter((f) => isBrowserParse(suffixOf(f.name)));
-  if (!targets.length) {
-    showToast(t("files.browserReadNothing"), "success");
-    return;
-  }
-  browserScanning.value = true;
-  browserScanProcessed.value = 0;
-  browserScanTagged.value = 0;
-  browserScanTotal.value = targets.length;
-  try {
-    for (const f of targets) {
-      browserScanProcessed.value++;
-      try {
-        const lookup = JSON.parse(await tagFetch("findInstanceByUri", { uri: f.uri }));
-        if (!lookup?.ok || !lookup.instanceId || !lookup.masterId) continue;
-        const resp = await fetch(restUrl("stream", { id: lookup.masterId }));
-        if (!resp.ok) continue;
-        const blob = await resp.blob();
-        const file = new File([blob], f.name, { type: f.contentType || blob.type });
-        const meta = await extractMetadata(file);
-        const submit = await submitMetadata(lookup.instanceId, meta as Record<string, string | number>);
-        if (submit.ok) browserScanTagged.value++;
-      } catch { /* per-file failures don't poison the batch */ }
-    }
-    showToast(t("files.browserReadDone", { tagged: browserScanTagged.value, total: targets.length }));
-  } finally {
-    browserScanning.value = false;
-  }
-}
-
-// item in the batch failed (defensive: avoids an infinite spin on bad data).
-async function drainPendingQueue() {
-  browserScanning.value = true;
-  browserScanProcessed.value = 0;
-  browserScanTagged.value = 0;
-  browserScanTotal.value = pendingCount.value;
-  try {
-    let safetyBudget = 20;                               // ≤ 20 × 50 = 1000 items per click
-    while (pendingItems.value.length > 0 && safetyBudget > 0) {
-      safetyBudget--;
-      const batch = pendingItems.value.slice();
-      let batchTagged = 0;
-      for (const item of batch) {
-        // suffix gate so we don't waste a /rest/stream call on the formats
-        // the Worker tag parser already handles.
-        if (!isBrowserParse(item.suffix)) {
-          browserScanProcessed.value++;
-          continue;
-        }
-        browserScanProcessed.value++;
-        try {
-          const resp = await fetch(restUrl("stream", { id: item.masterId }));
-          if (!resp.ok) continue;
-          const blob = await resp.blob();
-          const file = new File([blob], item.storageUri, { type: blob.type });
-          const meta = await extractMetadata(file);
-          const submit = await submitMetadata(item.instanceId, meta as Record<string, string | number>);
-          if (submit.ok) {
-            browserScanTagged.value++;
-            batchTagged++;
-          }
-        } catch { /* per-file failures don't poison the batch */ }
-      }
-      // Refresh — if nothing in this batch managed to flip tag_scanned, the
-      // server can't make progress so stop (would otherwise spin forever).
-      await loadPending();
-      if (batchTagged === 0) break;
-    }
-    showToast(
-      t("files.browserReadDone", { tagged: browserScanTagged.value, total: browserScanTotal.value }),
-    );
-  } finally {
-    browserScanning.value = false;
-  }
-}
-
-// a non-zero pending count must exist. We delay by 5s after the user lands on
-// the page so a quick tab-flip doesn't spin up the loop unnecessarily.
-function scheduleAutoDrain() {
-  if (autoTriggerHandle !== null) {
-    clearTimeout(autoTriggerHandle);
-    autoTriggerHandle = null;
-  }
-  if (!scanBrowserAutoEnabled.value) return;
-  if (document.visibilityState !== "visible") return;
-  if (browserScanning.value) return;
-  if (pendingCount.value <= 0) return;
-  autoTriggerHandle = window.setTimeout(() => {
-    autoTriggerHandle = null;
-    if (
-      scanBrowserAutoEnabled.value &&
-      document.visibilityState === "visible" &&
-      !browserScanning.value &&
-      pendingItems.value.length > 0
-    ) {
-      drainPendingQueue();
-    }
-  }, 5000);
-}
-
-function onVisibilityChange() {
-  if (document.visibilityState === "visible") scheduleAutoDrain();
-  else if (autoTriggerHandle !== null) {
-    clearTimeout(autoTriggerHandle);
-    autoTriggerHandle = null;
   }
 }
 
@@ -638,113 +468,6 @@ async function runTidyFolder() {
 
 function closeTidyFolder() { tidyOpen.value = false; }
 
-// HUD pulls /edgesonic/work/status every 30s so super-admins can watch the
-// queue counts + cancel stuck failures. Non-admins hit 403 → we just hide
-// the failed-list panel and rely on store-side stats for progress.
-interface WorkStatusRecent {
-  id: string;
-  task_type: string;
-  status: string;
-  attempts: number;
-  max_attempts: number;
-  error_message: string | null;
-  created_at: number;
-}
-interface WorkStatusResp {
-  ok: boolean;
-  counts?: Record<string, number>;
-  recent?: WorkStatusRecent[];
-  error?: string;
-}
-const workStatus = ref<WorkStatusResp | null>(null);
-const workStatusError = ref<string | null>(null);
-const cancelingId = ref<string | null>(null);
-const isSuperAdmin = computed(() => level.value >= 3);
-const showWorkQueueHud = computed(() =>
-  workerPool.isWorking ||
-  workerPool.stats.completed > 0 ||
-  workerPool.stats.failed > 0 ||
-  (workStatus.value?.counts?.queued ?? 0) > 0,
-);
-const queuedTotal = computed(() => workStatus.value?.counts?.queued ?? 0);
-const failedRows = computed(
-  () => (workStatus.value?.recent || []).filter((r) => r.status === "failed").slice(0, 10),
-);
-const failedCount = computed(() => workStatus.value?.counts?.failed ?? 0);
-const progressPct = computed(() => {
-  const done = workerPool.stats.completed;
-  const total = done + queuedTotal.value;
-  if (total <= 0) return 0;
-  return Math.min(100, Math.round((done / total) * 100));
-});
-
-async function loadWorkStatus() {
-  if (!isSuperAdmin.value) return;
-  try {
-    const text = await edgesonicFetch("work/status");
-    const data: WorkStatusResp = JSON.parse(text);
-    if (data.ok) {
-      workStatus.value = data;
-      workStatusError.value = null;
-    } else {
-      workStatusError.value = data.error || t("files.workQueue.statusLoadFailed");
-    }
-  } catch (e) {
-    if (handleAuthError(e)) {
-      showToast(t("common.sessionExpired"), "error");
-      stopWorkStatusPolling();
-      return;
-    }
-    workStatusError.value = t("files.workQueue.statusLoadFailed");
-  }
-}
-
-async function cancelWorkTask(id: string) {
-  cancelingId.value = id;
-  try {
-    const text = await edgesonicPost("work/cancel", { id });
-    const data = JSON.parse(text);
-    if (data?.ok) {
-      showToast(t("files.workQueue.canceled"));
-      await loadWorkStatus();
-    } else {
-      showToast(t("files.workQueue.cancelFailed"), "error");
-    }
-  } catch {
-    showToast(t("files.workQueue.cancelFailed"), "error");
-  } finally {
-    cancelingId.value = null;
-  }
-}
-
-function toggleWorkerPool() {
-  const next = !workerPool.enabled;
-  workerPool.setEnabled(next);
-  if (next) {
-    // Force an immediate poll so the user gets feedback the resume happened.
-    void workerPool.pollNow();
-  }
-}
-
-let workStatusHandle: number | null = null;
-function startWorkStatusPolling() {
-  if (workStatusHandle !== null) return;
-  if (!isSuperAdmin.value) return;
-  // Kick off an initial fetch so the panel populates without waiting 30s.
-  void loadWorkStatus();
-  workStatusHandle = window.setInterval(loadWorkStatus, 30_000);
-}
-function stopWorkStatusPolling() {
-  if (workStatusHandle !== null) {
-    clearInterval(workStatusHandle);
-    workStatusHandle = null;
-  }
-}
-function onWorkStatusVisibilityChange() {
-  if (document.visibilityState === "visible") startWorkStatusPolling();
-  else stopWorkStatusPolling();
-}
-
 async function onTagEditorSubmit(patch: Record<string, string | number>, cover?: { data: string; mime: string }) {
   if (!editTargetId.value || (!Object.keys(patch).length && !cover)) return;
   editBusy.value = true; editMsg.value = ""; editErr.value = false;
@@ -769,27 +492,10 @@ async function onTagEditorSubmit(patch: Record<string, string | number>, cover?:
 
 onMounted(async () => {
   await loadSources();
-  await loadScanFeatureFlags();
   await loadDir();
   await loadPending();
-  document.addEventListener("visibilitychange", onVisibilityChange);
-  scheduleAutoDrain();
-  document.addEventListener("visibilitychange", onWorkStatusVisibilityChange);
-  startWorkStatusPolling();
 });
 
-onUnmounted(() => {
-  document.removeEventListener("visibilitychange", onVisibilityChange);
-  if (autoTriggerHandle !== null) {
-    clearTimeout(autoTriggerHandle);
-    autoTriggerHandle = null;
-  }
-  document.removeEventListener("visibilitychange", onWorkStatusVisibilityChange);
-  stopWorkStatusPolling();
-});
-
-// re-evaluate whether auto-drain should kick in.
-watch(pendingCount, () => scheduleAutoDrain());
 </script>
 
 <template>
@@ -801,101 +507,19 @@ watch(pendingCount, () => scheduleAutoDrain());
       </div>
       <div class="page-actions">
         <span v-if="scanning" class="scan-progress">{{ t("files.scanProgress", { processed: scanProcessed, remaining: scanRemaining ?? "…" }) }}</span>
-        <span v-if="browserScanning" class="scan-progress">{{ t("files.browserReadProgress", { processed: browserScanProcessed, total: browserScanTotal }) }}</span>
-        <span v-if="!browserScanning && pendingCount > 0" class="pending-badge" :title="t('files.pendingBadgeTitle')">
+        <span v-if="pendingCount > 0" class="pending-badge" :title="t('files.pendingBadgeTitle')">
           {{ t("files.pendingBadge", { n: pendingCount }) }}
         </span>
-        <button v-if="canScan" class="btn-secondary" :disabled="scanning || browserScanning" @click="runTagScan">{{ t("files.scanTags") }}</button>
-        <button v-if="canScan" class="btn-secondary" :disabled="scanning || browserScanning" @click="runBrowserRead">{{ t("files.browserRead") }}</button>
-        <button v-if="canTidy" class="btn-secondary" :disabled="scanning || browserScanning || tidyBusy" @click="openTidyFolder">{{ t("files.tidy") }}</button>
+        <button v-if="canScan" class="btn-secondary" :disabled="scanning" @click="runTagScan">{{ t("files.scanTags") }}</button>
+        <button v-if="canTidy" class="btn-secondary" :disabled="scanning || tidyBusy" @click="openTidyFolder">{{ t("files.tidy") }}</button>
         <button v-if="canUpload" class="btn-primary" @click="showUpload = !showUpload">{{ t("files.upload") }}</button>
       </div>
     </div>
 
-    <!-- Work-queue HUD: progress + speed + pause + recent chips.
-         Failed list panel only shows for super-admin (the /work/status
-         endpoint is level=3, non-admins simply don't get the data). -->
-    <div v-if="showWorkQueueHud" class="work-queue-card card">
-      <div class="card-header">
-        <span class="card-title">{{ t("files.workQueue.title") }}</span>
-        <div class="wq-actions">
-          <button
-            v-if="workerPool.eligible"
-            class="btn-secondary wq-toggle"
-            :class="{ resumed: workerPool.enabled }"
-            @click="toggleWorkerPool"
-          >
-            {{ workerPool.enabled ? t("files.workQueue.pause") : t("files.workQueue.resume") }}
-          </button>
-        </div>
-      </div>
-
-      <div class="wq-progress-line">
-        <span v-if="queuedTotal > 0" class="wq-progress-text">
-          {{ t("files.workQueue.progress", { completed: workerPool.stats.completed, queued: queuedTotal }) }}
-        </span>
-        <span v-else class="wq-progress-text">
-          {{ t("files.workQueue.progressNoQueue", { completed: workerPool.stats.completed, failed: workerPool.stats.failed }) }}
-        </span>
-        <span class="wq-speed">
-          <template v-if="workerPool.speedPerMin === null">{{ t("files.workQueue.speedPending") }}</template>
-          <template v-else>{{ t("files.workQueue.speed", { speed: workerPool.speedPerMin }) }}</template>
-        </span>
-      </div>
-
-      <div v-if="queuedTotal > 0" class="wq-progress-bar">
-        <div class="wq-progress-fill" :style="{ width: progressPct + '%' }"></div>
-      </div>
-
-      <div v-if="workerPool.stats.currentTaskType" class="wq-current mono-label">
-        {{ t("files.workQueue.current", { type: workerPool.stats.currentTaskType }) }}
-      </div>
-
-      <p v-if="!workerPool.enabled" class="wq-paused-hint">{{ t("files.workQueue.paused") }}</p>
-
-      <!-- Recent task chips — only when we have something to show. -->
-      <div v-if="workerPool.recent.length" class="wq-recent">
-        <div class="mono-label wq-recent-label">{{ t("files.workQueue.recent") }}</div>
-        <div class="wq-recent-list">
-          <div
-            v-for="r in workerPool.recent"
-            :key="r.id"
-            class="wq-recent-chip"
-            :class="{ 'wq-ok': r.status === 'ok', 'wq-fail': r.status === 'fail' }"
-            :title="r.error || r.taskType"
-          >
-            <span class="wq-chip-icon">{{ r.status === "ok" ? "✓" : "✗" }}</span>
-            <span class="wq-chip-name">{{ r.fileName }}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Super-admin failed-task panel — pulls /work/status every 30s. -->
-      <div v-if="isSuperAdmin && failedCount > 0" class="wq-failed">
-        <div class="wq-failed-header">
-          <span class="mono-label">{{ t("files.workQueue.failed", { n: failedCount }) }}</span>
-          <button class="btn-secondary wq-refresh" @click="loadWorkStatus">{{ t("files.workQueue.refresh") }}</button>
-        </div>
-        <div v-if="failedRows.length" class="wq-failed-list">
-          <div v-for="row in failedRows" :key="row.id" class="wq-failed-row">
-            <span class="wq-failed-text" :title="row.error_message || ''">
-              {{ t("files.workQueue.failedRow", { type: row.task_type, error: (row.error_message || "").slice(0, 80) }) }}
-            </span>
-            <button
-              class="op-btn wq-cancel"
-              :disabled="cancelingId === row.id"
-              @click="cancelWorkTask(row.id)"
-            >{{ t("files.workQueue.cancel") }}</button>
-          </div>
-        </div>
-        <div v-else class="wq-failed-empty">{{ t("files.workQueue.failedEmpty") }}</div>
-      </div>
-
-      <p v-if="workStatusError" class="wq-error">{{ workStatusError }}</p>
-
-      <div class="corner corner-tl"></div>
-      <div class="corner corner-br"></div>
-    </div>
+    <!-- Work-queue HUD lived here until task 122 — moved entirely to Tools.vue's
+         「WORKER 预解析」panel. The /files page no longer manages or surfaces
+         work_queue state, only the existing 「待解析」badge above (pendingCount)
+         so the user still knows when files are awaiting parse. -->
 
     <div class="source-bar">
       <span class="source-bar-label">{{ t("files.source") }}</span>
@@ -1119,7 +743,6 @@ watch(pendingCount, () => scheduleAutoDrain());
 </template>
 
 <style scoped>
-.files-page { max-width: 1100px; }
 .page-actions { display: flex; gap: 0.5rem; align-items: center; }
 .scan-progress {
   font-family: var(--font-mono);
@@ -1321,138 +944,8 @@ watch(pendingCount, () => scheduleAutoDrain());
 }
 .te-msg.error { color: var(--color-status-error); }
 
-.work-queue-card { margin-bottom: 1.25rem; padding: 0.85rem 1rem; }
-.work-queue-card .card-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 0.6rem;
-}
-.wq-actions { display: flex; gap: 0.4rem; align-items: center; }
-.wq-toggle {
-  font-family: var(--font-mono); font-size: var(--fs-xs);
-  letter-spacing: 0.08em;
-  padding: 0.2rem 0.7rem;
-}
-.wq-toggle.resumed { color: var(--color-status-success); border-color: var(--color-status-success); }
-
-.wq-progress-line {
-  display: flex; align-items: center; justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  color: var(--color-text-secondary);
-  margin-bottom: 0.4rem;
-}
-.wq-progress-text { color: var(--color-text-primary); }
-.wq-speed {
-  color: var(--color-accent-primary);
-  font-size: var(--fs-xs);
-  letter-spacing: 0.05em;
-}
-
-.wq-progress-bar {
-  height: 6px;
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 2px;
-  overflow: hidden;
-  margin-bottom: 0.5rem;
-}
-.wq-progress-fill {
-  height: 100%;
-  background: var(--color-accent-primary);
-  transition: width 0.3s ease;
-}
-
-.wq-current {
-  color: var(--color-accent-primary);
-  font-size: var(--fs-xs);
-  margin-bottom: 0.4rem;
-  animation: pulse 2s ease-in-out infinite;
-}
-
-.wq-paused-hint {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  margin: 0.2rem 0 0.5rem 0;
-}
-
-.wq-recent { margin-top: 0.6rem; }
-.wq-recent-label { color: var(--color-text-muted); margin-bottom: 0.35rem; }
-.wq-recent-list {
-  display: flex; gap: 0.4rem; flex-wrap: wrap;
-}
-.wq-recent-chip {
-  display: inline-flex; align-items: center; gap: 0.3rem;
-  padding: 0.2rem 0.55rem;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 2px;
-  background: var(--color-bg-secondary);
-  max-width: 16rem;
-}
-.wq-recent-chip.wq-ok { color: var(--color-text-secondary); }
-.wq-recent-chip.wq-fail {
-  color: var(--color-status-error);
-  border-color: var(--color-status-error);
-}
-.wq-chip-icon { flex-shrink: 0; font-weight: bold; }
-.wq-chip-name {
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  min-width: 0;
-}
-
-.wq-failed {
-  margin-top: 0.85rem;
-  border-top: 1px solid var(--color-border-subtle);
-  padding-top: 0.7rem;
-}
-.wq-failed-header {
-  display: flex; align-items: center; justify-content: space-between;
-  margin-bottom: 0.4rem;
-}
-.wq-failed-header .mono-label { color: var(--color-status-error); }
-.wq-refresh {
-  font-family: var(--font-mono); font-size: var(--fs-xs);
-  padding: 0.15rem 0.5rem;
-}
-.wq-failed-list {
-  display: flex; flex-direction: column; gap: 0.25rem;
-  max-height: 12rem; overflow-y: auto;
-}
-.wq-failed-row {
-  display: flex; align-items: center; gap: 0.5rem;
-  padding: 0.3rem 0.4rem;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border-subtle);
-  border-left: 2px solid var(--color-status-error);
-  border-radius: 2px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-}
-.wq-failed-text {
-  flex: 1; min-width: 0;
-  color: var(--color-text-secondary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.wq-cancel {
-  opacity: 1;
-  color: var(--color-text-muted);
-}
-.wq-cancel:hover {
-  color: var(--color-status-error);
-  border-color: var(--color-status-error);
-}
-.wq-failed-empty {
-  font-family: var(--font-mono); font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  padding: 0.3rem 0;
-}
-
-.wq-error {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-status-error);
-  margin-top: 0.4rem;
-}
+/* 122 — the Files-page work-queue HUD (`.work-queue-card` + `.wq-*` rules)
+   has been removed entirely. The canonical "Worker 预解析" panel now lives
+   in Tools.vue. Keeping this comment so a future grep for "wq-" doesn't
+   waste time re-discovering the deletion. */
 </style>

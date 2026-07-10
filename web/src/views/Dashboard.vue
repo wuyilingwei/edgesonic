@@ -510,7 +510,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.dashboard { max-width: 1200px; }
 .stats-grid { margin-bottom: 1rem; }
 .stat-card { text-align: center; padding: 1.4rem 1rem 1.1rem; }
 .stat-num {
