@@ -5,12 +5,19 @@ import { useAuth } from "../api";
 
 const { t } = useI18n();
 const { isSuperAdmin, edgesonicFetch, edgesonicPost } = useAuth();
-const permissions = ref<Array<{ level: number; name: string; enabled: boolean; maxRph: number }>>([]);
+const permissions = ref<Array<{ level: number; name: string; enabled: boolean }>>([]);
+const dirty = ref(false);
+const saving = ref(false);
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
-const permKeys = ["stream", "download", "upload", "edit_tags", "manage_sources", "manage_users", "manage_permissions", "browse", "search"];
+// Ordered by sensitivity, least → most: read-only browsing first, account/
+// infrastructure-altering capabilities last. manage_permissions is
+// deliberately absent — it's hardcoded to level 3 only server-side (see
+// worker/src/utils/permissions.ts), never a toggleable row here, so a
+// level-2 admin can never grant themselves or anyone else more permissions.
+const permKeys = ["browse", "search", "stream", "download", "upload", "edit_tags", "manage_sources", "manage_users"];
 
 async function load() {
   try {
@@ -23,26 +30,52 @@ async function load() {
         level: parseInt(m[1].match(/level="(\d)"/)?.[1] || "0"),
         name: m[1].match(/name="([^"]+)"/)?.[1] || "",
         enabled: (m[1].match(/enabled="([^"]+)"/)?.[1] || "0") === "1",
-        maxRph: parseInt(m[1].match(/maxRph="(\d+)"/)?.[1] || "0"),
       });
     }
     permissions.value = items;
+    dirty.value = false;
   } catch { permissions.value = []; }
 }
 
-async function toggle(level: number, name: string, enabled: boolean) {
-  try {
-    await edgesonicPost("permissions/update", { level, permission: name, enabled: enabled ? 1 : 0 });
-    load();
-    showToast(t("settings.permissions.updated", { name: t(`settings.permissions.perms.${name}`), state: enabled ? t("common.on") : t("common.off") }));
-  } catch { showToast(t("settings.permissions.updateFailed"), "error"); }
+// checkboxes just mutate this local reactive copy; nothing is sent to
+// the server until Save is clicked. Replaces the old per-toggle real-time
+// POST (each checkbox used to fire its own /permissions/update request).
+//
+// Cascade rule (Rosmontis): granting a permission to a lower level should
+// default it on for every higher level too — a level-1 user getting
+// `download` implies level-2/3 should have it as well unless an admin
+// explicitly turns it back off for that level. This only cascades upward
+// on enable; disabling never cascades (turning level 1 off doesn't touch
+// level 2/3, and an explicit uncheck after a cascade always wins since it's
+// just the next click overwriting the same field).
+function setPerm(level: number, name: string, checked: boolean) {
+  const row = permissions.value.find((p) => p.level === level && p.name === name);
+  if (row) row.enabled = checked;
+  else permissions.value.push({ level, name, enabled: checked });
+}
+function toggle(level: number, name: string, checked: boolean) {
+  setPerm(level, name, checked);
+  if (checked) {
+    for (let higher = level + 1; higher <= 3; higher++) setPerm(higher, name, true);
+  }
+  dirty.value = true;
 }
 
-async function setRph(level: number, name: string, rph: number) {
+async function save() {
+  if (!dirty.value || saving.value) return;
+  saving.value = true;
   try {
-    await edgesonicPost("permissions/update", { level, permission: name, max_rph: rph });
-    load(); showToast(t("settings.permissions.rateUpdated"));
-  } catch { showToast(t("settings.permissions.rateFailed"), "error"); }
+    const text = await edgesonicPost("permissions/save", { permissions: permissions.value });
+    const res = JSON.parse(text) as { ok: boolean; error?: string; envPushed?: boolean; envError?: string };
+    if (!res.ok) throw new Error(res.error || "save failed");
+    dirty.value = false;
+    showToast(res.envPushed
+      ? t("settings.permissions.savedEnv")
+      : t("settings.permissions.saved"));
+  } catch (e) {
+    showToast(`${t("settings.permissions.saveFailed")}: ${e instanceof Error ? e.message : String(e)}`, "error");
+  }
+  saving.value = false;
 }
 
 onMounted(load);
@@ -55,42 +88,46 @@ onMounted(load);
       <div>{{ t("settings.permissions.denied") }}</div>
     </div>
 
-    <div v-else class="perm-grid">
-      <div v-for="level in [3, 2, 1, 0]" :key="level" class="card perm-card">
-        <div class="card-header">
-          <span class="card-title">{{ t(`settings.permissions.levels.${levelKeys[level]}`) }}</span>
-          <span :class="['status-badge', level === 3 ? 'warning' : level === 2 ? 'info' : level === 1 ? 'success' : 'muted']">{{ t("settings.permissions.level", { n: level }) }}</span>
-        </div>
-        <div class="perm-list">
-          <div v-for="key in permKeys" :key="key" class="perm-row">
-            <span class="perm-name">{{ t(`settings.permissions.perms.${key}`) }}</span>
-            <div class="perm-controls">
+    <template v-else>
+      <div class="perm-toolbar">
+        <span v-if="dirty" class="perm-dirty-hint">{{ t("settings.permissions.unsaved") }}</span>
+        <button class="btn-primary btn-sm" :disabled="!dirty || saving" @click="save">
+          {{ saving ? t("settings.permissions.saving") : t("common.save") }}
+        </button>
+      </div>
+
+      <div class="perm-grid">
+        <div v-for="level in [3, 2, 1, 0]" :key="level" class="card perm-card">
+          <div class="card-header">
+            <span class="card-title">{{ t(`settings.permissions.levels.${levelKeys[level]}`) }}</span>
+            <span :class="['status-badge', level === 3 ? 'warning' : level === 2 ? 'info' : level === 1 ? 'success' : 'muted']">{{ t("settings.permissions.level", { n: level }) }}</span>
+          </div>
+          <div class="perm-list">
+            <div v-for="key in permKeys" :key="key" class="perm-row">
+              <span class="perm-name">{{ t(`settings.permissions.perms.${key}`) }}</span>
               <label class="toggle">
-                <input type="checkbox" :checked="permissions.find(p => p.level === level && p.name === key)?.enabled" @change="toggle(level, key, ($event.target as HTMLInputElement).checked)" />
+                <input
+                  type="checkbox"
+                  :checked="permissions.find(p => p.level === level && p.name === key)?.enabled"
+                  @change="toggle(level, key, ($event.target as HTMLInputElement).checked)"
+                />
                 <span class="toggle-slider"></span>
               </label>
-              <input
-                type="number"
-                class="form-input rph-input"
-                :value="permissions.find(p => p.level === level && p.name === key)?.maxRph || 0"
-                @change="setRph(level, key, parseInt(($event.target as HTMLInputElement).value) || 0)"
-                placeholder="RPH"
-                min="0"
-              />
-              <span class="rph-label">{{ t("settings.permissions.rph") }}</span>
             </div>
           </div>
+          <div class="corner corner-tr"></div>
+          <div class="corner corner-bl"></div>
         </div>
-        <div class="corner corner-tr"></div>
-        <div class="corner corner-bl"></div>
       </div>
-    </div>
+    </template>
 
     <div v-if="toast.show" :class="['toast', `toast-${toast.type}`]">{{ toast.msg }}</div>
   </div>
 </template>
 
 <style scoped>
+.perm-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 0.7rem; margin-bottom: 0.8rem; }
+.perm-dirty-hint { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-accent-primary); }
 .perm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1rem; }
 .perm-card { padding: 0; overflow: hidden; }
 .perm-card .card-header {
@@ -107,7 +144,4 @@ onMounted(load);
 }
 .perm-row:last-child { border-bottom: none; }
 .perm-name { font-size: var(--fs-sm); color: var(--color-text-primary); }
-.perm-controls { display: flex; align-items: center; gap: 0.4rem; }
-.rph-input { width: 56px; padding: 0.15rem 0.35rem; font-size: var(--fs-xs); text-align: center; }
-.rph-label { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); width: 30px; }
 </style>

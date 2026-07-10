@@ -68,7 +68,7 @@ const getPlaylistsHandler = async (c: import("hono").Context<{ Bindings: Env; Va
   const username = c.req.query("username");
   let target = user.username;
   if (username && username !== user.username) {
-    const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+    const canAll = await hasPermission(c.env, user, "view_all_users_items");
     if (canAll) target = username;
   }
 
@@ -97,7 +97,7 @@ const getPlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; Var
 
   // pre-existing `user.level !== 3` check).
   if (playlist.owner !== user.username && !playlist.public) {
-    const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+    const canAll = await hasPermission(c.env, user, "view_all_users_items");
     if (!canAll) {
       return c.text(subsonicError(50, "Not authorized to view this playlist"), 403, XML);
     }
@@ -133,7 +133,7 @@ const createPlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
     const existing = await queries.getPlaylistById(playlistId);
     if (!existing) return c.text(subsonicError(70, "Playlist not found"), 404, XML);
     if (existing.owner !== user.username) {
-      const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+      const canAll = await hasPermission(c.env, user, "view_all_users_items");
       if (!canAll) {
         return c.text(subsonicError(50, "Not authorized to modify this playlist"), 403, XML);
       }
@@ -190,7 +190,7 @@ const updatePlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
   const existing = await queries.getPlaylistById(playlistId);
   if (!existing) return c.text(subsonicError(70, "Playlist not found"), 404, XML);
   if (existing.owner !== user.username) {
-    const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+    const canAll = await hasPermission(c.env, user, "view_all_users_items");
     if (!canAll) {
       return c.text(subsonicError(50, "Not authorized to modify this playlist"), 403, XML);
     }
@@ -232,7 +232,7 @@ const deletePlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
   const existing = await queries.getPlaylistById(id);
   if (!existing) return c.text(subsonicError(70, "Playlist not found"), 404, XML);
   if (existing.owner !== user.username) {
-    const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+    const canAll = await hasPermission(c.env, user, "view_all_users_items");
     if (!canAll) {
       return c.text(subsonicError(50, "Not authorized to delete this playlist"), 403, XML);
     }

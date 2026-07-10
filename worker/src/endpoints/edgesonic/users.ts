@@ -30,6 +30,12 @@ usersRoutes.get("/users/list", permissionMiddleware("manage_users"), async (c) =
   return c.json({ ok: true, users });
 });
 
+// Admin (level 2) and super-admin (level 3) accounts can only be created,
+// edited, or removed by a super-admin — manage_users alone (grantable down
+// to level 1) must not be able to touch peer/higher-privilege accounts.
+// Rosmontis: "管理用户权限无权管理管理员，管理员和超管只能由超管控制".
+const ADMIN_TIER_LEVEL = 2;
+
 usersRoutes.post("/users/create", permissionMiddleware("manage_users"), async (c) => {
   const body = await c.req.json<{ username: string; password: string; level?: number }>();
   if (!body.username || !body.password) {
@@ -38,6 +44,10 @@ usersRoutes.post("/users/create", permissionMiddleware("manage_users"), async (c
   const level = body.level ?? 1;
   if (level < 0 || level > 3) {
     return c.json({ ok: false, error: "Invalid level (0-3)" }, 400);
+  }
+  const caller = c.get("user");
+  if (level >= ADMIN_TIER_LEVEL && caller.level < 3) {
+    return c.json({ ok: false, error: "Only a super-admin can create admin/super-admin accounts" }, 403);
   }
   const db = c.env.DB;
   const now = Math.floor(Date.now() / 1000);
@@ -83,6 +93,22 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
     return c.json({ ok: false, error: "Cannot promote yourself to superadmin" }, 400);
   }
 
+  // Constraint C — a manage_users caller below super-admin can't touch an
+  // existing admin/super-admin account, and can't promote anyone INTO the
+  // admin tier either (both checked against the same pre-edit snapshot so
+  // a single request can't dodge this by editing level and other fields
+  // together).
+  const existingTarget = await db
+    .prepare("SELECT level FROM users WHERE username = ?")
+    .bind(body.username)
+    .first<{ level: number }>();
+  const targetIsOrBecomesAdminTier =
+    (existingTarget && existingTarget.level >= ADMIN_TIER_LEVEL) ||
+    (body.level !== undefined && body.level >= ADMIN_TIER_LEVEL);
+  if (targetIsOrBecomesAdminTier && caller.level < 3) {
+    return c.json({ ok: false, error: "Only a super-admin can manage admin/super-admin accounts" }, 403);
+  }
+
   if (body.password) {
     await db.prepare(
       "UPDATE users SET master_password = ?, updated_at = ? WHERE username = ?"
@@ -93,18 +119,12 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
       return c.json({ ok: false, error: "Invalid level (0-3)" }, 400);
     }
     // Constraint A — must keep at least one active superadmin when demoting.
-    if (body.level < 3) {
-      const targetUser = await db
-        .prepare("SELECT level FROM users WHERE username = ?")
-        .bind(body.username)
-        .first<{ level: number }>();
-      if (targetUser && targetUser.level === 3) {
-        const countRow = await db
-          .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
-          .first<{ cnt: number }>();
-        if ((countRow?.cnt ?? 0) <= 1) {
-          return c.json({ ok: false, error: "Must keep at least one superadmin" }, 400);
-        }
+    if (body.level < 3 && existingTarget?.level === 3) {
+      const countRow = await db
+        .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
+        .first<{ cnt: number }>();
+      if ((countRow?.cnt ?? 0) <= 1) {
+        return c.json({ ok: false, error: "Must keep at least one superadmin" }, 400);
       }
     }
     await db.prepare(
@@ -113,18 +133,12 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
   }
   if (body.enabled !== undefined) {
     // Constraint A — disabling a superadmin must leave at least one active.
-    if (!body.enabled) {
-      const targetUser = await db
-        .prepare("SELECT level FROM users WHERE username = ?")
-        .bind(body.username)
-        .first<{ level: number }>();
-      if (targetUser && targetUser.level === 3) {
-        const countRow = await db
-          .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
-          .first<{ cnt: number }>();
-        if ((countRow?.cnt ?? 0) <= 1) {
-          return c.json({ ok: false, error: "Must keep at least one superadmin" }, 400);
-        }
+    if (!body.enabled && existingTarget?.level === 3) {
+      const countRow = await db
+        .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
+        .first<{ cnt: number }>();
+      if ((countRow?.cnt ?? 0) <= 1) {
+        return c.json({ ok: false, error: "Must keep at least one superadmin" }, 400);
       }
     }
     await db.prepare(
@@ -139,12 +153,18 @@ usersRoutes.post("/users/delete", permissionMiddleware("manage_users"), async (c
   if (!body.username) {
     return c.json({ ok: false, error: "Missing username" }, 400);
   }
+  const caller = c.get("user");
   const db = c.env.DB;
-  // Constraint A — deleting a superadmin must leave at least one active.
   const targetUser = await db
     .prepare("SELECT level FROM users WHERE username = ?")
     .bind(body.username)
     .first<{ level: number }>();
+  // Constraint C — manage_users below super-admin can't remove an
+  // admin/super-admin account.
+  if (targetUser && targetUser.level >= ADMIN_TIER_LEVEL && caller.level < 3) {
+    return c.json({ ok: false, error: "Only a super-admin can delete admin/super-admin accounts" }, 403);
+  }
+  // Constraint A — deleting a superadmin must leave at least one active.
   if (targetUser && targetUser.level === 3) {
     const countRow = await db
       .prepare("SELECT COUNT(*) as cnt FROM users WHERE level = 3 AND enabled = 1")
@@ -200,7 +220,7 @@ usersRoutes.post("/users/setAvatar", async (c) => {
   const caller = c.get("user");
   const isSelf = caller.username === targetUsername;
   if (!isSelf) {
-    const canManage = await hasPermission(c.env.DB, caller, "manage_users");
+    const canManage = await hasPermission(c.env, caller, "manage_users");
     if (!canManage) {
       return c.json({ ok: false, error: "manage_users permission required" }, 403);
     }

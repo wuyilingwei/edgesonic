@@ -137,7 +137,7 @@ function msToLrcTimestamp(ms: number): string {
 }
 
 // ============================================================================
-// nativeLyricsFallback — 116. music-metadata's per-format tag mapper only
+// nativeLyricsFallback — music-metadata's per-format tag mapper only
 // promotes specific field names into `common.lyrics`. For Vorbis/FLAC
 // (node_modules/music-metadata/lib/ogg/vorbis/VorbisTagMapper.js) that's the
 // bare `LYRICS` key only — `SYNCEDLYRICS`/`UNSYNCEDLYRICS` (common output of

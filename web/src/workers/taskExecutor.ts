@@ -103,7 +103,7 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
   // (512KB for trailing id3/INFO chunks). Concatenate with a gap so
   // music-metadata sees both regions. For non-WAV the tail fetch is skipped
   // (FLAC/MP3/M4A tags are at the head).
-  const isWav = (payload.suffix || "").toLowerCase() === "wav";
+  const isWav = String(payload.suffix || "").toLowerCase() === "wav";
   const HEAD_BYTES = 2 * 1024 * 1024; // 2MB — covers large ID3v2 + APIC
   const TAIL_BYTES = 512 * 1024;      // 512KB — trailing id3/INFO chunk
 

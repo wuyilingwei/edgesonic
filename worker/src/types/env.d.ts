@@ -32,4 +32,16 @@ interface Env {
   // See worker/SECRETS.md §3.
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
+  // Permission matrix cache, pushed dynamically via
+  // POST /edgesonic/permissions/save using the same CF-API-secret-write
+  // pattern as CF_API_TOKEN (054/cf.ts:setToken) — no redeploy needed. JSON
+  // shape: `{ [level: string]: { [permission: string]: boolean } }`.
+  // Read before D1 in permissionMiddleware/hasPermission (utils/
+  // permissions.ts); D1's user_permissions.enabled column is the fallback
+  // when this is unset or fails to parse.
+  PERMISSIONS_OVERRIDE?: string;
+  // Mirrors [[r2_buckets]] bucket_name in wrangler.toml — R2Bucket bindings
+  // don't expose their own bucket name at runtime. Used only for the
+  // read-only R2 detail card in Sources.vue.
+  R2_BUCKET_NAME?: string;
 }

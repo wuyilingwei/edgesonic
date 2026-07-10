@@ -1,4 +1,4 @@
-// 116 — music-metadata's Vorbis/FLAC tag mapper only promotes the bare
+// music-metadata's Vorbis/FLAC tag mapper only promotes the bare
 // `LYRICS` field into `common.lyrics` (node_modules/music-metadata/lib/ogg/
 // vorbis/VorbisTagMapper.js). `SYNCEDLYRICS`/`UNSYNCEDLYRICS` — common output
 // of Mp3tag/MusicBee/foobar2000-style taggers, and exactly the field names

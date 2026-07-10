@@ -34,6 +34,12 @@ interface Source {
   mode: "library" | "sync_only";
   region: string;
   presignUsername: string;
+  // Per-source storage footprint, from /sources/list's song_instances aggregate
+  fileCount: number;
+  sizeBytes: number;
+  // R2-only: its equivalent of base_url/username (native binding, no URL/creds)
+  accountId: string;
+  bucketName: string;
   // pollScanStatus() so the action column can render idle/running/completed/
   // failed without an extra round-trip per row.
   scanStatus: ScanState;
@@ -229,6 +235,10 @@ async function load() {
         mode: (s.mode === "sync_only" ? "sync_only" : "library") as "library" | "sync_only",
         region: s.region || "us-east-1",
         presignUsername: s.presignUsername || "",
+        fileCount: parseInt(s.fileCount || "0", 10) || 0,
+        sizeBytes: parseInt(s.sizeBytes || "0", 10) || 0,
+        accountId: s.accountId || "",
+        bucketName: s.bucketName || "",
         scanStatus: prev?.scanStatus ?? "idle",
         scanJobId: prev?.scanJobId ?? null,
         scanTotal: prev?.scanTotal ?? 0,
@@ -382,6 +392,15 @@ async function scanSource(s: Source, force = false) {
 }
 
 // --- Display helpers ---
+function formatBytes(bytes: number): string {
+  if (!bytes) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+
 function relativeTime(ts: number): string {
   if (!ts) return "";
   const now = Math.floor(Date.now() / 1000);
@@ -541,38 +560,53 @@ onUnmounted(() => {
     <div v-if="loading" class="loading-state">{{ t("common.loading") }}</div>
     <div v-else class="grid grid-2">
       <div v-for="s in sources" :key="s.id" class="card hoverable source-card">
-        <!-- Top: type badge + status badges (info row) -->
+        <!-- Top: type badge + status badges (info row). Just identity/config
+             flags here — scan/parse progress and R2's equivalent live down
+             in source-meta below, alongside the rest of the source's info. -->
         <div class="source-header">
           <span class="status-badge info">{{ s.type.toUpperCase() }}</span>
           <div class="source-badges">
             <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
             <span v-if="s.mode === 'sync_only'" class="status-badge mode-sync" :title="t('sources.mode.hint')">{{ t("sources.mode.syncOnly") }}</span>
             <span v-if="s.type === 'webdav' && s.presignUsername" class="status-badge presign-set" :title="t('sources.presignStatusSet')">⊙ {{ t("sources.presignCreds") }}</span>
-            <template v-if="isAdmin && (s.type === 'webdav' || s.type === 's3')">
-              <span v-if="s.scanStatus === 'running'" class="scan-pill scan-pill-running">
-                <span class="scan-spinner" aria-hidden="true"></span>
-                <span class="scan-pill-text">{{ statusLabel(s) }}</span>
-              </span>
-              <span v-else-if="s.scanStatus === 'completed'" class="scan-pill scan-pill-completed">
-                <span class="scan-icon" aria-hidden="true">✓</span>
-                <span class="scan-pill-text">{{ statusLabel(s) }}</span>
-              </span>
-              <span v-else-if="s.scanStatus === 'failed'" class="scan-pill scan-pill-failed">
-                <span class="scan-icon" aria-hidden="true">✗</span>
-                <span class="scan-pill-text">{{ s.scanError ? s.scanError : t("sources.scanStatus.failed") }}</span>
-              </span>
-            </template>
           </div>
         </div>
         <!-- Info section -->
         <div class="source-name">{{ s.name || s.base_url }}</div>
         <div v-if="s.name" class="source-url">{{ s.base_url }}</div>
         <div class="source-meta">
-          <span v-if="s.username">{{ t("sources.user") }}: {{ s.username }}</span>
-          <span v-if="s.rootPath">{{ t("sources.root") }}: {{ s.rootPath }}</span>
-          <span v-if="s.type === 's3'">{{ t("sources.s3Region") }}: {{ s.region }}</span>
-          <span v-if="s.lastSync !== 'Never'">{{ t("sources.lastSync") }}: {{ s.lastSync }}</span>
-          <span v-else class="text-muted">{{ t("sources.notSynced") }}</span>
+          <!-- R2 has no URL/username/password (native binding) — account id
+               + bucket name are its equivalent "where does this point to"
+               fields, replacing the webdav/s3-only rows above them. -->
+          <template v-if="s.type === 'r2'">
+            <span v-if="s.accountId">{{ t("sources.r2AccountId") }}: {{ s.accountId }}</span>
+            <span v-if="s.bucketName">{{ t("sources.r2Bucket") }}: {{ s.bucketName }}</span>
+          </template>
+          <template v-else>
+            <span v-if="s.username">{{ t("sources.user") }}: {{ s.username }}</span>
+            <span v-if="s.rootPath">{{ t("sources.root") }}: {{ s.rootPath }}</span>
+            <span v-if="s.type === 's3'">{{ t("sources.s3Region") }}: {{ s.region }}</span>
+          </template>
+          <span>{{ t("sources.size") }}: {{ formatBytes(s.sizeBytes) }} ({{ s.fileCount }})</span>
+          <template v-if="isAdmin && s.scanStatus === 'running'">
+            <span class="scan-pill scan-pill-running">
+              <span class="scan-spinner" aria-hidden="true"></span>
+              <span class="scan-pill-text">{{ statusLabel(s) }}</span>
+            </span>
+          </template>
+          <!-- Completed is a routine steady-state, not something that needs
+               pill emphasis — plain text like the lastSync fallback below. -->
+          <span v-else-if="isAdmin && s.scanStatus === 'completed'">{{ statusLabel(s) }}</span>
+          <template v-else-if="isAdmin && s.scanStatus === 'failed'">
+            <span class="scan-pill scan-pill-failed">
+              <span class="scan-icon" aria-hidden="true">✗</span>
+              <span class="scan-pill-text">{{ s.scanError ? s.scanError : t("sources.scanStatus.failed") }}</span>
+            </span>
+          </template>
+          <template v-else>
+            <span v-if="s.lastSync !== 'Never'">{{ t("sources.lastSync") }}: {{ s.lastSync }}</span>
+            <span v-else class="text-muted">{{ t("sources.notSynced") }}</span>
+          </template>
         </div>
         <!-- Mirror progress (if active) -->
         <div v-if="mirrorFor(s)" class="mirror-progress">
@@ -587,17 +621,23 @@ onUnmounted(() => {
         </div>
         <!-- Bottom: action buttons (vertical) -->
         <div v-if="isAdmin" class="source-actions-vertical">
-          <template v-if="(s.type === 'webdav' || s.type === 's3') && s.scanStatus !== 'running'">
+          <!-- R2 is scanned via the native MUSIC_BUCKET binding (asyncScanR2Source)
+               instead of WebDAV/S3 HTTP, but shares the exact same /scan/start
+               endpoint, scan_jobs polling and rescan/re-parse buttons. -->
+          <template v-if="(s.type === 'webdav' || s.type === 's3' || s.type === 'r2') && s.scanStatus !== 'running'">
             <button
               :class="s.scanStatus === 'idle' ? 'btn-primary' : 'btn-secondary'"
               @click="scanSource(s, $event.shiftKey)"
             >
               {{ s.scanStatus === 'completed' ? t('sources.scanStatus.rescan') : s.scanStatus === 'failed' ? t('sources.scanStatus.retry') : t('sources.scanStatus.idle') }}
             </button>
-            <!-- 118 — the force-rescan gesture used to be Shift+click on the
-                 button above with zero UI discoverability (the forceHint
-                 locale string was defined but never rendered anywhere).
-                 Give it a real, visible button. -->
+            <!-- This used to be a Shift+click gesture on the button above
+                 with zero UI discoverability (the forceHint locale string
+                 was defined but never rendered anywhere) — now a real,
+                 visible button. Labelled "re-parse" (not "rescan") because
+                 the distinguishing effect of force=true is re-extracting
+                 metadata for every file regardless of ETag, not the file
+                 listing itself — "scan" is reserved for discovering files. -->
             <button
               class="btn-secondary"
               :title="t('sources.scanStatus.forceRescanHint')"
@@ -606,8 +646,17 @@ onUnmounted(() => {
           </template>
           <button v-if="s.type === 'webdav' && !(mirrorFor(s)?.running)" class="btn-secondary" @click="startMirror(s)">{{ t("sources.mirror.btn") }}</button>
           <button v-if="mirrorFor(s)?.running" class="btn-danger" @click="stopMirror(s.id)">{{ t("sources.mirror.stop") }}</button>
-          <button class="btn-secondary" @click="openEdit(s)">{{ t("common.edit") }}</button>
-          <button class="btn-danger" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
+          <!-- R2 has nothing left worth editing through this generic modal
+               (no URL/credentials; name/mode aren't exposed as a dedicated
+               R2 flow) — hide the button rather than open a mostly-empty form. -->
+          <button v-if="s.type !== 'r2'" class="btn-secondary" @click="openEdit(s)">{{ t("common.edit") }}</button>
+          <!-- R2 is a built-in pseudo-source (id='r2-local', synthesised
+               by /storage/sources/list when no real row exists yet) — it
+               can't actually be removed, deleting the row just makes the next
+               list call resynthesise a fresh default. Hide the button
+               entirely rather than show a delete action that doesn't really
+               delete anything. -->
+          <button v-if="s.id !== 'r2-local'" class="btn-danger" @click="deleteSource(s.id)">{{ t("common.delete") }}</button>
         </div>
         <div class="corner corner-tr"></div>
         <div class="corner corner-bl"></div>
@@ -624,12 +673,18 @@ onUnmounted(() => {
         <div class="modal-title">{{ t("sources.editSource") }}</div>
         <div class="form-grid-2">
           <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="editForm.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
-          <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="editForm.base_url" class="form-input" placeholder="https://..." /></div>
-          <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="editForm.username" class="form-input" /></div>
-          <div class="form-group">
-            <label class="form-label">{{ t("sources.password") }}</label>
-            <input v-model="editForm.password" type="password" class="form-input" :placeholder="t('sources.passwordKeep')" />
-          </div>
+          <!-- R2 is accessed via the native MUSIC_BUCKET binding, never HTTP —
+               base_url/username/password are meaningless for it and only
+               confused the editing experience. Only show them for the
+               storage types that actually use them. -->
+          <template v-if="editing?.type !== 'r2'">
+            <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="editForm.base_url" class="form-input" placeholder="https://..." /></div>
+            <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="editForm.username" class="form-input" /></div>
+            <div class="form-group">
+              <label class="form-label">{{ t("sources.password") }}</label>
+              <input v-model="editForm.password" type="password" class="form-input" :placeholder="t('sources.passwordKeep')" />
+            </div>
+          </template>
           <div class="form-group span-all">
             <label class="form-label">{{ t("sources.rootPath") }}</label>
             <input v-model="editForm.root_path" class="form-input" placeholder="/music" />
@@ -683,7 +738,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.page { max-width: 1000px; }
 .page-header-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 
 /* yellow caution variant for the plaintext badge. status-badge already

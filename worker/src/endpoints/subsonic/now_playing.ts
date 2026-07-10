@@ -46,7 +46,7 @@ const getNowPlayingHandler = async (c: import("hono").Context<{
   const env = c.env;
 
   // old KV TTL). Visibility: view_all_users_items → all rows, else own only.
-  const seeAll = await hasPermission(env.DB, user, "view_all_users_items");
+  const seeAll = await hasPermission(env, user, "view_all_users_items");
   const nowSec = Math.floor(Date.now() / 1000);
   const cutoff = nowSec - NOW_PLAYING_TTL_SEC;
 

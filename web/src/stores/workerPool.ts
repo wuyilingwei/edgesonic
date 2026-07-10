@@ -16,7 +16,7 @@
 // admin can confirm the pool is actually doing work.
 
 import { defineStore } from "pinia";
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 import { useAuth } from "../api";
 import { usePlayerStore } from "./player";
 
@@ -38,6 +38,11 @@ interface PolledTask {
 }
 
 const STORAGE_KEY = "participate_work";
+// 122 — concurrency is now a *local-only* setting (per-browser). Saving
+// writes localStorage instead of POSTing to /features/updateString. When
+// unset, hydrateConfig falls back to the server-side feature_strings default
+// (the seeded `worker_max_concurrent` row preserves a sane global default).
+const STORAGE_KEY_CONCURRENCY = "edgesonic:worker_max_concurrent";
 const DEFAULT_POLL_MS = 5 * 60 * 1000;
 // 093g — Adaptive poll cadence. When the queue has work, poll aggressively
 // (every 30s) so a 1000-task scan backlog drains in minutes instead of
@@ -94,15 +99,27 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // 30..3600 by the worker validator.
   const pollIntervalMs = ref(DEFAULT_POLL_MS);
   // the /work/poll `limit=` (so the server hands us exactly N tasks) and the
-  // Promise.all fan-out below. Hydrated from feature_strings.worker_max_concurrent
-  // on start; admin can change it live via Settings → workerPool sub-block.
+  // Promise.all fan-out below. Initial value comes from localStorage (set by
+  // Tools.vue's "保存" button); if unset, hydrateConfig seeds it from the
+  // server-side feature_strings.worker_max_concurrent so brand-new browsers
+  // still inherit the admin-configured global default.
   // Clamped 1..8 on both sides (server validator + client hydrate guard).
-  const maxConcurrent = ref(3);
-  const stats = ref({ completed: 0, failed: 0, currentTaskType: "" });
+  const maxConcurrent = ref(parseInt(localStorage.getItem(STORAGE_KEY_CONCURRENCY) || "0", 10) || 3);
+  // Local-only setter — Tools.vue calls this instead of updateString. Writes
+  // localStorage so the value survives reloads and stays scoped to *this*
+  // browser (the concurrency knob only affects this browser's poll limit).
+  function setMaxConcurrent(n: number): void {
+    const mc = Math.max(1, Math.min(8, Math.floor(Number(n) || 0)));
+    maxConcurrent.value = mc;
+    localStorage.setItem(STORAGE_KEY_CONCURRENCY, String(mc));
+  }
+  const stats = ref({ completed: 0, failed: 0, currentTaskType: "", currentFileName: "" });
   const lastError = ref<string | null>(null);
   const lastPollAt = ref<number>(0);
-  // 089 S — true while pollAndDrain runs with reduced concurrency because the
-  // player is actively streaming. Settings UI can surface this as a hint.
+  // 089 S, refined 122 — true while the pool is paused because the player is
+  // actively streaming. watch() on player.playing flips this and calls stop()
+  // / start(); the in-poll `effectiveConcurrent = 1` fallback stays as the belt
+  // for tasks already in-flight when playback starts.
   const isPlaybackThrottled = ref(false);
 
   // - `recent` is a small FIFO ring (≤ 5) of just-finished tasks so the UI
@@ -219,7 +236,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // without changing the idle behaviour that protects D1 from over-polling.
   let timeoutId: number | null = null;
   let hadTasksLastPoll = false;
-  // 115 — Tools.vue shows a live "auto-start in mm:ss" countdown next to the
+  // Tools.vue shows a live "auto-start in mm:ss" countdown next to the
   // manual poll button. Reactive so the UI can derive a ticking display from
   // it without reaching into the module-local `timeoutId`/`poolStartedAt`.
   // 0 means "nothing scheduled" (pool disabled/ineligible/stopped).
@@ -328,6 +345,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
       lastError.value = e instanceof Error ? e.message : String(e);
     } finally {
       stats.value.currentTaskType = "";
+      stats.value.currentFileName = "";
       draining = false;
       isDraining.value = false;
     }
@@ -335,6 +353,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
 
   async function executeOne(task: PolledTask): Promise<void> {
     stats.value.currentTaskType = task.taskType;
+    stats.value.currentFileName = fileNameFrom(task);
     let worker: Worker | null = null;
     try {
       // The Worker module-bundle is shipped lazily by Vite when this code
@@ -443,6 +462,27 @@ export const useWorkerPool = defineStore("workerPool", () => {
     });
   }
 
+  // 122 — Playback auto-pause. Each metadata worker pulls up to 512KB from
+  // /rest/stream; even with concurrency=1 those sub-requests compete with
+  // the active player's own stream range requests for the R2 egress budget
+  // and can cause audible stalls. Instead of just throttling concurrency,
+  // we now fully stop scheduling new polls while a song is playing and
+  // resume when playback pauses/stops (so long as the pool is still opted-in).
+  // The pollAndDrain `effectiveConcurrent = 1` fallback below stays as a belt
+  // for tasks that were already in-flight when playback started.
+  try {
+    const player = usePlayerStore();
+    watch(() => player.playing, (playing) => {
+      if (playing) {
+        isPlaybackThrottled.value = true;
+        stop();
+      } else {
+        isPlaybackThrottled.value = false;
+        if (enabled.value && eligible.value) start();
+      }
+    });
+  } catch { /* player store not registered yet — keep default schedule */ }
+
   // Sync the poll cadence from features. The settings page calls this after a
   // save so the new interval takes effect immediately without reload.
   async function hydrateConfig(): Promise<void> {
@@ -459,17 +499,25 @@ export const useWorkerPool = defineStore("workerPool", () => {
         if (timeoutId !== null) { stop(); start(); }
       }
       // belt-and-braces guard; the server validator already rejects anything
-      // outside the same range. Default 3 matches the migration seed.
-      const mc = parseInt(fs.find((f) => f.key === "worker_max_concurrent")?.value || "3", 10);
-      if (Number.isFinite(mc) && mc >= 1 && mc <= 8) {
-        maxConcurrent.value = mc;
+      // outside the same range. Default 3 matches the migration seed. 122: a
+      // localStorage value (i.e. the user has explicitly saved a concurrency
+      // for this browser) wins over the server default — concurrency is now a
+      // per-browser local setting, so we never let hydrateConfig clobber it.
+      const localMc = parseInt(localStorage.getItem(STORAGE_KEY_CONCURRENCY) || "0", 10);
+      if (Number.isFinite(localMc) && localMc >= 1 && localMc <= 8) {
+        maxConcurrent.value = localMc;
+      } else {
+        const mc = parseInt(fs.find((f) => f.key === "worker_max_concurrent")?.value || "3", 10);
+        if (Number.isFinite(mc) && mc >= 1 && mc <= 8) {
+          maxConcurrent.value = mc;
+        }
       }
     } catch { /* fail-quiet — keep DEFAULT_POLL_MS */ }
   }
 
   function reset(): void {
     stop();
-    stats.value = { completed: 0, failed: 0, currentTaskType: "" };
+    stats.value = { completed: 0, failed: 0, currentTaskType: "", currentFileName: "" };
     lastError.value = null;
     // stale chips for the next user.
     recent.value = [];
@@ -486,12 +534,14 @@ export const useWorkerPool = defineStore("workerPool", () => {
     pollIntervalMs,
     // alongside pollIntervalMs without a separate fetch.
     maxConcurrent,
+    // 122 — local-only setter (writes localStorage, no server POST).
+    setMaxConcurrent,
     // 089 S — playback-throttle indicator for the Settings UI.
     isPlaybackThrottled,
     recent,
     speedPerMin,
     isWorking,
-    // 115 — Tools.vue "auto-start in mm:ss" countdown next to the manual
+    // Tools.vue "auto-start in mm:ss" countdown next to the manual
     // poll button. 0 = nothing scheduled.
     nextPollAt,
     start,

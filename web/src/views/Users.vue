@@ -311,7 +311,6 @@ onMounted(load);
 </template>
 
 <style scoped>
-.page { max-width: 900px; }
 .user-name { font-family: var(--font-mono); font-weight: 600; font-size: var(--fs-sm); color: var(--color-text-primary); letter-spacing: 0.05em; }
 .level-select { display: inline-block; width: auto; padding: 0.25rem 0.5rem; font-size: var(--fs-sm); }
 

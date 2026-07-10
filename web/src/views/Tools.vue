@@ -11,7 +11,7 @@ const { t } = useI18n();
 const { isSuperAdmin, edgesonicPost, edgesonicFetch, md5, signedParams, restUrl } = useAuth();
 const workerPool = useWorkerPool();
 
-// 115 — "auto-start in mm:ss" countdown next to the manual poll button.
+// "auto-start in mm:ss" countdown next to the manual poll button.
 // workerPool.nextPollAt is a plain timestamp (not itself ticking), so a
 // local 1s clock drives the countdown text reactively.
 const nowTick = ref(Date.now());
@@ -32,6 +32,55 @@ const workLoad = ref<WorkLoadRow[]>([]);
 const totalTasks = computed(() => workCounts.value.queued + workCounts.value.claimed + workCounts.value.completed + workCounts.value.failed);
 const progressPct = computed(() => totalTasks.value > 0 ? Math.round((workCounts.value.completed / totalTasks.value) * 100) : 0);
 
+// Global speed / ETA — sampled from the aggregate work/status counts (all
+// browsers combined), same windowed-rate technique workerPool.ts uses for
+// its own (this-browser-only) speedPerMin. Local speed is exposed directly
+// by the store; this just adds the aggregate view alongside it.
+// 122 — switched from a noisy 5-min real-time window to a 15-min rolling
+// average (SAMPLE_LIMIT 120 ~ 20 min of 10s status polls) so the number
+// stabilises instead of swinging with every batch. ETA uses the same
+// averaged speed but applies a 0.8 conservative coefficient — Rosmontis
+// wanted "拉长估算" rather than the instantaneous rate, so we deliberately
+// over-estimate remaining time by 25%. This accounts for the queue being
+// served in bursts (other browsers may pause, scans can re-queue) and
+// keeps the displayed ETA honest rather than optimistic.
+const SPEED_WINDOW_MS = 15 * 60 * 1000;
+const SAMPLE_LIMIT = 120;
+const globalSamples = ref<Array<{ ts: number; count: number }>>([]);
+function recordGlobalSample() {
+  globalSamples.value.push({ ts: Date.now(), count: workCounts.value.completed });
+  if (globalSamples.value.length > SAMPLE_LIMIT) {
+    globalSamples.value.splice(0, globalSamples.value.length - SAMPLE_LIMIT);
+  }
+}
+const globalSpeedPerMin = computed<number | null>(() => {
+  const samples = globalSamples.value;
+  if (samples.length < 2) return null;
+  const now = Date.now();
+  const cutoff = now - SPEED_WINDOW_MS;
+  let oldest = samples[0];
+  for (const s of samples) { if (s.ts >= cutoff) { oldest = s; break; } }
+  const elapsed = now - oldest.ts;
+  if (elapsed < 1000) return null;
+  const delta = workCounts.value.completed - oldest.count;
+  if (delta <= 0) return null;
+  return Math.round((delta * 60_000) / elapsed * 10) / 10;
+});
+const etaText = computed<string>(() => {
+  const speed = globalSpeedPerMin.value;
+  const remaining = workCounts.value.queued + workCounts.value.claimed;
+  if (remaining <= 0) return "—";
+  if (!speed) return "—";
+  // 0.8 conservative coefficient — see comment above.
+  const effectiveSpeed = speed * 0.8;
+  if (effectiveSpeed <= 0) return "—";
+  const minutes = Math.ceil(remaining / effectiveSpeed);
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins > 0 ? `${hours} 小时 ${mins} 分钟` : `${hours} 小时`;
+});
+
 async function loadWorkStatus() {
   try {
     const text = await edgesonicFetch("work/status");
@@ -39,8 +88,27 @@ async function loadWorkStatus() {
     if (parsed.ok) {
       workCounts.value = { queued: parsed.counts?.queued ?? 0, claimed: parsed.counts?.claimed ?? 0, completed: parsed.counts?.completed ?? 0, failed: parsed.counts?.failed ?? 0, canceled: parsed.counts?.canceled ?? 0 };
       workLoad.value = Array.isArray(parsed.load) ? parsed.load : [];
+      recordGlobalSample();
     }
   } catch { /* stay quiet */ }
+}
+
+// Concurrency knob — moved here from Settings (Rosmontis: "并发度等本机设置移动到工具中").
+// 122 — saving writes localStorage via workerPool.setMaxConcurrent (no server
+// POST). Concurrency only affects this browser's poll limit, so persisting
+// it server-side as a shared feature_string was both wasteful and misleading.
+const maxConcurrentInput = ref<number>(workerPool.maxConcurrent);
+const maxConcurrentBusy = ref(false);
+function saveMaxConcurrent() {
+  const n = Math.max(1, Math.min(8, Math.floor(Number(maxConcurrentInput.value) || 0)));
+  maxConcurrentInput.value = n;
+  maxConcurrentBusy.value = true;
+  try {
+    workerPool.setMaxConcurrent(n);
+    showToast("并发度已保存到本机");
+  } finally {
+    maxConcurrentBusy.value = false;
+  }
 }
 
 async function onResetFailedWork() {
@@ -1017,7 +1085,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
       <!-- ============ SUBSONIC 迁移工具（克隆 + 推送，中间切换） ============ -->
       <section class="settings-section card" :class="{ open: open.migrate }">
         <button class="section-header" @click="toggleSection('migrate')">
-          <span class="section-title">🪞 SUBSONIC 迁移工具</span>
+          <span class="section-title">SUBSONIC 迁移工具</span>
           <span class="section-caret">{{ open.migrate ? '−' : '+' }}</span>
         </button>
         <div v-show="open.migrate" class="section-body">
@@ -1166,14 +1234,14 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
       <!-- ============ 工作池 ============ -->
       <section class="settings-section card" :class="{ open: open.workPool }">
         <button class="section-header" @click="toggleSection('workPool')">
-          <span class="section-title">⚙ 工作池</span>
+          <span class="section-title">WORKER 预解析</span>
           <span class="section-caret">{{ open.workPool ? '−' : '+' }}</span>
         </button>
         <div v-show="open.workPool" class="section-body">
       <!-- Work pool card -->
       <div class="card tools-work-pool-card">
         <div class="card-header">
-          <span class="card-title">工作池</span>
+          <span class="card-title">Worker 预解析</span>
           <div class="wp-header-actions">
             <span v-if="workerPool.isWorking" class="wp-auto-status wp-auto-status-running">运行中</span>
             <span v-else-if="autoStartCountdownText" class="wp-auto-status">{{ autoStartCountdownText }} 后自动启动</span>
@@ -1187,11 +1255,30 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
         <div class="wp-progress-bar">
           <div class="wp-progress-fill" :style="{ width: progressPct + '%' }"></div>
         </div>
+        <!-- Real-time: which song this browser is parsing right now. -->
+        <div v-if="workerPool.stats.currentFileName" class="wp-current-song mono-label">
+          <span class="wp-current-dot" aria-hidden="true"></span>
+          正在解析：{{ workerPool.stats.currentFileName }}
+        </div>
         <div class="wp-counts">
           <div class="wp-count"><span class="wp-count-label">队列</span><span class="wp-count-num">{{ workCounts.queued }}</span></div>
           <div class="wp-count"><span class="wp-count-label">进行中</span><span class="wp-count-num">{{ workCounts.claimed }}</span></div>
           <div class="wp-count"><span class="wp-count-label">完成</span><span class="wp-count-num">{{ workCounts.completed }}</span></div>
           <div class="wp-count" :class="{ 'wp-count-emphasis': workCounts.failed > 0 }"><span class="wp-count-label">失败</span><span class="wp-count-num">{{ workCounts.failed }}</span></div>
+        </div>
+        <div class="wp-speed-row">
+          <div class="wp-speed-item">
+            <span class="wp-count-label">本机速度</span>
+            <span class="wp-count-num">{{ workerPool.speedPerMin === null ? '—' : `${workerPool.speedPerMin}/分钟` }}</span>
+          </div>
+          <div class="wp-speed-item">
+            <span class="wp-count-label">总速度</span>
+            <span class="wp-count-num">{{ globalSpeedPerMin === null ? '—' : `${globalSpeedPerMin}/分钟` }}</span>
+          </div>
+          <div class="wp-speed-item">
+            <span class="wp-count-label">预计剩余</span>
+            <span class="wp-count-num">{{ etaText }}</span>
+          </div>
         </div>
         <div class="wp-workers">
           <div class="wp-workers-title">活跃浏览器 worker</div>
@@ -1207,12 +1294,38 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
           <button v-if="workCounts.failed > 0" class="btn-secondary btn-sm" @click="onResetFailedWork()">重启失败</button>
           <button v-if="workCounts.claimed > 0" class="btn-secondary btn-sm" @click="onReclaimStaleWork()">回收超时</button>
         </div>
+
+        <!-- 本机设置：参与开关、本机统计、能力、并发度——原先分散在设置页，
+             现在集中到这里（同一台浏览器的运行参数）。 -->
         <div class="wp-worker-toggle">
           <label class="wp-toggle-label">
             <input type="checkbox" :checked="workerPool.enabled" :disabled="!workerPool.eligible" @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)" />
             <span>浏览器 Worker: {{ workerPool.enabled ? '已启用' : '已禁用' }}</span>
           </label>
+          <p v-if="!workerPool.eligible" class="wp-ineligible-hint">当前等级不可参与浏览器预解析（需要等级 ≥ 2）</p>
         </div>
+        <div class="wp-local-stats">
+          <span class="wp-count-label">本机统计</span>
+          <span class="wp-local-stat wp-local-stat-ok">成功 {{ workerPool.stats.completed }}</span>
+          <span class="wp-local-stat wp-local-stat-fail">失败 {{ workerPool.stats.failed }}</span>
+        </div>
+        <div class="wp-caps">
+          <span class="wp-count-label">当前能力</span>
+          <span v-for="cap in workerPool.caps" :key="cap" class="wp-cap-pill">{{ cap }}</span>
+          <span v-if="workerPool.caps.length === 0" class="text-muted">—</span>
+        </div>
+        <div class="wp-concurrency">
+          <span class="wp-count-label">并发度</span>
+          <input
+            type="number" min="1" max="8" step="1"
+            v-model.number="maxConcurrentInput"
+            class="form-input wp-concurrency-input"
+            :disabled="!isSuperAdmin"
+          />
+          <button class="btn-secondary btn-sm" :disabled="!isSuperAdmin || maxConcurrentBusy" @click="saveMaxConcurrent">保存</button>
+          <span class="wp-concurrency-hint">1-8，越高消化越快但带宽/CPU 消耗增加</span>
+        </div>
+
         <div v-if="workerPool.lastError" class="wp-last-error">
           <span>⚠</span> <code>{{ workerPool.lastError }}</code>
         </div>
@@ -1223,7 +1336,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
       <!-- ============ 存储与 R2 费用 ============ -->
       <section class="settings-section card" :class="{ open: open.storage }">
         <button class="section-header" @click="toggleSection('storage')">
-          <span class="section-title">💾 存储与 R2 费用</span>
+          <span class="section-title">存储与 R2 费用</span>
           <span class="section-caret">{{ open.storage ? '−' : '+' }}</span>
         </button>
         <div v-show="open.storage" class="section-body">
@@ -1281,8 +1394,6 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
 </template>
 
 <style scoped>
-.tools { max-width: 860px; }
-
 /* Sections mirror Settings.vue's .settings-section exactly (same
    markup shape: button.section-header + v-show'd .section-body, no
    collapse transition) so Tools and Settings share one design language
@@ -1432,7 +1543,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
 .wp-refresh { background: none; border: 1px solid var(--color-border-subtle); border-radius: 4px; color: var(--color-text-secondary); cursor: pointer; font-size: var(--fs-sm); padding: 0.2rem 0.6rem; }
 .wp-refresh:hover { border-color: var(--color-accent-dim); color: var(--color-text-primary); }
 .wp-refresh:disabled { opacity: 0.5; cursor: default; }
-/* 115 — countdown/running status sits left of the manual poll button */
+/* countdown/running status sits left of the manual poll button */
 .wp-header-actions { display: flex; align-items: center; gap: 0.6rem; }
 .wp-auto-status { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--color-text-muted); white-space: nowrap; }
 .wp-auto-status-running { color: var(--color-accent-primary); }
@@ -1454,7 +1565,35 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
 .wp-actions { display: flex; gap: 0.6rem; margin-bottom: 0.6rem; }
 .wp-worker-toggle { padding-top: 0.5rem; border-top: 1px solid var(--color-border-subtle); }
 .wp-toggle-label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: var(--fs-sm); }
+.wp-ineligible-hint { margin: 0.3rem 0 0; font-size: var(--fs-xs); color: var(--color-accent-primary); }
 .wp-last-error { margin-top: 0.4rem; font-size: var(--fs-xs); color: #e5484d; }
+.wp-current-song {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin-bottom: 0.7rem; padding: 0.35rem 0.6rem;
+  background: var(--color-bg-primary); border: 1px solid var(--color-border-subtle);
+  border-radius: 4px; font-size: var(--fs-xs); color: var(--color-text-secondary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.wp-current-dot {
+  flex-shrink: 0; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--color-accent-primary); animation: wp-pulse 1.4s ease-in-out infinite;
+}
+@keyframes wp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.wp-speed-row { display: flex; gap: 1.5rem; margin-bottom: 0.8rem; padding-bottom: 0.8rem; border-bottom: 1px solid var(--color-border-subtle); }
+.wp-speed-item { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; }
+.wp-local-stats { display: flex; align-items: center; gap: 0.6rem; padding-top: 0.6rem; font-size: var(--fs-sm); }
+.wp-local-stat { font-family: var(--font-mono); font-size: var(--fs-xs); }
+.wp-local-stat-ok { color: var(--color-text-secondary); }
+.wp-local-stat-fail { color: #e5484d; }
+.wp-caps { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; padding-top: 0.5rem; }
+.wp-cap-pill {
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  padding: 0.1rem 0.5rem; border: 1px solid var(--color-border-subtle); border-radius: 999px;
+  color: var(--color-text-secondary);
+}
+.wp-concurrency { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; padding-top: 0.6rem; }
+.wp-concurrency-input { width: 5rem; }
+.wp-concurrency-hint { font-size: var(--fs-xs); color: var(--color-text-muted); flex-basis: 100%; }
 .storage-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
 .storage-table th, .storage-table td { padding: 0.4rem 0.6rem; text-align: left; border-bottom: 1px solid var(--color-border-subtle); font-size: var(--fs-sm); }
 .storage-table .num-col { text-align: right; font-family: var(--font-mono); }

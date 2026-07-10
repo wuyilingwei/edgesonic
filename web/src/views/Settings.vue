@@ -237,7 +237,7 @@ const lastfmBusy = ref(false);
 
 async function hydrateLastfmFromUserSetting() {
   try {
-    const data = JSON.parse(await edgesonicFetch("features/userSetting?key=lastfm_api_key"));
+    const data = JSON.parse(await edgesonicFetch("features/userSetting", { key: "lastfm_api_key" }));
     if (data.ok) lastfmKeySet.value = !!data.set;
   } catch { /* stay false */ }
   lastfmKeyInput.value = "";
@@ -266,7 +266,6 @@ async function saveLastfm() {
 const scanIntervalHours = ref<number>(1);
 const scanEtagCheck = ref<boolean>(true);
 const scanRescanStrategy = ref<"auto" | "worker" | "browser">("auto");
-const scanBrowserAuto = ref<boolean>(true);
 const scanBusy = ref(false);
 
 // COOP/COEP/CORP gating for SharedArrayBuffer + ffmpeg.wasm multi-thread.
@@ -388,7 +387,6 @@ function hydrateScanFromFeatures() {
   scanRescanStrategy.value = (["auto", "worker", "browser"].includes(strat)
     ? strat
     : "auto") as "auto" | "worker" | "browser";
-  scanBrowserAuto.value = findFeatureString("scan_browser_auto", "1") !== "0";
 }
 
 async function saveScan() {
@@ -402,7 +400,6 @@ async function saveScan() {
       { key: "scan_interval_hours", value: String(hours) },
       { key: "scan_etag_check", value: scanEtagCheck.value ? "1" : "0" },
       { key: "scan_rescan_strategy", value: scanRescanStrategy.value },
-      { key: "scan_browser_auto", value: scanBrowserAuto.value ? "1" : "0" },
     ];
     for (const w of writes) {
       const data = JSON.parse(await edgesonicPost("features/updateString", w));
@@ -590,12 +587,6 @@ const workerStatus = ref<{
 const workerStatusLoading = ref(false);
 const workerStatusError = ref("");
 
-const workerPollIntervalText = computed(() => {
-  const ms = workerPool.pollIntervalMs;
-  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
-  return `${Math.round(ms / 60_000)}m`;
-});
-
 async function loadWorkerStatus() {
   if (!isSuperAdmin.value) return;
   workerStatusLoading.value = true;
@@ -618,38 +609,6 @@ async function loadWorkerStatus() {
     workerStatusError.value = e instanceof Error ? e.message : String(e);
   }
   workerStatusLoading.value = false;
-}
-
-async function onParticipateToggle(checked: boolean) {
-  workerPool.setEnabled(checked);
-}
-
-// so the field shows the currently-live value on mount (and after a feature
-// reload) without an extra round-trip. saveMaxConcurrent() POSTs to
-// /features/updateString and rehydrates the store so future polls use the new
-// `limit` immediately.
-const maxConcurrentInput = ref<number>(workerPool.maxConcurrent);
-const maxConcurrentBusy = ref(false);
-async function saveMaxConcurrent() {
-  const n = Math.max(1, Math.min(8, Math.floor(Number(maxConcurrentInput.value) || 0)));
-  maxConcurrentInput.value = n;
-  maxConcurrentBusy.value = true;
-  try {
-    const data = JSON.parse(await edgesonicPost("features/updateString", {
-      key: "worker_max_concurrent",
-      value: String(n),
-    }));
-    if (!data.ok) throw new Error(data.error || "worker_max_concurrent");
-    await workerPool.hydrateConfig();
-    // Re-sync the input in case hydrate clamped to a different value (e.g.
-    // server rejected and store stayed at the previous setting).
-    maxConcurrentInput.value = workerPool.maxConcurrent;
-    showToast(t("settings.common.workerPool.maxConcurrentSaved"));
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast(`${t("settings.common.workerPool.maxConcurrentSaveFailed")}: ${msg}`, "error");
-  }
-  maxConcurrentBusy.value = false;
 }
 
 // applyMetadataResult against every completed metadata row whose apply step
@@ -1288,20 +1247,6 @@ onMounted(() => {
             </label>
             <p class="feature-desc tc-desc">{{ t("settings.common.scan.strategyDesc") }}</p>
 
-            <!-- Browser auto-drain -->
-            <label class="tc-row">
-              <span class="tc-key">{{ t("settings.common.scan.browserAuto") }}</span>
-              <span class="scan-toggle">
-                <input
-                  type="checkbox"
-                  v-model="scanBrowserAuto"
-                  :disabled="!isSuperAdmin"
-                />
-                <span>{{ scanBrowserAuto ? t("common.on") : t("common.off") }}</span>
-              </span>
-            </label>
-            <p class="feature-desc tc-desc">{{ t("settings.common.scan.browserAutoDesc") }}</p>
-
             <div class="tc-actions">
               <button
                 class="btn-primary"
@@ -1578,97 +1523,6 @@ onMounted(() => {
           <p v-if="!workerPool.eligible" class="feature-desc tc-desc" style="margin-left:0; color: var(--color-accent-primary)">
             {{ t("settings.common.workerPool.ineligible") }}
           </p>
-
-          <div class="transcode-grid">
-            <!-- Participate toggle -->
-            <label class="tc-row">
-              <span class="tc-key">{{ t("settings.common.workerPool.participate") }}</span>
-              <span class="scan-toggle">
-                <input
-                  type="checkbox"
-                  :checked="workerPool.enabled"
-                  :disabled="!workerPool.eligible"
-                  @change="onParticipateToggle(($event.target as HTMLInputElement).checked)"
-                />
-                <span>{{ workerPool.enabled ? t("common.on") : t("common.off") }}</span>
-              </span>
-            </label>
-            <p class="feature-desc tc-desc">{{ t("settings.common.workerPool.participateDesc") }}</p>
-
-            <!-- Capabilities -->
-            <div class="tc-row tc-row-block">
-              <span class="tc-key">{{ t("settings.common.workerPool.capsLabel") }}</span>
-              <div class="tc-profiles">
-                <span v-for="cap in workerPool.caps" :key="cap" class="tc-profile-pill">
-                  <span>{{ cap }}</span>
-                </span>
-                <span v-if="workerPool.caps.length === 0" class="feature-desc">—</span>
-              </div>
-            </div>
-
-            <!-- Stats -->
-            <div class="tc-row">
-              <span class="tc-key">{{ t("settings.common.workerPool.statsLabel") }}</span>
-              <span class="worker-stats">
-                <span class="worker-stat worker-stat-success">
-                  {{ t("settings.common.workerPool.statsCompleted") }}: {{ workerPool.stats.completed }}
-                </span>
-                <span class="worker-stat worker-stat-error">
-                  {{ t("settings.common.workerPool.statsFailed") }}: {{ workerPool.stats.failed }}
-                </span>
-              </span>
-            </div>
-
-            <!-- Status -->
-            <div class="tc-row">
-              <span class="tc-key">{{ t("settings.common.workerPool.statusLabel") }}</span>
-              <span class="feature-desc">
-                {{ workerPool.stats.currentTaskType
-                  ? t("settings.common.workerPool.statusRunning", { type: workerPool.stats.currentTaskType })
-                  : t("settings.common.workerPool.statusIdle") }}
-              </span>
-            </div>
-
-            <!-- Poll interval (read-only display) -->
-            <div class="tc-row">
-              <span class="tc-key">{{ t("settings.common.workerPool.pollIntervalLabel") }}</span>
-              <span class="feature-desc">{{ workerPollIntervalText }}</span>
-            </div>
-
-            <!-- Concurrency knob. Admin-writable; non-admin sees the
-                 value but the input + save button are disabled. -->
-            <div class="tc-row">
-              <span class="tc-key">{{ t("settings.common.workerPool.maxConcurrent") }}</span>
-              <span class="scan-toggle">
-                <input
-                  type="number"
-                  min="1"
-                  max="8"
-                  step="1"
-                  v-model.number="maxConcurrentInput"
-                  class="form-input"
-                  style="width: 5rem"
-                  :disabled="!isSuperAdmin"
-                />
-                <button
-                  class="btn-secondary btn-sm"
-                  :disabled="!isSuperAdmin || maxConcurrentBusy"
-                  @click="saveMaxConcurrent"
-                  style="margin-left: 0.6rem"
-                >
-                  {{ t("common.save") }}
-                </button>
-              </span>
-            </div>
-            <p class="feature-desc tc-desc">{{ t("settings.common.workerPool.maxConcurrentHint") }}</p>
-
-            <!-- Last error -->
-            <div v-if="workerPool.lastError" class="tc-row">
-              <span class="tc-key">{{ t("settings.common.workerPool.lastError") }}</span>
-              <code class="feature-desc" style="color: var(--color-accent-primary)">{{ workerPool.lastError }}</code>
-            </div>
-
-          </div>
 
           <!-- Admin queue overview -->
           <div v-if="isSuperAdmin" class="worker-queue-overview">
@@ -2049,8 +1903,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.settings { max-width: 1100px; }
-
 /* --- Accordion sections --- */
 .settings-section { padding: 0; margin-bottom: 1.1rem; overflow: hidden; }
 .section-header {

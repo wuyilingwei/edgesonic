@@ -34,7 +34,7 @@ const changePasswordHandler = async (c: import("hono").Context<{ Bindings: Env; 
   // by /edgesonic/users/{create,update,delete}). Pre-087 used a hardcoded
   // `caller.level < 3` which violated the permission-model rule.
   if (!isSelf) {
-    const canManage = await hasPermission(c.env.DB, caller, "manage_users");
+    const canManage = await hasPermission(c.env, caller, "manage_users");
     if (!canManage) {
       return c.text(subsonicError(50, "manage_users permission required"), 403, {
         "Content-Type": "application/xml; charset=UTF-8",
