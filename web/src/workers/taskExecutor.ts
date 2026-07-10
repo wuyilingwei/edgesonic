@@ -100,12 +100,18 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
   // anywhere in the file — often AFTER the data chunk (which can be 70+ MB).
   // A 512KB head only covers the start; the ID3 block at the tail is missed.
   // Strategy: fetch head (2MB for large ID3v2 headers with artwork) + tail
-  // (512KB for trailing id3/INFO chunks). Concatenate with a gap so
+  // (2MB for trailing id3/INFO chunks). Concatenate with a gap so
   // music-metadata sees both regions. For non-WAV the tail fetch is skipped
   // (FLAC/MP3/M4A tags are at the head).
-  const isWav = (payload.suffix || "").toLowerCase() === "wav";
+  const isWav = String(payload.suffix || "").toLowerCase() === "wav";
   const HEAD_BYTES = 2 * 1024 * 1024; // 2MB — covers large ID3v2 + APIC
-  const TAIL_BYTES = 512 * 1024;      // 512KB — trailing id3/INFO chunk
+  // 512KB used to be enough for a text-only trailing id3 chunk, but when that
+  // same chunk also embeds cover art (very common) the chunk can run several
+  // hundred KB to a few MB, pushing the TITLE/ARTIST frames — usually ordered
+  // before APIC — outside a 512KB tail window entirely. Match the 2MB tail
+  // worker/src/utils/slices.ts already uses for the equivalent server-side
+  // path (same bug class 111 fixed there).
+  const TAIL_BYTES = 2 * 1024 * 1024; // 2MB — trailing id3/INFO chunk (may include embedded art)
 
   const headResp = await fetch(streamUrl, {
     headers: { Range: `bytes=0-${HEAD_BYTES - 1}` },
