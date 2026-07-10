@@ -144,7 +144,7 @@ const getSharesHandler = async (c: import("hono").Context<{ Bindings: Env; Varia
   const queries = createQueries(c.env.DB);
   // view_all_users_items permission so an operator can delegate the "see all
   // shares" capability without granting full super-admin.
-  const seeAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+  const seeAll = await hasPermission(c.env, user, "view_all_users_items");
   const shares = await queries.getSharesForUser(user.username, seeAll);
 
   const sharePayload: Array<{
@@ -229,7 +229,7 @@ const updateShareHandler = async (c: import("hono").Context<{ Bindings: Env; Var
   const existing = await queries.getShareById(id);
   if (!existing) return c.text(subsonicError(70, "Share not found"), 404, XML);
   if (existing.user_id !== user.username) {
-    const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+    const canAll = await hasPermission(c.env, user, "view_all_users_items");
     if (!canAll) {
       return c.text(subsonicError(50, "Not authorized to modify this share"), 403, XML);
     }
@@ -261,7 +261,7 @@ const deleteShareHandler = async (c: import("hono").Context<{ Bindings: Env; Var
   const existing = await queries.getShareById(id);
   if (!existing) return c.text(subsonicError(70, "Share not found"), 404, XML);
   if (existing.user_id !== user.username) {
-    const canAll = await hasPermission(c.env.DB, user, "view_all_users_items");
+    const canAll = await hasPermission(c.env, user, "view_all_users_items");
     if (!canAll) {
       return c.text(subsonicError(50, "Not authorized to delete this share"), 403, XML);
     }

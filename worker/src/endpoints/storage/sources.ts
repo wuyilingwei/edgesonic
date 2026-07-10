@@ -25,6 +25,24 @@ export const sourcesRoutes = new Hono<{ Bindings: Env; Variables: { user: User }
 
 const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 
+// R2 is the always-present built-in storage backend (accessed via the
+// native MUSIC_BUCKET binding, never HTTP). Uploads/clone/hotcache/transcode
+// all write song_instances.source_id='r2-local' directly without ever
+// creating a storage_sources row, so R2 has historically been completely
+// invisible on this page — Rosmontis: "should include the built-in R2, but
+// it has no edit function" (there was no entry to edit at all). If no real
+// row exists yet we synthesise one here so it always shows up; /sources/
+// update upserts it into a real row the first time an admin actually edits
+// it (name/root_path/mode — base_url/credentials don't apply to R2).
+export const R2_BUILTIN_ID = "r2-local";
+export function synthesizeR2Row() {
+  return {
+    id: R2_BUILTIN_ID, type: "r2", name: "R2", base_url: "",
+    username: null, presign_username: null, root_path: "", region: "auto",
+    last_sync: null, enabled: 1, mode: "library",
+  };
+}
+
 sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async (c) => {
   const db = c.env.DB;
   const result = await db.prepare(
@@ -38,19 +56,47 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
     root_path: string | null; region: string | null; last_sync: number | null; enabled: number;
     mode: string;
   }>();
-  const sources = result.results.map((s) => ({
-    _attributes: {
-      id: s.id, type: s.type, name: s.name ?? "",
-      baseUrl: s.base_url,
-      rootPath: s.root_path ?? "",
-      username: s.username ?? "", enabled: String(!!s.enabled),
-      lastSync: s.last_sync ? String(s.last_sync) : "0",
-      // 089 S2 — 'library' | 'sync_only'
-      mode: s.mode ?? "library",
-      region: s.region ?? "us-east-1",
-      presignUsername: s.presign_username ?? "",
-    },
-  }));
+  const rows = result.results;
+  if (!rows.some((r) => r.type === "r2")) {
+    // Appended, not prepended — keeps existing real sources' relative order
+    // (and their position as "first" in the XML) unchanged for callers that
+    // don't scope by id.
+    rows.push(synthesizeR2Row());
+  }
+
+  // Per-source storage footprint (file count + total bytes), keyed by
+  // song_instances.source_id — this is also how R2's instances tie back to
+  // the synthesised row above (they all carry source_id='r2-local').
+  const sizeRows = await db.prepare(
+    `SELECT source_id, COUNT(*) AS n, COALESCE(SUM(size), 0) AS bytes
+     FROM song_instances WHERE missing = 0 GROUP BY source_id`
+  ).all<{ source_id: string; n: number; bytes: number }>();
+  const sizeBySource = new Map(sizeRows.results.map((r) => [r.source_id, r]));
+
+  const sources = rows.map((s) => {
+    const sz = sizeBySource.get(s.id);
+    return {
+      _attributes: {
+        id: s.id, type: s.type, name: s.name ?? "",
+        baseUrl: s.base_url,
+        rootPath: s.root_path ?? "",
+        username: s.username ?? "", enabled: String(!!s.enabled),
+        lastSync: s.last_sync ? String(s.last_sync) : "0",
+        // 089 S2 — 'library' | 'sync_only'
+        mode: s.mode ?? "library",
+        region: s.region ?? "us-east-1",
+        presignUsername: s.presign_username ?? "",
+        fileCount: String(sz?.n ?? 0),
+        sizeBytes: String(sz?.bytes ?? 0),
+        // R2 has no base_url/username — account id + bucket name are its
+        // equivalent "where does this actually point to" detail fields.
+        ...(s.type === "r2" ? {
+          accountId: c.env.CF_ACCOUNT_ID || "",
+          bucketName: c.env.R2_BUCKET_NAME || "",
+        } : {}),
+      },
+    };
+  });
   return c.text(subsonicOK({ storageSources: { source: sources } }), 200, XML);
 });
 
@@ -123,6 +169,22 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   binds.push(Math.floor(Date.now() / 1000), body.id);
   const result = await db.prepare(`UPDATE storage_sources SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
   if (!result.meta.changes) {
+    // The built-in R2 row is synthesised by /sources/list, not stored
+    // in D1 until an admin actually saves an edit for it. First edit here
+    // becomes an INSERT instead of a 404.
+    if (body.id === R2_BUILTIN_ID) {
+      const now = Math.floor(Date.now() / 1000);
+      await db.prepare(
+        `INSERT INTO storage_sources
+           (id, type, name, base_url, username, password, root_path, region, mode, presign_username, presign_password, enabled, created_at, updated_at)
+         VALUES (?, 'r2', ?, '', NULL, '', ?, 'auto', ?, NULL, NULL, ?, ?, ?)`
+      ).bind(
+        R2_BUILTIN_ID, body.name ?? "R2", body.root_path ?? "",
+        body.mode ?? "library", body.enabled === undefined ? 1 : (body.enabled ? 1 : 0),
+        now, now,
+      ).run();
+      return c.text(subsonicOK({}), 200, XML);
+    }
     return c.text(subsonicError(70, "Source not found"), 404, XML);
   }
   return c.text(subsonicOK({}), 200, XML);
@@ -132,6 +194,13 @@ sourcesRoutes.post("/sources/delete", permissionMiddleware("manage_sources"), as
   const body = await c.req.json<{ id: string }>();
   if (!body.id) {
     return c.text(subsonicError(0, "Missing id"), 400, XML);
+  }
+  // R2 is built-in; deleting the row is a no-op in practice (the next
+  // /sources/list call resynthesises it), but reject explicitly so the
+  // response isn't misleadingly "ok" for an action that didn't actually
+  // remove anything meaningful.
+  if (body.id === R2_BUILTIN_ID) {
+    return c.text(subsonicError(0, "Cannot delete the built-in R2 source"), 400, XML);
   }
   const db = c.env.DB;
   await db.prepare("DELETE FROM storage_sources WHERE id = ?").bind(body.id).run();

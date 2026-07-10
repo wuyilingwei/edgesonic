@@ -282,7 +282,6 @@ onMounted(load);
 </template>
 
 <style scoped>
-.page { max-width: 1000px; }
 .radio-card { display: flex; flex-direction: column; gap: 0.55rem; }
 .radio-header { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; }
 .radio-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: flex-end; }

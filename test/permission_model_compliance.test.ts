@@ -97,7 +97,7 @@ async function main() {
     const sqlite = buildPermDb([[3, "view_all_users_items", 1]]);
     const db = makeD1(sqlite);
     const can = await hasPermission(
-      db,
+      { DB: db },
       { username: "root", level: 3, password: "x", enabled: 1 },
       "view_all_users_items",
     );
@@ -109,7 +109,7 @@ async function main() {
     const sqlite = buildPermDb([[2, "view_all_users_items", 0]]);
     const db = makeD1(sqlite);
     const can = await hasPermission(
-      db,
+      { DB: db },
       { username: "user", level: 2, password: "x", enabled: 1 },
       "view_all_users_items",
     );
@@ -121,7 +121,7 @@ async function main() {
     const sqlite = buildPermDb([]);
     const db = makeD1(sqlite);
     const can = await hasPermission(
-      db,
+      { DB: db },
       { username: "user", level: 1, password: "x", enabled: 1 },
       "view_all_users_items",
     );
@@ -232,6 +232,53 @@ async function main() {
     assert(r.status === 200, `200 (delegated L2 admin succeeds, got ${r.status})`);
     const body = await r.json() as { ok: boolean };
     assert(body.ok === true, "ok:true — permission-model delegation works");
+  }
+
+  // -------------------------------------------------------------------------
+  // PERMISSIONS_OVERRIDE env var wins over D1, D1 is the fallback
+  // -------------------------------------------------------------------------
+  console.log("\n119 — PERMISSIONS_OVERRIDE env var overrides D1 when present:");
+  {
+    const sqlite = buildPermDb([[2, "manage_sources", 0]]); // D1 says disabled
+    const db = makeD1(sqlite);
+    const can = await hasPermission(
+      { DB: db, PERMISSIONS_OVERRIDE: JSON.stringify({ "2": { manage_sources: true } }) },
+      { username: "user", level: 2, password: "x", enabled: 1 },
+      "manage_sources",
+    );
+    assert(can === true, "env override (true) wins even though D1 row says enabled=0");
+  }
+
+  console.log("\n119 — falls back to D1 when the override JSON has no entry for this (level, permission):");
+  {
+    const sqlite = buildPermDb([[2, "manage_sources", 1]]); // D1 says enabled
+    const db = makeD1(sqlite);
+    const can = await hasPermission(
+      { DB: db, PERMISSIONS_OVERRIDE: JSON.stringify({ "2": { some_other_perm: false } }) },
+      { username: "user", level: 2, password: "x", enabled: 1 },
+      "manage_sources",
+    );
+    assert(can === true, "missing key in override → falls through to D1's enabled=1");
+  }
+
+  console.log("\n119 — malformed override JSON falls back to D1 without throwing:");
+  {
+    const sqlite = buildPermDb([[2, "manage_sources", 1]]);
+    const db = makeD1(sqlite);
+    const can = await hasPermission(
+      { DB: db, PERMISSIONS_OVERRIDE: "{not valid json" },
+      { username: "user", level: 2, password: "x", enabled: 1 },
+      "manage_sources",
+    );
+    assert(can === true, "malformed JSON doesn't throw, falls back to D1");
+  }
+
+  console.log("\n119 — RPH sliding-window rate limit removed from permissionMiddleware:");
+  {
+    const authSrc = readFileSync(resolve(__dirname, "../worker/src/auth.ts"), "utf-8");
+    assert(!/max_rph/.test(authSrc), "auth.ts no longer references max_rph");
+    assert(!/rate_limits/.test(authSrc), "auth.ts no longer references the rate_limits table");
+    assert(authSrc.includes('hasPermission(c.env, user, requiredPermission)'), "permissionMiddleware delegates to the shared hasPermission helper");
   }
 
   // -------------------------------------------------------------------------

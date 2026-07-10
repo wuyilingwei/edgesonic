@@ -21,6 +21,7 @@ import { createQueries } from "../../db/queries";
 import { getFeatureString } from "../../utils/features";
 import { dispatchWorkBatch } from "../edgesonic/work";
 import { importLrcOnScan } from "../../utils/lrcSidecar";
+import { R2_BUILTIN_ID, synthesizeR2Row } from "./sources";
 
 export const scanRoutes = new Hono();
 
@@ -89,8 +90,37 @@ export const startScanHandler = async (c: import("hono").Context): Promise<Respo
      WHERE type = 's3' AND enabled = 1 ${onlyId ? "AND id = ?" : ""}`
   ).bind(...(onlyId ? [onlyId] : [])).all<S3ScanSourceRow>()).results;
 
-  if (davSources.length === 0 && s3Sources.length === 0) {
-    return c.text(subsonicError(70, "No enabled WebDAV or S3 source to scan"), 404, {
+  // R2 is scanned via the native MUSIC_BUCKET binding, not HTTP, so it has
+  // no base_url/credentials to select — just id/mode. Only requested when
+  // onlyId is unset (scan-all) or explicitly targets the built-in id; a real
+  // 'r2' row (created the first time an admin edits it, see sources.ts)
+  // wins over the synthetic default so a saved mode='sync_only' is honored.
+  const r2Real = (await db.prepare(
+    `SELECT id, mode FROM storage_sources WHERE type = 'r2' AND enabled = 1 ${onlyId ? "AND id = ?" : ""}`
+  ).bind(...(onlyId ? [onlyId] : [])).all<{ id: string; mode: string | null }>()).results;
+  const r2Sources: Array<{ id: string; mode: string | null }> = r2Real.length > 0
+    ? r2Real
+    : (!onlyId || onlyId === R2_BUILTIN_ID) ? [{ id: synthesizeR2Row().id, mode: synthesizeR2Row().mode }] : [];
+
+  // scan_jobs.source_id has a real FOREIGN KEY to storage_sources(id) — the
+  // synthetic R2 fallback above only exists in memory (see sources.ts
+  // synthesizeR2Row), so the scan_jobs INSERT a few lines down would fail
+  // with SQLITE_CONSTRAINT_FOREIGNKEY the first time anyone scans R2 before
+  // ever having saved a real edit for it. Materialize the row here, before
+  // any scan_jobs row can reference it — asyncScanR2Source's own upsert
+  // (further down) then just updates last_sync on an already-real row.
+  if (r2Real.length === 0 && r2Sources.length > 0) {
+    const now = Math.floor(Date.now() / 1000);
+    const defaults = synthesizeR2Row();
+    await db.prepare(
+      `INSERT INTO storage_sources (id, type, name, base_url, root_path, mode, enabled, created_at, updated_at)
+       VALUES (?, 'r2', ?, '', '', ?, 1, ?, ?)
+       ON CONFLICT(id) DO NOTHING`
+    ).bind(defaults.id, defaults.name, defaults.mode, now, now).run();
+  }
+
+  if (davSources.length === 0 && s3Sources.length === 0 && r2Sources.length === 0) {
+    return c.text(subsonicError(70, "No enabled WebDAV, S3 or R2 source to scan"), 404, {
       "Content-Type": "application/xml; charset=UTF-8",
     });
   }
@@ -100,7 +130,7 @@ export const startScanHandler = async (c: import("hono").Context): Promise<Respo
 
   // Insert scan_jobs rows synchronously so getScanStatus immediately sees them
   // as running; the actual scan runs in ctx.waitUntil.
-  for (const src of [...davSources, ...s3Sources]) {
+  for (const src of [...davSources, ...s3Sources, ...r2Sources]) {
     const jobId = "sj-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
     await queries.insertScanJob({ id: jobId, sourceId: src.id });
     jobs.push({ id: jobId, source_id: src.id });
@@ -129,6 +159,10 @@ export const startScanHandler = async (c: import("hono").Context): Promise<Respo
   for (const src of s3Sources) {
     const job = jobs[jobIdx++];
     exec.waitUntil(asyncScanS3Source(env, db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled }));
+  }
+  for (const src of r2Sources) {
+    const job = jobs[jobIdx++];
+    exec.waitUntil(asyncScanR2Source(env, db, src, job.id, { etagCheck, dispatchToWorkerPool: workerPoolEnabled }));
   }
 
   return c.text(
@@ -528,7 +562,7 @@ export async function asyncScanSource(
           // piling up duplicates. Cleared once the task reaches a terminal
           // status — see done/fail handlers in work.ts.
           dedupKey: t.instanceId,
-          // 118 — force rescan (etagCheck disabled) must actually redispatch
+          // Force rescan (etagCheck disabled) must actually redispatch
           // instances whose work_queue row already finished, not silently
           // no-op on the dedupKey collision (plain INSERT OR IGNORE would).
           upsert: !etagCheck,
@@ -770,7 +804,7 @@ export async function asyncScanS3Source(
           requiredCaps: ["music-metadata"],
           priority: 5,
           dedupKey: t.instanceId,
-          // 118 — see webdav scan path above: force rescan must redispatch
+          // See webdav scan path above: force rescan must redispatch
           // already-completed rows, not INSERT-OR-IGNORE no-op on them.
           upsert: !etagCheck,
         })));
@@ -785,6 +819,227 @@ export async function asyncScanS3Source(
       totalItems: audio.length,
       endedAt: Math.floor(Date.now() / 1000),
       errorMessage: complete ? null : `S3 page budget exhausted after ${MAX_S3_PAGES} pages`,
+    });
+  } catch (e) {
+    await queries.updateScanJob(jobId, {
+      status: "failed",
+      endedAt: Math.floor(Date.now() / 1000),
+      errorMessage: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+// R2 is scanned via the native MUSIC_BUCKET binding (no HTTP round-trip,
+// no S3-compatible credentials needed) — env.MUSIC_BUCKET.list() paginates
+// via cursor, same shape Files.vue's /files/list r2 branch already uses for
+// a single directory, just recursed over the whole bucket. Reuses the exact
+// three-path skip/update/insert structure as the WebDAV/S3 scanners so
+// existing r2:// song_instances rows (native uploads AND hotcache-mirrored
+// copies, both source_id='r2-local') are found and deduped correctly rather
+// than re-inserted.
+const MAX_R2_PAGES = 50; // 50 × 1000 = 50k objects max per invocation
+
+export async function asyncScanR2Source(
+  env: Env,
+  db: D1Database,
+  src: { id: string; mode?: string | null },
+  jobId: string,
+  opts: { etagCheck?: boolean; dispatchToWorkerPool?: boolean } = {},
+): Promise<void> {
+  const queries = createQueries(db);
+  const now = Math.floor(Date.now() / 1000);
+  const etagCheck = opts.etagCheck !== false;
+  const dispatchToWorkerPool = opts.dispatchToWorkerPool === true;
+  const dispatchTargets: Array<{ instanceId: string; uri: string; suffix: string; size: number }> = [];
+
+  try {
+    const audio: Array<{ key: string; size: number; etag: string | null; lastModified: number | null }> = [];
+    let cursor: string | undefined;
+    let pages = 0;
+    let complete = true;
+    do {
+      const listing = await env.MUSIC_BUCKET.list({ cursor, limit: 1000 });
+      for (const o of listing.objects) {
+        if (AUDIO_EXT.has(extOf(o.key))) {
+          audio.push({
+            key: o.key,
+            size: o.size,
+            etag: o.etag || null,
+            lastModified: o.uploaded ? Math.floor(o.uploaded.getTime() / 1000) : null,
+          });
+        }
+      }
+      cursor = listing.truncated ? listing.cursor : undefined;
+      pages++;
+      if (pages >= MAX_R2_PAGES && cursor) { complete = false; break; }
+    } while (cursor);
+
+    // Pull prior snapshot (same structure as WebDAV/S3 scan).
+    const existingMap = new Map<string, ExistingRow>();
+    {
+      const rows = (await db.prepare(
+        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned
+         FROM song_instances WHERE source_id = ?`,
+      ).bind(src.id).all<{
+        id: string;
+        storage_uri: string;
+        source_etag: string | null;
+        source_last_modified: number | null;
+        size: number | null;
+        tag_scanned: number | null;
+      }>()).results;
+      for (const r of rows) {
+        existingMap.set(r.storage_uri, {
+          id: r.id,
+          etag: r.source_etag,
+          lastModified: r.source_last_modified,
+          size: r.size,
+          tagScanned: r.tag_scanned ?? 0,
+        });
+      }
+    }
+
+    await queries.updateScanJob(jobId, { totalItems: audio.length });
+
+    const stmts: D1PreparedStatement[] = [];
+    const touchedAlbums = new Set<string>();
+    let scanned = 0;
+
+    const flush = async () => {
+      for (let i = 0; i < stmts.length; i += 80) {
+        await db.batch(stmts.slice(i, i + 80));
+      }
+      stmts.length = 0;
+      await queries.updateScanJob(jobId, { scannedItems: scanned });
+    };
+
+    for (const obj of audio) {
+      scanned++;
+      // Bare key, no source-id prefix — matches every other r2:// writer in
+      // the codebase (clone.ts, work_upload.ts, hotcache.ts, files.ts).
+      const uri = `r2://${obj.key}`;
+      const prior = existingMap.get(uri);
+
+      // Path 1: unchanged → skip. Pre-existing rows (native uploads never
+      // recorded source_etag/source_last_modified) naturally fail this check
+      // on their first R2 scan and fall through to path 2's UPDATE, which
+      // backfills those columns — a one-time reconciliation, not a bug.
+      if (prior && etagCheck) {
+        const etagSame = obj.etag !== null && prior.etag !== null && obj.etag === prior.etag;
+        const lmSame = obj.lastModified !== null && prior.lastModified !== null && obj.lastModified === prior.lastModified;
+        const sizeSame = prior.size === obj.size;
+        if (etagSame && lmSame && sizeSame) {
+          if (dispatchToWorkerPool && prior.tagScanned === 0) {
+            dispatchTargets.push({ instanceId: prior.id, uri, suffix: extOf(obj.key), size: obj.size });
+          }
+          if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+          continue;
+        }
+      }
+
+      // Path 2: changed (or first-ever backfill) → UPDATE
+      if (prior) {
+        stmts.push(
+          db.prepare(
+            `UPDATE song_instances
+             SET source_etag = ?, source_last_modified = ?, size = ?,
+                 suffix = ?, tag_scanned = 0, updated_at = ?
+             WHERE id = ?`,
+          ).bind(obj.etag, obj.lastModified, obj.size, extOf(obj.key), now, prior.id),
+        );
+        if (dispatchToWorkerPool) {
+          dispatchTargets.push({ instanceId: prior.id, uri, suffix: extOf(obj.key), size: obj.size });
+        }
+        if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+        continue;
+      }
+
+      // Path 3: new → INSERT
+      if (src.mode === "sync_only") {
+        if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+        continue;
+      }
+
+      const meta = guessFromPath(obj.key);
+      const artistId = "ar-" + md5(meta.artist).substring(0, 10);
+      const albumId = "al-" + md5(meta.artist + " " + meta.album).substring(0, 10);
+      const masterId = "sm-" + md5(uri).substring(0, 10);
+      const instanceId = "si-" + md5(uri).substring(0, 10);
+      touchedAlbums.add(albumId);
+
+      stmts.push(
+        db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+          .bind(artistId, meta.artist, meta.artist.toLowerCase(), now, now),
+        db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
+          .bind(albumId, meta.album, meta.album.toLowerCase(), now, now),
+        db.prepare(
+          `INSERT OR IGNORE INTO song_masters (id, album_id, artist_id, title, sort_title, track, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(masterId, albumId, artistId, meta.title, meta.title.toLowerCase(), meta.track, now, now),
+        db.prepare(
+          `INSERT OR IGNORE INTO song_instances
+             (id, master_id, source_id, storage_uri, suffix, size,
+              source_etag, source_last_modified, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).bind(instanceId, masterId, src.id, uri, extOf(obj.key), obj.size, obj.etag, obj.lastModified, now, now),
+      );
+
+      if (dispatchToWorkerPool) {
+        dispatchTargets.push({ instanceId, uri, suffix: extOf(obj.key), size: obj.size });
+      }
+      if (scanned % SCAN_PROGRESS_CHUNK === 0) await flush();
+    }
+
+    await flush();
+
+    for (const albumId of touchedAlbums) {
+      await db.prepare(
+        `UPDATE albums SET
+           song_count = (SELECT COUNT(*) FROM song_masters WHERE album_id = ?),
+           size = (SELECT COALESCE(SUM(si.size), 0) FROM song_instances si
+                   JOIN song_masters sm ON sm.id = si.master_id WHERE sm.album_id = ?),
+           updated_at = ?
+         WHERE id = ?`
+      ).bind(albumId, albumId, now, albumId).run();
+    }
+
+    // Unlike webdav/s3 (whose storage_sources row always exists), R2's row
+    // may still be the /sources/list-time synthetic default — a plain
+    // UPDATE would silently no-op and the completed scan's timestamp would
+    // vanish on next page load. Upsert instead: first scan creates the row
+    // (mirrors sources.ts's synthesizeR2Row defaults), later scans only
+    // touch last_sync/updated_at so a saved name/mode edit isn't clobbered.
+    await db.prepare(
+      `INSERT INTO storage_sources (id, type, name, base_url, root_path, mode, enabled, created_at, updated_at, last_sync)
+       VALUES (?, 'r2', 'R2', '', '', ?, 1, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET last_sync = excluded.last_sync, updated_at = excluded.updated_at`
+    ).bind(src.id, src.mode ?? "library", now, now, now).run();
+
+    if (dispatchToWorkerPool && dispatchTargets.length > 0) {
+      try {
+        await dispatchWorkBatch(db, dispatchTargets.map((t) => ({
+          taskType: "metadata",
+          payload: { instanceId: t.instanceId, sourceUri: t.uri, suffix: t.suffix, size: t.size },
+          requiredCaps: ["music-metadata"],
+          priority: 5,
+          dedupKey: t.instanceId,
+          // Force re-parse must actually redispatch instances whose
+          // work_queue row already finished, not silently no-op on the
+          // dedupKey collision (plain INSERT OR IGNORE would) — same fix
+          // as the WebDAV/S3 scan paths above.
+          upsert: !etagCheck,
+        })));
+      } catch (e) {
+        console.error(`[r2scan ${jobId}] dispatchWorkBatch failed:`, e);
+      }
+    }
+
+    await queries.updateScanJob(jobId, {
+      status: complete ? "completed" : "failed",
+      scannedItems: scanned,
+      totalItems: audio.length,
+      endedAt: Math.floor(Date.now() / 1000),
+      errorMessage: complete ? null : `R2 page budget exhausted after ${MAX_R2_PAGES} pages`,
     });
   } catch (e) {
     await queries.updateScanJob(jobId, {

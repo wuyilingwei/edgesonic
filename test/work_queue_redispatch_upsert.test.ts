@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// 118 — dedupKey + plain INSERT OR IGNORE is a *one-shot-ever* mechanism:
+// dedupKey + plain INSERT OR IGNORE is a *one-shot-ever* mechanism:
 // once a row with that deterministic id lands in a terminal state
 // (completed/failed/canceled), every future dispatch under the same
 // dedupKey silently no-ops — the row never comes back to 'queued'. That's
@@ -27,7 +27,7 @@
 // the INSERT to `ON CONFLICT(id) DO UPDATE` so a stale terminal row gets
 // kicked back to 'queued' with attempts/claim state cleared. This test
 // exercises both the old (upsert unset/false → still ignored, documenting
-// the pre-118 behavior) and new (upsert: true → redispatched) paths against
+// the pre-fix behavior) and new (upsert: true → redispatched) paths against
 // a real SQLite engine (node:sqlite) so ON CONFLICT semantics are genuinely
 // exercised, not hand-mocked.
 //
@@ -114,7 +114,7 @@ function markFailed(sqlite: DatabaseSync, id: string) {
 }
 
 async function main() {
-  console.log("dispatchWork: without upsert, re-dispatching a completed dedupKey row is a no-op (pre-118 behavior):");
+  console.log("dispatchWork: without upsert, re-dispatching a completed dedupKey row is a no-op (pre-fix behavior):");
   {
     const sqlite = buildDb();
     const db = makeD1(sqlite);

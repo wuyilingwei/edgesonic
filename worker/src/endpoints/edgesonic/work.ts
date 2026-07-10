@@ -548,7 +548,7 @@ export interface DispatchInput {
   // (e.g. same song_instances.id metadata parse) is a no-op instead of piling
   // up duplicate rows in work_queue. Scan.ts uses this with the instanceId.
   dedupKey?: string;
-  // 118 — dedupKey + plain INSERT OR IGNORE is a *one-shot-ever* mechanism:
+  // dedupKey + plain INSERT OR IGNORE is a *one-shot-ever* mechanism:
   // once a row with that deterministic id exists (in ANY terminal state —
   // completed/failed/canceled), every future re-dispatch under the same key
   // silently no-ops. That's correct for the common "don't pile up duplicates

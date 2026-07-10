@@ -281,27 +281,7 @@
     "crossCopyBtn": "Copy",
     "crossCopied": "Copied",
     "crossCopyFailed": "Copy failed",
-    "localR2": "Local R2",
-    "workQueue": {
-      "title": "Worker Queue",
-      "progress": "Parsed {completed} / {queued} pending",
-      "progressNoQueue": "Completed {completed} · failed {failed}",
-      "speed": "Speed: {speed}/min",
-      "speedPending": "Speed: measuring…",
-      "current": "Running: {type}",
-      "recent": "Recent tasks",
-      "pause": "Pause",
-      "resume": "Resume",
-      "paused": "Paused — already-claimed tasks will finish",
-      "failed": "Failed queue ({n})",
-      "failedEmpty": "No failed tasks",
-      "failedRow": "{type} · {error}",
-      "cancel": "Cancel",
-      "canceled": "Task canceled",
-      "cancelFailed": "Cancel failed",
-      "statusLoadFailed": "Failed to load queue status",
-      "refresh": "Refresh"
-    }
+    "localR2": "Local R2"
   },
   "users": {
     "label": "// MANAGEMENT",

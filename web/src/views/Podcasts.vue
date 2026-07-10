@@ -462,7 +462,6 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.page { max-width: 1100px; }
 .page-subtitle {
   margin-top: 0.25rem;
   font-family: var(--font-mono);

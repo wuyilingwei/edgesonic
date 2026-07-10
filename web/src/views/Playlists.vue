@@ -642,7 +642,6 @@ onMounted(loadPlaylists);
 </template>
 
 <style scoped>
-.page { max-width: 1100px; }
 .back-link { cursor: pointer; color: var(--color-accent-primary); }
 .back-link:hover { color: var(--color-text-primary); }
 

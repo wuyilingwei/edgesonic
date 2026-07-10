@@ -99,6 +99,9 @@ function buildDb() {
       max_rph INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (level, permission)
     );
+    CREATE TABLE song_instances (
+      id TEXT PRIMARY KEY, source_id TEXT NOT NULL, size INTEGER DEFAULT 0, missing INTEGER DEFAULT 0
+    );
     INSERT INTO user_permissions (level, permission, enabled, max_rph) VALUES (2, 'manage_sources', 1, 0);
     INSERT INTO user_permissions (level, permission, enabled, max_rph) VALUES (3, 'manage_sources', 1, 0);
   `);
