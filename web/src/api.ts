@@ -217,6 +217,13 @@ export function useAuth() {
     return JSON.parse(await tagPost("batchWrite", body));
   }
 
+  interface RescanResult { ok: boolean; error?: string; dispatched?: number; skipped?: number; }
+  // 118 — Library.vue batch toolbar "重新扫描" action: force-requeues the
+  // given song master ids' original instances for metadata re-parsing.
+  async function rescanSongs(masterIds: string[]): Promise<RescanResult> {
+    return JSON.parse(await tagPost("rescan", { ids: masterIds }));
+  }
+
   interface TidyFolderResult {
     ok: boolean;
     error?: string;
@@ -296,7 +303,7 @@ export function useAuth() {
   return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
     login, logout, handleAuthError, authFetch, authPost, uploadFile, crossCopy, makeSalt, md5,
     tagFetch, tagPost, storageFetch, storagePost, edgesonicFetch, edgesonicPost,
-    readTags, writeTags, batchWriteTags, submitMetadata, tidyFolder,
+    readTags, writeTags, batchWriteTags, rescanSongs, submitMetadata, tidyFolder,
     signedParams, restUrl, streamUrl, coverArtUrl };
 }
 
