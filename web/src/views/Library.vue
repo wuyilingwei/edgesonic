@@ -24,7 +24,7 @@ import type { ScrapeResult } from "../lib/scrape";
 
 const { t } = useI18n();
 
-const { authFetch, writeTags, batchWriteTags, coverArtUrl, isAdmin } = useAuth();
+const { authFetch, writeTags, batchWriteTags, rescanSongs, coverArtUrl, isAdmin } = useAuth();
 const player = usePlayerStore();
 const BATCH_MAX = 50;
 
@@ -218,6 +218,32 @@ function openBatchEditor() {
   editInitial.value = {};
   editMsg.value = ""; editErr.value = false;
   editorOpen.value = true;
+}
+
+// 118 — batch toolbar "重新扫描": force-requeue the selected songs' original
+// instances for metadata re-parsing (resets tag_scanned=0 + redispatches a
+// work_queue task with upsert:true so an already-completed row actually
+// comes back to 'queued'). No modal needed — just a transient inline status
+// message next to the toolbar buttons.
+const rescanBusy = ref(false);
+const rescanMsg = ref("");
+async function batchRescan() {
+  if (!selectedIds.value.length || rescanBusy.value) return;
+  rescanBusy.value = true;
+  rescanMsg.value = "";
+  try {
+    const res = await rescanSongs(selectedIds.value);
+    if (res.ok) {
+      rescanMsg.value = t("library.rescanQueued", { n: res.dispatched ?? 0 });
+      clearSelection();
+    } else {
+      rescanMsg.value = `${t("library.rescanFailed")}: ${res.error || "unknown"}`;
+    }
+  } catch (e) {
+    rescanMsg.value = `${t("library.rescanFailed")}: ${e instanceof Error ? e.message : String(e)}`;
+  }
+  rescanBusy.value = false;
+  setTimeout(() => { rescanMsg.value = ""; }, 5000);
 }
 
 function closeEditor() {
@@ -681,6 +707,13 @@ async function submitCreateAndAdd() {
           :title="selectedIds.length > BATCH_MAX ? t('library.batchTooMany') : ''"
           @click="openBatchEditor"
         >{{ t("library.batchEdit") }}</button>
+        <button
+          class="btn-secondary btn-sm"
+          :disabled="rescanBusy || selectedIds.length > BATCH_MAX"
+          :title="selectedIds.length > BATCH_MAX ? t('library.batchTooMany') : ''"
+          @click="batchRescan"
+        >{{ rescanBusy ? t("library.rescanning") : t("library.rescan") }}</button>
+        <span v-if="rescanMsg" class="mono-label">{{ rescanMsg }}</span>
       </div>
       <!-- 102: no `auto` tracks (per-row grids misalign); artist/time get
            fixed-share tracks so columns line up across every row. -->

@@ -528,6 +528,10 @@ export async function asyncScanSource(
           // piling up duplicates. Cleared once the task reaches a terminal
           // status — see done/fail handlers in work.ts.
           dedupKey: t.instanceId,
+          // 118 — force rescan (etagCheck disabled) must actually redispatch
+          // instances whose work_queue row already finished, not silently
+          // no-op on the dedupKey collision (plain INSERT OR IGNORE would).
+          upsert: !etagCheck,
         })));
       } catch (e) {
         console.error(`[scan ${jobId}] dispatchWorkBatch failed:`, e);
@@ -766,6 +770,9 @@ export async function asyncScanS3Source(
           requiredCaps: ["music-metadata"],
           priority: 5,
           dedupKey: t.instanceId,
+          // 118 — see webdav scan path above: force rescan must redispatch
+          // already-completed rows, not INSERT-OR-IGNORE no-op on them.
+          upsert: !etagCheck,
         })));
       } catch (e) {
         console.error(`[s3scan ${jobId}] dispatchWorkBatch failed:`, e);

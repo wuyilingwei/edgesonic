@@ -548,7 +548,25 @@ export interface DispatchInput {
   // (e.g. same song_instances.id metadata parse) is a no-op instead of piling
   // up duplicate rows in work_queue. Scan.ts uses this with the instanceId.
   dedupKey?: string;
+  // 118 — dedupKey + plain INSERT OR IGNORE is a *one-shot-ever* mechanism:
+  // once a row with that deterministic id exists (in ANY terminal state —
+  // completed/failed/canceled), every future re-dispatch under the same key
+  // silently no-ops. That's correct for the common "don't pile up duplicates
+  // while still queued/claimed" case, but wrong for an explicit force-rescan
+  // — the whole point of "re-run the metadata pipeline anyway" is to make an
+  // already-completed row runnable again. Set upsert=true to switch the
+  // INSERT to `ON CONFLICT(id) DO UPDATE` so a stale row is kicked back to
+  // 'queued' with a fresh attempts counter instead of being ignored. Only
+  // meaningful when dedupKey is also set.
+  upsert?: boolean;
 }
+
+const REDISPATCH_CONFLICT_CLAUSE = `
+     ON CONFLICT(id) DO UPDATE SET
+       status = 'queued', payload = excluded.payload, priority = excluded.priority,
+       max_attempts = excluded.max_attempts, attempts = 0, error_message = NULL,
+       claimed_by = NULL, claimed_at = NULL, heartbeat_at = NULL,
+       result_json = NULL, expires_at = excluded.expires_at`;
 
 export async function dispatchWork(db: D1Database, input: DispatchInput): Promise<string> {
   // a re-dispatch becomes a no-op; the caller still gets the canonical id back
@@ -561,11 +579,12 @@ export async function dispatchWork(db: D1Database, input: DispatchInput): Promis
   const requiredCapsJson = input.requiredCaps && input.requiredCaps.length > 0
     ? JSON.stringify(input.requiredCaps)
     : null;
-  const insertVerb = input.dedupKey ? "INSERT OR IGNORE INTO" : "INSERT INTO";
+  const insertVerb = input.dedupKey && !input.upsert ? "INSERT OR IGNORE INTO" : "INSERT INTO";
+  const conflictClause = input.dedupKey && input.upsert ? REDISPATCH_CONFLICT_CLAUSE : "";
   await db.prepare(
     `${insertVerb} work_queue (id, task_type, payload, required_caps, priority,
                               status, max_attempts, expires_at)
-     VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)${conflictClause}`,
   ).bind(
     id,
     input.taskType,
@@ -600,12 +619,13 @@ export async function dispatchWorkBatch(
     const requiredCapsJson = input.requiredCaps && input.requiredCaps.length > 0
       ? JSON.stringify(input.requiredCaps)
       : null;
-    const insertVerb = input.dedupKey ? "INSERT OR IGNORE INTO" : "INSERT INTO";
+    const insertVerb = input.dedupKey && !input.upsert ? "INSERT OR IGNORE INTO" : "INSERT INTO";
+    const conflictClause = input.dedupKey && input.upsert ? REDISPATCH_CONFLICT_CLAUSE : "";
     stmts.push(
       db.prepare(
         `${insertVerb} work_queue (id, task_type, payload, required_caps, priority,
                                     status, max_attempts, expires_at)
-         VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)${conflictClause}`,
       ).bind(
         id,
         input.taskType,
