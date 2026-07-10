@@ -329,7 +329,14 @@
     "previous": "上一首",
     "play": "播放",
     "pause": "暂停",
-    "next": "下一首"
+    "next": "下一首",
+    "rewind10": "快退10秒",
+    "forward10": "快进10秒",
+    "playMode": {
+      "sequential": "顺序播放",
+      "single": "单曲循环",
+      "shuffle": "随机播放"
+    }
   },
   "tools": {
     "label": "系统 / 工具",

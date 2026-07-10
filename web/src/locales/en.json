@@ -333,7 +333,14 @@
     "previous": "Previous",
     "play": "Play",
     "pause": "Pause",
-    "next": "Next"
+    "next": "Next",
+    "rewind10": "Rewind 10s",
+    "forward10": "Forward 10s",
+    "playMode": {
+      "sequential": "Sequential",
+      "single": "Repeat one",
+      "shuffle": "Shuffle"
+    }
   },
   "tools": {
     "label": "SYSTEM / TOOLS",
