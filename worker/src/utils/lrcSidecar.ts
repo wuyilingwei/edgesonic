@@ -41,8 +41,15 @@ const LRC_MAX_BYTES = 100 * 1024; // 100 KB hard cap
 // Replace the file extension of a storage_uri's path component with `lrc`.
 // `webdav://src/Artist/Album/01 Track.flac` → `webdav://src/Artist/Album/01 Track.lrc`
 // Files without an extension simply get `.lrc` appended (rare; harmless).
+//
+// 113 — the scheme group was `[a-z]+`, which never matches "r2" or "s3"
+// (they contain a digit), so this silently fell through to the `${storageUri}.lrc`
+// fallback (producing "...track.flac.lrc" instead of "...track.lrc") for
+// every r2:// and s3:// instance since 094 shipped — sidecar lookups only
+// ever worked for webdav://. `[a-z][a-z0-9]*` follows normal URI scheme
+// syntax (letter, then letters/digits) and covers both.
 function toLrcUri(storageUri: string): string {
-  const m = storageUri.match(/^([a-z]+:\/\/.*?)(\.[^\/.]+)$/i);
+  const m = storageUri.match(/^([a-z][a-z0-9]*:\/\/.*?)(\.[^\/.]+)$/i);
   if (m) return `${m[1]}.lrc`;
   return `${storageUri}.lrc`;
 }

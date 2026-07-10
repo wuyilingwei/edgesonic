@@ -1338,7 +1338,8 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
             :disabled="!isSuperAdmin"
           />
           <button class="btn-secondary btn-sm" :disabled="!isSuperAdmin || maxConcurrentBusy" @click="saveMaxConcurrent">保存</button>
-          <span class="wp-concurrency-hint">1-8，越高消化越快但带宽/CPU 消耗增加</span>
+          <span class="wp-concurrency-hint">1-8（并发上限）——浏览器会按最近任务成功/失败率，在 1 到此上限之间自动升降实际并发数</span>
+          <span class="wp-count-label" style="margin-left: 0.6rem">当前并发 {{ workerPool.currentConcurrency }} / {{ workerPool.maxConcurrent }}</span>
         </div>
 
         <div v-if="workerPool.lastError" class="wp-last-error">

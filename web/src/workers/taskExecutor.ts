@@ -93,6 +93,20 @@ self.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
   (self as unknown as Worker).postMessage({ ok: false, error: clampMsg(msg) });
 });
 
+// 116 — locate the first `moof` (movie fragment) box in an MP4 buffer.
+// Returns the byte offset where that box STARTS (its 4-byte size field, i.e.
+// 4 bytes before the "moof" 4CC), or -1 when no fragment is present. Used by
+// the fMP4 parse fallback in runMetadata.
+function firstMoofBoxStart(buf: Uint8Array): number {
+  // 'm','o','o','f'
+  for (let i = 4; i < buf.length - 3; i++) {
+    if (buf[i] === 0x6d && buf[i + 1] === 0x6f && buf[i + 2] === 0x6f && buf[i + 3] === 0x66) {
+      return i - 4;
+    }
+  }
+  return -1;
+}
+
 // True when a parsed result has no usable metadata at all — no text tags,
 // no embedded picture, no lyrics. Used to decide whether the last-resort
 // full-file fetch in runMetadata is worth attempting. Exported for direct
@@ -191,22 +205,44 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
   // and no defaultSampleDuration in track fragment header" when the moof
   // fragment is incomplete (we only fetched a head slice). Wrap in try/catch
   // and fallback to basic atom parsing for the title/artist/album tags.
+  const mimeType = headResp.headers.get("content-type") || undefined;
   let meta;
   try {
     meta = await parseBuffer(buf, {
-      mimeType: headResp.headers.get("content-type") || undefined,
+      mimeType,
       size: totalSize > buf.length ? totalSize : undefined,
     }, { duration: true, skipCovers: false });
   } catch (parseErr) {
     // fMP4 crash — try without duration (avoids reading sample tables)
     try {
       meta = await parseBuffer(buf, {
-        mimeType: headResp.headers.get("content-type") || undefined,
+        mimeType,
         size: totalSize > buf.length ? totalSize : undefined,
       }, { duration: false, skipCovers: false });
     } catch {
-      // Total failure — return minimal result with just the error
-      throw new Error(`metadata parse failed: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
+      // 116 — fragmented-MP4 fallback. music-metadata (≤11.13.0) throws
+      // "Missing sampleDuration and no defaultSampleDuration in track
+      // fragment header" while walking `moof` fragments of some fMP4 .m4a
+      // files — AFTER it has already read the complete tag set (moov/udta/
+      // ilst, including ©lyr lyrics) that physically precedes the first
+      // fragment. Verified on a production sample: truncating the buffer
+      // just before the first `moof` box lets the same parser return
+      // title/artist/album/lyrics cleanly. Gated on actually finding a
+      // `moof` box (the fMP4 discriminator) rather than on the error
+      // message text, which is brittle across library versions. Duration
+      // is intentionally not requested here — fMP4 duration lives in the
+      // fragments we just cut off.
+      const cut = firstMoofBoxStart(buf);
+      if (cut <= 16) {
+        // Not fragmented MP4 → not our case, propagate the original error.
+        throw new Error(`metadata parse failed: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
+      }
+      try {
+        meta = await parseBuffer(buf.slice(0, cut), { mimeType, size: cut }, { duration: false, skipCovers: false });
+      } catch {
+        // Total failure — return minimal result with just the error
+        throw new Error(`metadata parse failed: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
+      }
     }
   }
 

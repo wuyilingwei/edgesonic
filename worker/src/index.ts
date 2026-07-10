@@ -23,6 +23,7 @@ import { refreshAllChannels } from "./utils/podcastSync";
 import { maybeRunScheduledScan } from "./utils/scheduledScan";
 import { reclaimStaleWork } from "./utils/workReclaim";
 import { maybeRunMetadataRecheck } from "./utils/metadataRecheck";
+import { maybeRunLrcBackfill } from "./utils/lrcBackfill";
 import { webLoginRoutes } from "./endpoints/edgesonic/auth";
 import { sharePublicRoutes } from "./endpoints/share_public";
 
@@ -136,6 +137,14 @@ export default {
     ctx.waitUntil(
       maybeRunMetadataRecheck(env, ctx).catch((e) => {
         console.error("scheduled maybeRunMetadataRecheck failed:", e);
+      }),
+    );
+    // 113 — batch-scan song_masters still missing lyrics for a sibling .lrc
+    // file. Independent of maybeRunMetadataRecheck: this never touches
+    // work_queue, it reads directly from R2/WebDAV and writes D1 in place.
+    ctx.waitUntil(
+      maybeRunLrcBackfill(env, ctx).catch((e) => {
+        console.error("scheduled maybeRunLrcBackfill failed:", e);
       }),
     );
   },

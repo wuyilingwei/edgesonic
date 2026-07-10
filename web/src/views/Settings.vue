@@ -128,6 +128,8 @@ async function loadFeatures() {
     loadR2PresignStatus();
     // 110: hydrate the metadata re-check cadence.
     hydrateMetadataRecheckFromFeatures();
+    // 113: hydrate the LRC sidecar backfill cadence.
+    hydrateLrcBackfillFromFeatures();
   } catch (e: unknown) {
     // 后端契约可能尚未部署 —— 优雅降级显示错误（非 JSON 响应一律视为 API 不可用）
     error.value = e instanceof SyntaxError || !(e instanceof Error)
@@ -392,6 +394,33 @@ async function saveMetadataRecheckInterval() {
     showToast(`${t("settings.common.workerPool.recheckIntervalSaveFailed")}: ${msg}`, "error");
   }
   metadataRecheckIntervalBusy.value = false;
+}
+
+// === 113 — LRC sidecar backfill cadence ===
+const lrcBackfillIntervalHours = ref<number>(24);
+const lrcBackfillIntervalBusy = ref(false);
+
+function hydrateLrcBackfillFromFeatures() {
+  const hours = parseInt(findFeatureString("lrc_backfill_interval_hours", "24"), 10);
+  lrcBackfillIntervalHours.value = Number.isFinite(hours) && hours >= 0 ? hours : 24;
+}
+
+async function saveLrcBackfillInterval() {
+  lrcBackfillIntervalBusy.value = true;
+  try {
+    const hours = Math.max(0, Math.min(168, Math.floor(lrcBackfillIntervalHours.value || 0)));
+    lrcBackfillIntervalHours.value = hours;
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "lrc_backfill_interval_hours",
+      value: String(hours),
+    }));
+    if (!data.ok) throw new Error(data.error || "lrc_backfill_interval_hours");
+    showToast(t("settings.common.workerPool.lrcBackfillIntervalSaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.workerPool.lrcBackfillIntervalSaveFailed")}: ${msg}`, "error");
+  }
+  lrcBackfillIntervalBusy.value = false;
 }
 
 function hydrateScanFromFeatures() {
@@ -679,6 +708,31 @@ async function onRecheckMetadataNow() {
   recheckMetadataBusy.value = false;
 }
 
+// 113 — admin trigger for /edgesonic/work/backfillLrcNow. Scans song_masters
+// still missing lyrics for a sibling .lrc file next to their audio source
+// and fills them in directly (no work_queue involved — a sidecar read is a
+// small R2/WebDAV GET the Worker can do itself).
+const backfillLrcBusy = ref(false);
+const backfillLrcToast = ref("");
+async function onBackfillLrcNow() {
+  if (!isSuperAdmin.value || backfillLrcBusy.value) return;
+  backfillLrcBusy.value = true;
+  backfillLrcToast.value = "";
+  try {
+    const text = await edgesonicPost("work/backfillLrcNow", {});
+    const data = JSON.parse(text);
+    if (!data.ok) throw new Error(data.error || "rejected");
+    backfillLrcToast.value = t("settings.common.workerPool.lrcBackfillDoneToast", {
+      filled: data.filled || 0,
+      candidates: data.candidates || 0,
+    });
+  } catch (e: unknown) {
+    backfillLrcToast.value = e instanceof Error ? e.message : String(e);
+  }
+  backfillLrcBusy.value = false;
+}
+
+// 078 — maintenance: cleanup duplicate album cover bindings. Calls
 // /edgesonic/maintenance/cleanupDuplicateCovers, surfaces groups/cleared
 // counts in a toast, and tolerates 0/0 (no-op) gracefully. R2 objects are
 // NOT deleted — only the album.cover_r2_key column is freed for the freed
@@ -1616,6 +1670,42 @@ onMounted(() => {
             </div>
             <div v-if="recheckMetadataToast" class="tc-actions">
               <span class="feature-desc">{{ recheckMetadataToast }}</span>
+            </div>
+
+            <!-- 113 — cron-driven LRC sidecar backfill: interval + manual
+                 trigger. Scans song_masters still missing lyrics for a
+                 sibling .lrc file next to the audio source (never retried by
+                 110's recheck, which only re-parses embedded tags). -->
+            <div class="tc-row" style="margin-top: 0.6rem">
+              <span class="tc-key">{{ t("settings.common.workerPool.lrcBackfillLabel") }}</span>
+              <span class="feature-desc">{{ t("settings.common.workerPool.lrcBackfillDesc") }}</span>
+            </div>
+            <div class="tc-actions">
+              <input
+                v-model.number="lrcBackfillIntervalHours"
+                type="number" min="0" max="168" step="1"
+                class="free-alloc-input"
+                style="width: 5rem"
+              />
+              <button
+                class="btn-sm btn-secondary"
+                :disabled="lrcBackfillIntervalBusy"
+                @click="saveLrcBackfillInterval"
+              >
+                {{ t("settings.common.scan.save") }}
+              </button>
+              <button
+                class="btn-secondary"
+                :disabled="backfillLrcBusy"
+                @click="onBackfillLrcNow"
+              >
+                {{ backfillLrcBusy
+                  ? t("settings.common.workerPool.lrcBackfillRunning")
+                  : t("settings.common.workerPool.lrcBackfillButton") }}
+              </button>
+            </div>
+            <div v-if="backfillLrcToast" class="tc-actions">
+              <span class="feature-desc">{{ backfillLrcToast }}</span>
             </div>
           </div>
         </div>
