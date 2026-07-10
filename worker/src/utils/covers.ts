@@ -15,6 +15,7 @@
 
 import { locateEmbeddedPicture } from "./tags";
 import { encodePath } from "../endpoints/storage/scan";
+import { TAIL_BYTES as WAV_TAIL_BYTES } from "./slices";
 
 const HEAD_BYTES = 256 * 1024;
 const MAX_PICTURE_BYTES = 8 * 1024 * 1024;
@@ -82,7 +83,7 @@ export async function resolveAlbumCover(env: Env, albumId: string): Promise<stri
   return coverKey;
 }
 
-async function extractEmbedded(
+export async function extractEmbedded(
   fetchRange: (range: { offset: number; length: number }) => Promise<Uint8Array | null>,
   totalSize?: number,
 ): Promise<{ body: Uint8Array; contentType: string } | null> {
@@ -93,11 +94,22 @@ async function extractEmbedded(
   // window on anything but a tiny file. Fetch a tail slice too whenever we
   // know the file is bigger than one head window (a smaller file's "tail"
   // would just re-fetch bytes already in head — skip the redundant request).
+  //
+  // WAV needs a much bigger tail window than other formats: rippers commonly
+  // append the whole "id3 " chunk (tags + APIC art) after "data", and that
+  // chunk's own size scales with the embedded picture — the same class of
+  // bug 111 already fixed for the /tag/read text-tag path (slices.ts grew
+  // its tail from 128KB to 2MB for exactly this reason). This on-demand
+  // cover path had its own separate 256KB tail that was never updated, so a
+  // WAV's id3/APIC chunk starting further back than 256KB from EOF was
+  // silently never found — reuse slices.ts's constant to stay in sync.
+  const isWav = head.length >= 4 && head[0] === 0x52 && head[1] === 0x49 && head[2] === 0x46 && head[3] === 0x46;
+  const tailWindow = isWav ? WAV_TAIL_BYTES : HEAD_BYTES;
   let tail: Uint8Array | undefined;
   let tailStart = 0;
-  if (totalSize && totalSize > HEAD_BYTES * 2) {
-    tailStart = totalSize - HEAD_BYTES;
-    tail = (await fetchRange({ offset: tailStart, length: HEAD_BYTES })) ?? undefined;
+  if (totalSize && totalSize > HEAD_BYTES + tailWindow) {
+    tailStart = totalSize - tailWindow;
+    tail = (await fetchRange({ offset: tailStart, length: tailWindow })) ?? undefined;
   }
 
   const pic = locateEmbeddedPicture(head, tail);

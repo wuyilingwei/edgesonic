@@ -16,18 +16,29 @@
 <script setup lang="ts">
 import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { useRouter } from "vue-router";
+import { useRouter, useRoute } from "vue-router";
 import { usePlayerStore } from "../stores/player";
 import { useAuth, formatDuration } from "../api";
 
 const { t } = useI18n();
 const router = useRouter();
+const route = useRoute();
 const player = usePlayerStore();
 const { coverArtUrl } = useAuth();
 
+// Remember the last non-now-playing route so the cover/track-info click can
+// toggle the now-playing view open/closed instead of only ever navigating
+// forward (there was previously no way to "close" it from the player bar).
+let lastRoute = "/library";
+watch(() => route.path, (p) => { if (p !== "/now-playing") lastRoute = p; }, { immediate: true });
+
 function goNowPlaying() {
-  router.push("/now-playing");
+  if (!player.hasTrack) return;
+  if (route.path === "/now-playing") router.push(lastRoute);
+  else router.push("/now-playing");
 }
+
+const playModeTitle = computed(() => t(`player.playMode.${player.playMode}`));
 
 const coverFailed = ref(false);
 const coverSrc = computed(() => {
@@ -50,6 +61,16 @@ const bufferedSegments = computed(() => {
 
 const progressEl = ref<HTMLElement | null>(null);
 const dragging = ref(false);
+
+// Resting display stays mm:ss (formatDuration); while dragging the seek bar
+// a floating tooltip shows hundredths precision at the thumb position.
+function fmtPrecise(sec: number): string {
+  if (!isFinite(sec) || sec < 0) return "0:00.00";
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  const cs = Math.floor((sec % 1) * 100);
+  return `${m}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
+}
 
 function seekFromEvent(e: MouseEvent) {
   const el = progressEl.value;
@@ -108,8 +129,10 @@ function removeFromQueue(i: number) {
     <!-- Controls + progress -->
     <div class="pb-center">
       <div class="pb-controls">
-        <button class="pb-btn" :class="{ active: player.shuffle }" :disabled="!player.hasTrack" :title="t('player.shuffle')" @click="player.toggleShuffle()">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17L10.59 9.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.92 7.41-1.42 1.42 3.54 3.54L20 14.5V20h-5.5l2.04-2.04-3.12-3.12z"/></svg>
+        <button class="pb-btn" :class="{ active: player.playMode !== 'sequential' }" :disabled="!player.hasTrack" :title="playModeTitle" @click="player.cyclePlayMode()">
+          <svg v-if="player.playMode === 'shuffle'" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17L10.59 9.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.92 7.41-1.42 1.42 3.54 3.54L20 14.5V20h-5.5l2.04-2.04-3.12-3.12z"/></svg>
+          <svg v-else-if="player.playMode === 'single'" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="9.5" y="15.5" fill="currentColor" font-size="8" font-weight="bold">1</text></svg>
+          <svg v-else viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
         </button>
         <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.previous')" @click="player.prev()">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z"/></svg>
@@ -120,9 +143,6 @@ function removeFromQueue(i: number) {
         </button>
         <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.next')" @click="player.next()">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-        </button>
-        <button class="pb-btn" :class="{ active: player.repeatMode !== 'off' }" :disabled="!player.hasTrack" :title="player.repeatMode === 'one' ? '单曲循环' : player.repeatMode === 'all' ? '列表循环' : '关闭循环'" @click="player.toggleRepeat()">
-          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
         </button>
       </div>
       <div class="pb-progress-row">
@@ -136,6 +156,7 @@ function removeFromQueue(i: number) {
           ></div>
           <div class="pb-progress-fill" :style="{ width: progressPct + '%' }"></div>
           <div class="pb-progress-thumb" :class="{ active: dragging }" :style="{ left: progressPct + '%' }"></div>
+          <div v-if="dragging" class="pb-progress-tooltip" :style="{ left: progressPct + '%' }">{{ fmtPrecise(player.currentTime) }}</div>
         </div>
         <span class="pb-time">{{ formatDuration(Math.floor(player.duration)) }}</span>
       </div>
@@ -287,6 +308,20 @@ function removeFromQueue(i: number) {
   opacity: 0; transition: opacity 0.15s;
 }
 .pb-progress:hover .pb-progress-thumb, .pb-progress-thumb.active { opacity: 1; }
+.pb-progress-tooltip {
+  position: absolute;
+  bottom: 16px;
+  transform: translateX(-50%);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
+}
 
 /* --- right: volume + queue --- */
 .pb-right { display: flex; align-items: center; gap: 0.6rem; width: 180px; flex-shrink: 0; justify-content: flex-end; }

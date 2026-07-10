@@ -93,6 +93,21 @@ self.addEventListener("unhandledrejection", (e: PromiseRejectionEvent) => {
   (self as unknown as Worker).postMessage({ ok: false, error: clampMsg(msg) });
 });
 
+// True when a parsed result has no usable metadata at all — no text tags,
+// no embedded picture, no lyrics. Used to decide whether the last-resort
+// full-file fetch in runMetadata is worth attempting. Exported for direct
+// unit testing (test/metadata_full_file_fallback.test.ts) — the rest of this
+// module runs `self.addEventListener(...)` at load time, which requires a
+// real Worker global and can't be exercised end-to-end under plain Node.
+export function isMetaEmpty(m: Awaited<ReturnType<typeof parseBuffer>>): boolean {
+  const c = m.common;
+  const hasText = !!(c.title || c.artist || c.album || c.albumartist ||
+    (c.genre && c.genre.length) || c.year || c.track?.no || c.disk?.no);
+  const hasPicture = !!(c.picture && c.picture.length);
+  const hasLyrics = !!(lyricsTagsToText(c.lyrics) || nativeLyricsFallback(m.native));
+  return !hasText && !hasPicture && !hasLyrics;
+}
+
 // ---------------------------------------------------------------------------
 // metadata — fetch the first 512KB of the source URI, parseBuffer it, return
 // the compact tag set that endpoints/tag/submit.ts expects.
@@ -115,12 +130,18 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
   // anywhere in the file — often AFTER the data chunk (which can be 70+ MB).
   // A 512KB head only covers the start; the ID3 block at the tail is missed.
   // Strategy: fetch head (2MB for large ID3v2 headers with artwork) + tail
-  // (512KB for trailing id3/INFO chunks). Concatenate with a gap so
+  // (2MB for trailing id3/INFO chunks). Concatenate with a gap so
   // music-metadata sees both regions. For non-WAV the tail fetch is skipped
   // (FLAC/MP3/M4A tags are at the head).
   const isWav = String(payload.suffix || "").toLowerCase() === "wav";
   const HEAD_BYTES = 2 * 1024 * 1024; // 2MB — covers large ID3v2 + APIC
-  const TAIL_BYTES = 512 * 1024;      // 512KB — trailing id3/INFO chunk
+  // 512KB used to be enough for a text-only trailing id3 chunk, but when that
+  // same chunk also embeds cover art (very common) the chunk can run several
+  // hundred KB to a few MB, pushing the TITLE/ARTIST frames — usually ordered
+  // before APIC — outside a 512KB tail window entirely. Match the 2MB tail
+  // worker/src/utils/slices.ts already uses for the equivalent server-side
+  // path (same bug class 111 fixed there).
+  const TAIL_BYTES = 2 * 1024 * 1024; // 2MB — trailing id3/INFO chunk (may include embedded art)
 
   const headResp = await fetch(streamUrl, {
     headers: { Range: `bytes=0-${HEAD_BYTES - 1}` },
@@ -187,6 +208,37 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
       // Total failure — return minimal result with just the error
       throw new Error(`metadata parse failed: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
     }
+  }
+
+  // Last resort, ALL formats: if the head(+tail) window came back with
+  // literally nothing usable — no text tags, no picture, no lyrics — fetch
+  // the whole file and re-parse before concluding it truly has no metadata.
+  // A partial window can miss tags parked somewhere neither head nor tail
+  // reaches (e.g. a WAV whose id3/LIST chunk sits mid-file rather than at
+  // either end, or any format with an oversized header pushing tags past
+  // HEAD_BYTES) — only a full read can rule that out for sure. Skipped when
+  // the head fetch already delivered the whole file (status 200, or a known
+  // totalSize that fits inside HEAD_BYTES) since a second identical fetch
+  // would find nothing new; capped so a pathological multi-GB file can't OOM
+  // the tab.
+  const FULL_FETCH_CAP_BYTES = 300 * 1024 * 1024; // 300MB
+  const headAlreadyHadWholeFile =
+    headResp.status === 200 || (totalSize > 0 && totalSize <= HEAD_BYTES);
+  if (isMetaEmpty(meta) && !headAlreadyHadWholeFile && totalSize > 0 && totalSize <= FULL_FETCH_CAP_BYTES) {
+    try {
+      const fullResp = await fetch(streamUrl);
+      if (fullResp.ok) {
+        const fullBuf = new Uint8Array(await fullResp.arrayBuffer());
+        const fullMimeType = fullResp.headers.get("content-type") || undefined;
+        let fullMeta;
+        try {
+          fullMeta = await parseBuffer(fullBuf, { mimeType: fullMimeType }, { duration: true, skipCovers: false });
+        } catch {
+          fullMeta = await parseBuffer(fullBuf, { mimeType: fullMimeType }, { duration: false, skipCovers: false }).catch(() => undefined);
+        }
+        if (fullMeta && !isMetaEmpty(fullMeta)) meta = fullMeta;
+      }
+    } catch { /* full-file fetch/parse failed — keep the original (empty) result */ }
   }
 
   // Extract first embedded picture (APIC for ID3, PICTURE for FLAC, etc).

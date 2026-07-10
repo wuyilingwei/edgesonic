@@ -15,19 +15,24 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onUnmounted } from "vue";
+import { useI18n } from "vue-i18n";
 import { usePlayerStore } from "../stores/player";
-import { useAuth, parseXmlInner } from "../api";
+import { useAuth, parseXmlInner, formatDuration } from "../api";
 
+const { t } = useI18n();
 const player = usePlayerStore();
 const { coverArtUrl, authFetch } = useAuth();
 
-// ---- Time format mm:ss.xx ----
-function fmtTime(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return "00:00.00";
+const playModeTitle = computed(() => t(`player.playMode.${player.playMode}`));
+
+// Resting display stays mm:ss (formatDuration); while dragging the seek bar
+// a floating tooltip shows hundredths precision at the thumb position.
+function fmtPrecise(sec: number): string {
+  if (!isFinite(sec) || sec < 0) return "0:00.00";
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   const cs = Math.floor((sec % 1) * 100);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
 // ---- Lyrics: original + translation (dual axis) ----
@@ -143,11 +148,17 @@ const activeIdx = computed(() => {
 });
 
 // Scroll active line to center. Paused for 5s after user scrolls manually.
+//
+// lyricsScrollEl is bound to .np-right — the actual overflow:auto scroll
+// container — not the inner .np-lyrics-scroll wrapper; scrollTo() on the
+// (non-scrolling) wrapper was a no-op, so auto-scroll never visibly moved.
+// Query by class rather than raw `.children[idx]` too: the wrapper's first
+// child is a leading spacer div, so a plain index was off by one.
 watch(activeIdx, async (idx) => {
   if (idx < 0 || userScrolled.value || !lyricsScrollEl.value) return;
   await nextTick();
   const container = lyricsScrollEl.value;
-  const el = container.children[idx] as HTMLElement | undefined;
+  const el = container.querySelectorAll(".np-lyric-line")[idx] as HTMLElement | undefined;
   if (!el) return;
   const target = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
   container.scrollTo({ top: target, behavior: "smooth" });
@@ -157,6 +168,14 @@ function onLyricsScroll() {
   userScrolled.value = true;
   if (autoScrollTimer.value) clearTimeout(autoScrollTimer.value);
   autoScrollTimer.value = setTimeout(() => { userScrolled.value = false; }, 5000);
+}
+
+// Click a lyric line to jump playback there. Only meaningful for synced (LRC
+// timestamped) lyrics — plain unsynced text has every line's time=0.
+function onLyricClick(line: LyricLine) {
+  if (!hasSynced.value || !player.hasTrack) return;
+  player.seek(line.time);
+  if (!player.playing) player.toggle();
 }
 
 onUnmounted(() => {
@@ -217,52 +236,53 @@ const progressPct = computed(() => player.duration > 0 ? (player.currentTime / p
       <!-- Progress bar -->
       <div class="np-progress-bar" id="np-seek-bar" @mousedown="onSeekStart">
         <div class="np-progress-fill" :style="{ width: progressPct + '%' }"></div>
+        <div class="np-progress-thumb" :class="{ active: seeking }" :style="{ left: progressPct + '%' }"></div>
+        <div v-if="seeking" class="np-progress-tooltip" :style="{ left: progressPct + '%' }">{{ fmtPrecise(player.currentTime) }}</div>
       </div>
       <div class="np-time-row">
-        <span class="np-time">{{ fmtTime(player.currentTime) }}</span>
-        <span class="np-time">{{ fmtTime(player.duration) }}</span>
+        <span class="np-time">{{ formatDuration(Math.floor(player.currentTime)) }}</span>
+        <span class="np-time">{{ formatDuration(Math.floor(player.duration)) }}</span>
       </div>
 
       <!-- Controls: centered, ff/rewind symmetric -->
       <div class="np-controls">
-        <button class="np-btn" :class="{ active: player.shuffle }" :disabled="!player.hasTrack" @click="player.toggleShuffle()" title="随机">
-          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17L10.59 9.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.92 7.41-1.42 1.42 3.54 3.54L20 14.5V20h-5.5l2.04-2.04-3.12-3.12z"/></svg>
+        <button class="np-btn" :class="{ active: player.playMode !== 'sequential' }" :disabled="!player.hasTrack" @click="player.cyclePlayMode()" :title="playModeTitle">
+          <svg v-if="player.playMode === 'shuffle'" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17L10.59 9.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.92 7.41-1.42 1.42 3.54 3.54L20 14.5V20h-5.5l2.04-2.04-3.12-3.12z"/></svg>
+          <svg v-else-if="player.playMode === 'single'" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="9" y="17" fill="currentColor" font-size="8" font-weight="bold">1</text></svg>
+          <svg v-else viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
         </button>
-        <button class="np-btn" :disabled="!player.hasTrack" @click="rewind10" title="快退10秒">
+        <button class="np-btn" :disabled="!player.hasTrack" @click="rewind10" :title="t('player.rewind10')">
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M11 18V6l-8.5 6 8.5 6zm.5-6 8.5 6V6l-8.5 6z"/></svg>
         </button>
-        <button class="np-btn" :disabled="!player.hasTrack" @click="player.prev()" title="上一首">
+        <button class="np-btn" :disabled="!player.hasTrack" @click="player.prev()" :title="t('player.previous')">
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z"/></svg>
         </button>
         <button class="np-btn np-play" @click="player.toggle()" :disabled="!player.hasTrack">
           <svg v-if="player.playing" viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
           <svg v-else viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M8 5v14l11-7L8 5z"/></svg>
         </button>
-        <button class="np-btn" :disabled="!player.hasTrack" @click="player.next()" title="下一首">
+        <button class="np-btn" :disabled="!player.hasTrack" @click="player.next()" :title="t('player.next')">
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
         </button>
-        <button class="np-btn" :disabled="!player.hasTrack" @click="forward10" title="快进10秒">
+        <button class="np-btn" :disabled="!player.hasTrack" @click="forward10" :title="t('player.forward10')">
           <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 18l8.5-6L4 6v12zm9.5-12v12L22 12l-8.5-6z"/></svg>
-        </button>
-        <button class="np-btn" :class="{ active: player.repeatMode !== 'off' }" :disabled="!player.hasTrack" @click="player.toggleRepeat()" :title="player.repeatMode === 'one' ? '单曲循环' : player.repeatMode === 'all' ? '列表循环' : '关闭循环'">
-          <svg v-if="player.repeatMode === 'one'" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="9" y="17" fill="currentColor" font-size="8" font-weight="bold">1</text></svg>
-          <svg v-else viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
         </button>
       </div>
     </div>
 
     <!-- Right: lyrics with auto-scroll + translation -->
-    <div class="np-right" @scroll.passive="onLyricsScroll">
+    <div class="np-right" ref="lyricsScrollEl" @scroll.passive="onLyricsScroll">
       <div v-if="lyricsLoading" class="np-lyrics-status">加载歌词中…</div>
       <div v-else-if="lyricsError" class="np-lyrics-status">{{ lyricsError }}</div>
       <div v-else-if="lyrics.length === 0" class="np-lyrics-status">暂无歌词</div>
-      <div v-else ref="lyricsScrollEl" class="np-lyrics-scroll">
+      <div v-else class="np-lyrics-scroll">
         <div class="np-lyrics-spacer"></div>
         <div
           v-for="(line, i) in lyrics"
           :key="i"
           class="np-lyric-line"
-          :class="{ active: hasSynced && i === activeIdx }"
+          :class="{ active: hasSynced && i === activeIdx, clickable: hasSynced }"
+          @click="onLyricClick(line)"
         >
           <div class="np-lyric-original">{{ line.text }}</div>
           <div v-if="line.tr" class="np-lyric-translation">{{ line.tr }}</div>
@@ -324,6 +344,28 @@ const progressPct = computed(() => player.duration > 0 ? (player.currentTime / p
   background: var(--color-accent-primary);
   border-radius: 2px;
   transition: width 0.1s linear;
+}
+.np-progress-thumb {
+  position: absolute; top: 50%; width: 10px; height: 10px;
+  background: var(--color-accent-primary);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0; transition: opacity 0.15s;
+}
+.np-progress-bar:hover .np-progress-thumb, .np-progress-thumb.active { opacity: 1; }
+.np-progress-tooltip {
+  position: absolute;
+  bottom: 14px;
+  transform: translateX(-50%);
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  padding: 0.2rem 0.4rem;
+  border-radius: 3px;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .np-time-row {
   display: flex;
@@ -395,6 +437,8 @@ const progressPct = computed(() => player.duration > 0 ? (player.currentTime / p
   transition: opacity 0.3s, color 0.3s, transform 0.3s;
   opacity: 0.4;
 }
+.np-lyric-line.clickable { cursor: pointer; }
+.np-lyric-line.clickable:hover { opacity: 0.75; }
 .np-lyric-line.active {
   opacity: 1;
   transform: scale(1.05);
