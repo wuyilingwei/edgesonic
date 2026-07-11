@@ -46,14 +46,14 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
     return c.json({ ok: false, error: "Missing file body or name" }, 400);
   }
 
-  const contentType = c.req.header("Content-Type") || "application/octet-stream";
+  const suffix = name.split(".").pop() || "bin";
+  const contentType = normalizeAudioContentType(c.req.header("Content-Type"), suffix);
   // Build R2 key: music/ is the base; path is a sub-path relative to music/
   const cleanPath = path.replace(/^music\/?/, "").replace(/\/+$/, "");
   const r2Key = "music/" + (cleanPath ? cleanPath + "/" : "") + name;
 
   const db = env.DB;
   const now = Math.floor(Date.now() / 1000);
-  const suffix = name.split(".").pop() || "bin";
   const sizeHeader = parseInt(c.req.header("Content-Length") || "0", 10);
 
   if (source === "webdav") {
@@ -126,6 +126,21 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
 
   return c.json({ ok: true, key: r2Key, id: instanceId, storageUri });
 });
+
+function normalizeAudioContentType(contentType: string | null | undefined, suffix: string): string {
+  const lower = (contentType || "").split(";", 1)[0].trim().toLowerCase();
+  if (lower && lower !== "application/octet-stream") return contentType || lower;
+  switch (suffix.toLowerCase()) {
+    case "flac": return "audio/flac";
+    case "mp3": return "audio/mpeg";
+    case "m4a": return "audio/mp4";
+    case "aac": return "audio/aac";
+    case "ogg": return "audio/ogg";
+    case "opus": return "audio/opus";
+    case "wav": return "audio/wav";
+    default: return contentType || "application/octet-stream";
+  }
+}
 
 // ── File operations (studio-style structured REST, no notes/color-labels) ──
 

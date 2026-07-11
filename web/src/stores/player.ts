@@ -171,10 +171,37 @@ export const usePlayerStore = defineStore("player", () => {
     el.addEventListener("durationchange", () => {
       if (el === active && isFinite(el.duration)) duration.value = el.duration;
     });
-    el.addEventListener("play", () => { if (el === active) playing.value = true; });
-    el.addEventListener("pause", () => { if (el === active) playing.value = false; });
-    el.addEventListener("ended", () => { if (el === active) next(); });
-    el.addEventListener("error", () => { if (el === active) playing.value = false; });
+    el.addEventListener("play", () => {
+      console.log("[Player] play event, src =", el.src);
+      if (el === active) playing.value = true;
+    });
+    el.addEventListener("pause", () => {
+      console.log("[Player] pause event");
+      if (el === active) playing.value = false;
+    });
+    el.addEventListener("ended", () => {
+      console.log("[Player] ended event");
+      if (el === active) next();
+    });
+    el.addEventListener("error", (e) => {
+      console.error("[Player] audio error event:", el.error ? {
+        code: el.error.code,
+        message: el.error.message
+      } : e, "src =", el.src);
+      if (el === active) playing.value = false;
+    });
+    el.addEventListener("stalled", () => {
+      console.warn("[Player] stalled event (buffering stalled)");
+    });
+    el.addEventListener("waiting", () => {
+      console.log("[Player] waiting event (waiting for data)");
+    });
+    el.addEventListener("loadedmetadata", () => {
+      console.log("[Player] loadedmetadata event, duration =", el.duration);
+    });
+    el.addEventListener("canplay", () => {
+      console.log("[Player] canplay event");
+    });
     el.addEventListener("progress", () => syncBuffered(el));
     return el;
   }

@@ -272,7 +272,8 @@ const streamHandler = async (c: Context) => {
   //
  // Decision matrix:
   //   scheme   | flag          | strategy allows scheme | → 302?
-  //   r2       | enable_r2_presign='1' + secrets set | always|r2_only    | yes
+  //   r2       | enable_r2_presign='1' + secrets set | always|r2_only    | yes (native/API clients)
+  //   r2       | browser session                         | *                | no (same-origin proxy)
   //   r2       | off / secrets missing               | *                 | no (proxy)
   //   r2       | on                                  | never|webdav_only | no (proxy)
   //   webdav   | enable_webdav_presign='1'           | always|webdav_only | yes
@@ -314,7 +315,7 @@ const streamHandler = async (c: Context) => {
       const secretKey = env.R2_SECRET_ACCESS_KEY;
       const accountId = env.CF_ACCOUNT_ID;
       const schemeAllowed = strategy === "always" || strategy === "r2_only";
-      if (presignOn === "1" && schemeAllowed && accessKeyId && secretKey && accountId) {
+      if (!isBrowserSession && presignOn === "1" && schemeAllowed && accessKeyId && secretKey && accountId) {
         try {
           const key = selected.storage_uri.substring("r2://".length);
           const presigned = await presignR2Get({
@@ -417,13 +418,28 @@ const streamHandler = async (c: Context) => {
   }
 
   const headers = new Headers();
-  headers.set("Content-Type", result.contentType);
+  headers.set("Content-Type", normalizeStreamContentType(result.contentType, selected.suffix));
   if (result.contentLength) headers.set("Content-Length", String(result.contentLength));
   if (result.acceptRanges) headers.set("Accept-Ranges", "bytes");
   if (result.contentRange) headers.set("Content-Range", result.contentRange);
 
   return new Response(result.body, { status: result.statusCode, headers });
 };
+
+function normalizeStreamContentType(contentType: string, suffix?: string | null): string {
+  const lower = contentType.split(";", 1)[0].trim().toLowerCase();
+  if (lower && lower !== "application/octet-stream") return contentType;
+  switch ((suffix || "").toLowerCase()) {
+    case "flac": return "audio/flac";
+    case "mp3": return "audio/mpeg";
+    case "m4a": return "audio/mp4";
+    case "aac": return "audio/aac";
+    case "ogg": return "audio/ogg";
+    case "opus": return "audio/opus";
+    case "wav": return "audio/wav";
+    default: return contentType;
+  }
+}
 
 // Helper for the transcode branch above. Returns a Response on success, null
 // on any fallback signal (engine disabled / unsupported profile / open fail).
