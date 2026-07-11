@@ -1,15 +1,15 @@
 //
 // Coverage:
-//   1. callCfApi success / CF success=false / non-JSON branches
-//   2. setToken validates against /accounts/{id} then PUTs both secrets,
-//      with the request body shape the CF API expects
-//   3. setToken returns 400 when accountId/token missing
-//   4. setToken returns 400 when CF validation rejects the token
-//   5. getStatus reflects env presence + tokenLast4 + accountId
-//   6. testConn returns 400 with no env, 200 on success, 502 on failure
-//   7. setCron PUTs the correct schedules body; rejects bad expressions
-//   8. getAnalytics aggregates GraphQL buckets into requests/errors/cpuMs
-//   9. getAnalytics returns { available: false } on GraphQL errors
+//  1. callCfApi success / CF success=false / non-JSON branches
+//  2. setToken validates against /accounts/{id} then PUTs both secrets,
+//    with the request body shape the CF API expects
+//  3. setToken returns 400 when accountId/token missing
+//  4. setToken returns 400 when CF validation rejects the token
+//  5. getStatus reflects env presence + tokenLast4 + accountId
+//  6. testConn returns 400 with no env, 200 on success, 502 on failure
+//  7. setCron PUTs the correct schedules body; rejects bad expressions
+//  8. getAnalytics aggregates GraphQL buckets into requests/errors/cpuMs
+//  9. getAnalytics returns { available: false } on GraphQL errors
 //
 // Run: npx tsx test/cf_integration.test.ts
 
@@ -110,7 +110,7 @@ function makeApp(env: Record<string, string | undefined>, level = 3) {
   app.use("*", async (c, next) => {
     // Hono `c.env` reads from c.req.raw, but for testing we attach directly.
     (c as unknown as { env: Record<string, unknown> }).env = envWithDb;
-    c.set("user", { username: "rosmontis", level });
+    c.set("user", { username: "tester", level });
     await next();
   });
   app.route("/edgesonic", cfRoutes);

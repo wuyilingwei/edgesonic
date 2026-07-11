@@ -1,9 +1,9 @@
 //
 // Exercises the SQL shape via a thin Hono mount + mock D1. Covers:
-//   • only tag_scanned=0 rows for the asked source come back
-//   • limit query param clamps (>500 → 500; ≤0 ignored → default 50)
-//   • total count is separate from items.length (i.e. items truncated by limit)
-//   • missing source query param → 400
+//  • only tag_scanned=0 rows for the asked source come back
+//  • limit query param clamps (>500 → 500; ≤0 ignored → default 50)
+//  • total count is separate from items.length (i.e. items truncated by limit)
+//  • missing source query param → 400
 //
 // Run: npx tsx test/scan_pending.test.ts
 

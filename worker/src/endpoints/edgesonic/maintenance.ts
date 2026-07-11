@@ -4,19 +4,19 @@
 // and safe to re-run (idempotent / "no-op when nothing to do").
 //
 // First endpoint: cleanupDuplicateCovers.
-//   Background: Before 076 the getCoverArt fallback path (resolveAlbumCover)
-//   would write the same parent-directory cover.jpg to a distinct R2 key per
-//   album, so a folder hosting 25 albums ended up with 25 R2 keys whose
-//   *contents* were identical (one anime character shown for every album).
-//   076 removed the fallback, but the 25 historical keys are still bound to
-//   their albums in D1. This endpoint releases all but one binding per
-//   duplicate key, letting each freed album re-resolve its own cover on the
-//   next /rest/getCoverArt call (which now correctly 404s if no per-album
-//   cover exists, prompting <img onerror> to fall back to the UI placeholder
-//   — the desired behaviour).
+//  Background: Before 076 the getCoverArt fallback path (resolveAlbumCover)
+//  would write the same parent-directory cover.jpg to a distinct R2 key per
+//  album, so a folder hosting 25 albums ended up with 25 R2 keys whose
+//  *contents* were identical (one anime character shown for every album).
+//  076 removed the fallback, but the 25 historical keys are still bound to
+//  their albums in D1. This endpoint releases all but one binding per
+//  duplicate key, letting each freed album re-resolve its own cover on the
+//  next /rest/getCoverArt call (which now correctly 404s if no per-album
+//  cover exists, prompting <img onerror> to fall back to the UI placeholder
+//  — the desired behaviour).
 //
-//   We do NOT delete the R2 objects: the survivor row in each group still
-//   needs the bytes. R2 lifecycle / orphan sweep is a separate concern.
+// We do NOT delete the R2 objects: the survivor row in each group still
+//  needs the bytes. R2 lifecycle / orphan sweep is a separate concern.
 
 import { Hono } from "hono";
 import type { User } from "../../types/entities";
@@ -37,13 +37,13 @@ export const maintenanceRoutes = new Hono<{
 // POST /edgesonic/maintenance/cleanupDuplicateCovers
 // ---------------------------------------------------------------------------
 // Response: { ok: true, groups, cleared }
-//   - groups:  number of distinct cover_r2_key values that had >1 album
-//   - cleared: number of albums whose cover_r2_key was set to NULL
+//  - groups: number of distinct cover_r2_key values that had >1 album
+//  - cleared: number of albums whose cover_r2_key was set to NULL
 //
 // Algorithm:
-//   1. SELECT cover_r2_key, COUNT(*) FROM albums GROUP BY ... HAVING n > 1
-//   2. For each duplicated key, SELECT ids ORDER BY id ASC.
-//      Survivor = ids[0]; the rest get cover_r2_key=NULL.
+//  1. SELECT cover_r2_key, COUNT(*) FROM albums GROUP BY ... HAVING n > 1
+//  2. For each duplicated key, SELECT ids ORDER BY id ASC.
+//    Survivor = ids[0]; the rest get cover_r2_key=NULL.
 //
 // Why "id ASC" as the survivor rule? Stable + deterministic + matches the
 // `id` we generate during scan (which itself is created-order-ish), so the
@@ -116,10 +116,10 @@ maintenanceRoutes.post("/maintenance/cleanupDuplicateCovers",
 // and browser workers have left rows stuck in 'claimed' with stale heartbeats.
 //
 // Response: { ok, reclaimed, requeued, failed, items: [{ id, status, attempts }] }
-//   - reclaimed: total rows mutated (requeued + failed)
-//   - requeued:  rows whose attempts<max_attempts → status='queued'
-//   - failed:    rows whose attempts>=max_attempts → status='failed' terminal
-//   - items:     the per-row breakdown (capped naturally by the stale set)
+//  - reclaimed: total rows mutated (requeued + failed)
+//  - requeued: rows whose attempts<max_attempts → status='queued'
+//   - failed:  rows whose attempts>=max_attempts → status='failed' terminal
+//   - items:   the per-row breakdown (capped naturally by the stale set)
 //
 // We use a single UPDATE … RETURNING so the read and the write happen against
 // a consistent snapshot — without RETURNING we'd risk reclaiming rows that
@@ -140,7 +140,7 @@ maintenanceRoutes.post("/maintenance/reclaimStaleWork",
   // one statement, and RETURNING surfaces the post-update row so the response
   // can show the operator exactly what happened.
   //
-  // We keep the error_message wording aligned with workReclaim.ts so the
+ // We keep the error_message wording aligned with workReclaim.ts so the
   // /work/status feed reads identically for cron-driven and manually-driven
   // reclaims (an operator inspecting failed rows shouldn't have to guess
   // whether the sweep was automatic).
@@ -184,29 +184,29 @@ maintenanceRoutes.post("/maintenance/reclaimStaleWork",
 // ---------------------------------------------------------------------------
 // POST /edgesonic/maintenance/resetFailedWork
 // ---------------------------------------------------------------------------
-//   When a browser worker shipped a buggy bundle, every task it picked up
-//   would burn through attempts (default max=3) and end up at status='failed'.
-//   Subsequent scans INSERT OR IGNORE the same deterministic id, so the
-//   failed row sticks around forever and no fresh worker ever gets a shot at
-//   it. The legitimate (now updated) bundle therefore can't recover the
-//   instance metadata until somebody manually flips the failed rows back to
-//   queued. This endpoint is that flip.
+//  When a browser worker shipped a buggy bundle, every task it picked up
+//  would burn through attempts (default max=3) and end up at status='failed'.
+//  Subsequent scans INSERT OR IGNORE the same deterministic id, so the
+//  failed row sticks around forever and no fresh worker ever gets a shot at
+//  it. The legitimate (now updated) bundle therefore can't recover the
+//  instance metadata until somebody manually flips the failed rows back to
+//  queued. This endpoint is that flip.
 //
 // Query: task_type=<optional> — filter the reset to a single task type. Useful
-//   for "I only want metadata tasks to retry, leave the scan failures alone".
+//  for "I only want metadata tasks to retry, leave the scan failures alone".
 // Response: { ok: true, reset, taskType? }
-//   - reset:    number of rows whose status moved 'failed' → 'queued'
-//   - taskType: echoes the filter when given (helpful in operator audit log)
+//   - reset:  number of rows whose status moved 'failed' → 'queued'
+//  - taskType: echoes the filter when given (helpful in operator audit log)
 //
 // Why the wholesale reset (attempts=0, clear claimed_* / error_message)?
-//   - attempts=0: a fresh bundle deserves a clean budget; otherwise the very
-//     first hiccup re-fails it.
-//   - claimed_by/claimed_at/heartbeat_at: failed rows shouldn't carry
-//     stale-claim residue. Leaving them set would make a future workReclaim
-//     sweep treat the row as "claimed but stale" and try to flip it back to
-//     failed again — clearing is safer.
-//   - error_message=NULL: the previous error doesn't apply to the retry; the
-//     UI shows it as a fresh queued row.
+//  - attempts=0: a fresh bundle deserves a clean budget; otherwise the very
+//   first hiccup re-fails it.
+//  - claimed_by/claimed_at/heartbeat_at: failed rows shouldn't carry
+//   stale-claim residue. Leaving them set would make a future workReclaim
+//   sweep treat the row as "claimed but stale" and try to flip it back to
+//   failed again — clearing is safer.
+//  - error_message=NULL: the previous error doesn't apply to the retry; the
+//   UI shows it as a fresh queued row.
 //
 // Idempotent: re-running with zero failed rows just returns reset=0.
 maintenanceRoutes.post("/maintenance/resetFailedWork",
@@ -248,11 +248,11 @@ maintenanceRoutes.post("/maintenance/resetFailedWork",
 // song's webdav instance inside the Worker and discards them.
 //
 // Interpreting the result against what the browser observes on /rest/stream:
-//   - originMBps low here too            → the origin / CF-to-origin route is
-//                                          the bottleneck (hot cache is the fix)
-//   - originMBps high, browser still slow → the sub-request bandwidth pool is
-//                                          throttling the proxied stream
-//                                          (hot cache / presign is the fix)
+//   - originMBps low here too          → the origin / CF-to-origin route is
+//                                        the bottleneck (hot cache is the fix)
+//  - originMBps high, browser still slow → the sub-request bandwidth pool is
+//                                        throttling the proxied stream
+//                                        (hot cache / presign is the fix)
 maintenanceRoutes.get("/maintenance/webdavThroughput",
   permissionMiddleware("maintenance_cleanup"),
   async (c) => {

@@ -110,7 +110,7 @@ function doLogout() {
           class="side-link"
           :class="{ active: item.path === '/' ? route.path === '/' : route.path.startsWith(item.path) }"
         >
-          <span v-if="item.icon" class="side-emoji" aria-hidden="true">{{ item.icon }}</span>{{ item.label }}
+         <span v-if="item.icon" class="side-emoji" aria-hidden="true">{{ item.icon }}</span>{{ item.label }}
         </router-link>
       </div>
     </aside>

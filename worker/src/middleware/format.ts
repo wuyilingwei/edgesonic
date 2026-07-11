@@ -12,15 +12,15 @@
 // non-XML content types and are passed through untouched.
 //
 // Navidrome docs + the reference music-tag-web instance):
-//   * Numeric/boolean attributes must be emitted as JSON numbers/booleans
-//     (`"duration":235`, `"adminRole":true`), NOT strings. XML loses types,
-//     so we re-type by ATTRIBUTE NAME (value-shape guessing is unsafe: an
-//     artist legitimately named "46" must stay a string).
-//   * Known list children are ALWAYS arrays, even with one element
-//     (`"album":[{...}]`). Array-ness depends on the PARENT tag: <album> is
-//     an array inside <albumList2> but a single object at the response root
-//     (getAlbum). We encode (parent, child) pairs.
-//   * <versions> children of openSubsonicExtensions are arrays of ints.
+//  * Numeric/boolean attributes must be emitted as JSON numbers/booleans
+//   (`"duration":235`, `"adminRole":true`), NOT strings. XML loses types,
+//   so we re-type by ATTRIBUTE NAME (value-shape guessing is unsafe: an
+//   artist legitimately named "46" must stay a string).
+//  * Known list children are ALWAYS arrays, even with one element
+//   (`"album":[{...}]`). Array-ness depends on the PARENT tag: <album> is
+//   an array inside <albumList2> but a single object at the response root
+//   (getAlbum). We encode (parent, child) pairs.
+//  * <versions> children of openSubsonicExtensions are arrays of ints.
 
 import type { Context } from "hono";
 

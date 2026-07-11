@@ -6,10 +6,10 @@
 // whether enough wall-clock time has elapsed since the previous run.
 //
 // Semantics:
-//   scan_interval_hours = 0    → disabled, return immediately
-//   scan_interval_hours = 1    → run every tick (still writes last_scan_ts so
-//                                  ops can monitor cadence)
-//   scan_interval_hours = N>1  → only run when now - last_scan_ts >= N * 3600
+//   scan_interval_hours = 0  → disabled, return immediately
+//   scan_interval_hours = 1  → run every tick (still writes last_scan_ts so
+//                                ops can monitor cadence)
+//  scan_interval_hours = N>1 → only run when now - last_scan_ts >= N * 3600
 //
 // Each run dispatches one scan_jobs row per enabled WebDAV source, then fires
 // asyncScanSource via ctx.waitUntil so individual sources don't block each

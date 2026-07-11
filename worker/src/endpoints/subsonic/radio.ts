@@ -1,17 +1,17 @@
 //
 // Endpoints:
-//   GET    /rest/getInternetRadioStations
-//   GET|POST /rest/createInternetRadioStation
-//   GET|POST /rest/updateInternetRadioStation
-//   GET|POST /rest/deleteInternetRadioStation
+//   GET  /rest/getInternetRadioStations
+//  GET|POST /rest/createInternetRadioStation
+//  GET|POST /rest/updateInternetRadioStation
+//  GET|POST /rest/deleteInternetRadioStation
 //
 // Policy:
-//   * Read endpoint: any authenticated user (browse-gated upstream).
-//   * CUD endpoints: `manage_radio` permission (admin-only by default).
-//   * auth.ts SESSION_ONLY_PATHS pins CUD to web-session credentials so a
-//     leaked subsonic_credential / apiKey cannot mutate the station list.
-//   * EdgeSonic is a directory only — clients connect to stream_url directly,
-//     no proxy here (esChain does not apply to external radio streams).
+//  * Read endpoint: any authenticated user (browse-gated upstream).
+//  * CUD endpoints: `manage_radio` permission (admin-only by default).
+//  * auth.ts SESSION_ONLY_PATHS pins CUD to web-session credentials so a
+//   leaked subsonic_credential / apiKey cannot mutate the station list.
+//  * EdgeSonic is a directory only — clients connect to stream_url directly,
+//   no proxy here (esChain does not apply to external radio streams).
 import { Hono } from "hono";
 import { createQueries } from "../../db/queries";
 import { permissionMiddleware, subsonicError } from "../../auth";

@@ -884,8 +884,8 @@ export function createQueries(db: D1Database) {
     // ========================================================================
     // ========================================================================
     // The dispatcher (endpoints/transcode.ts) owns the row lifecycle:
-    //   insertTranscodeJob → row in 'pending' / 'processing'
-    //   updateTranscodeJob → status / output / error after engine returns
+    //  insertTranscodeJob → row in 'pending' / 'processing'
+    //  updateTranscodeJob → status / output / error after engine returns
     // Engines themselves never touch D1; this keeps the abstraction simple.
 
     async insertTranscodeJob(opts: {
@@ -933,19 +933,19 @@ export function createQueries(db: D1Database) {
     // we persist a song_instances row so the stream endpoint can short-circuit
     // future identical requests without queueing another transcode.
     //
-    // - `id` is caller-provided (we use `si-bp-<random16>` from work_upload.ts
-    //   so it's easy to grep / distinguish from upload-flow instances).
+  // - `id` is caller-provided (we use `si-bp-<random16>` from work_upload.ts
+    //  so it's easy to grep / distinguish from upload-flow instances).
     // - `source_id` is fixed to 'r2-local' to match 049's transcode_jobs path
-    //   (the output always lives in MUSIC_BUCKET).
+    //  (the output always lives in MUSIC_BUCKET).
     // - `parent_instance_id` is the original instance that triggered the
-    //   transcode; tracking it lets the future tidy-up job cascade cleanly.
+    //  transcode; tracking it lets the future tidy-up job cascade cleanly.
     // - `bit_rate` carries the profile bitrate (lossless flac is profile=0 →
-    //   row gets 0 too; downstream already tolerates it).
+    //  row gets 0 too; downstream already tolerates it).
     // - sample_rate / bit_depth / channels / duration are left NULL: ffmpeg.wasm
-    //   doesn't probe its own output today. A future task may UPSERT these
-    //   after the browser sends a metadata follow-up.
+    //  doesn't probe its own output today. A future task may UPSERT these
+    //  after the browser sends a metadata follow-up.
     //
-    // Returns the inserted row id on success; null when the FK constraint
+  // Returns the inserted row id on success; null when the FK constraint
     // would fail (master_id missing → original instance was deleted between
     // enqueue and upload). The caller treats null as "no DB row, but R2 still
     // holds the bytes" and emits the upload ack as a partial success.

@@ -1,8 +1,8 @@
 //
 // Drives the worker/transcoder-image container via @cloudflare/sandbox.
 // The container exposes:
-//   GET  /health
-//   POST /transcode?args=<json-argv>   (raw audio body in, raw audio out)
+//  GET /health
+//   POST /transcode?args=<json-argv> (raw audio body in, raw audio out)
 // We synthesise the argv via buildFfmpegArgs(profile) and forward the request
 // through `sandbox.containerFetch(url, init, 8080)` so the request → ffmpeg
 // → response streams the whole way.

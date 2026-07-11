@@ -172,9 +172,9 @@ async function listVisible(db: D1Database, caller: Caller): Promise<string[]> {
 
 // Mirrors the policy of GET /share/:id (not the byte stream itself — that's
 // adapter integration). Returns:
-//   "ok"        — share visitable, view_count incremented
-//   "not-found" — share id unknown
-//   "expired"   — expires_at < now
+//   "ok"      — share visitable, view_count incremented
+//  "not-found" — share id unknown
+//   "expired" — expires_at < now
 async function publicAccess(db: D1Database, shareId: string, now: number): Promise<"ok" | "not-found" | "expired" | "no-entries"> {
   const q = createQueries(db);
   const s = await q.getShareById(shareId);

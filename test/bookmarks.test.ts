@@ -169,24 +169,24 @@ console.log("Bookmarks:");
   const queries = createQueries(db);
 
   // empty initially
-  let bms = await queries.getBookmarksByUser("rosmontis");
+  let bms = await queries.getBookmarksByUser("tester");
   assert(bms.length === 0, "fresh user has no bookmarks");
 
   // createBookmark → upsert (twice = last-write-wins)
   await queries.upsertBookmark({
-    username: "rosmontis", songMasterId: "song-a",
+    username: "tester", songMasterId: "song-a",
     positionMs: 1234, comment: "first scrub",
   });
   await queries.upsertBookmark({
-    username: "rosmontis", songMasterId: "song-a",
+    username: "tester", songMasterId: "song-a",
     positionMs: 5678, comment: "updated",
   });
   await queries.upsertBookmark({
-    username: "rosmontis", songMasterId: "song-b",
+    username: "tester", songMasterId: "song-b",
     positionMs: 999, comment: null,
   });
 
-  bms = await queries.getBookmarksByUser("rosmontis");
+  bms = await queries.getBookmarksByUser("tester");
   assert(bms.length === 2, `getBookmarks returns both rows (got ${bms.length})`);
 
   const a = bms.find((b) => b.song_master_id === "song-a")!;
@@ -197,8 +197,8 @@ console.log("Bookmarks:");
   assert(b.comment === null, "song-b comment is null (no value provided)");
 
   // deleteBookmark
-  await queries.deleteBookmark("rosmontis", "song-a");
-  bms = await queries.getBookmarksByUser("rosmontis");
+  await queries.deleteBookmark("tester", "song-a");
+  bms = await queries.getBookmarksByUser("tester");
   assert(bms.length === 1 && bms[0].song_master_id === "song-b",
     "deleteBookmark drops only the targeted row");
 
@@ -206,9 +206,9 @@ console.log("Bookmarks:");
   await queries.upsertBookmark({
     username: "other", songMasterId: "song-c", positionMs: 42, comment: null,
   });
-  const mine = await queries.getBookmarksByUser("rosmontis");
+  const mine = await queries.getBookmarksByUser("tester");
   const theirs = await queries.getBookmarksByUser("other");
-  assert(mine.length === 1, "user isolation: rosmontis still has 1");
+  assert(mine.length === 1, "user isolation: tester still has 1");
   assert(theirs.length === 1 && theirs[0].song_master_id === "song-c",
     "user isolation: other has their own bookmark");
 
@@ -229,18 +229,18 @@ console.log("PlayQueue:");
   const { db } = makeDb({ song_masters: songMasters });
   const queries = createQueries(db);
 
-  let q = await queries.getPlayQueue("rosmontis");
+  let q = await queries.getPlayQueue("tester");
   assert(q === null, "no queue saved → returns null");
 
   await queries.savePlayQueue({
-    username: "rosmontis",
+    username: "tester",
     songIds: ["song-a", "song-b", "song-c"],
     currentId: "song-b",
     positionMs: 10000,
     changedBy: "EdgeSonic-Web/test",
   });
 
-  q = await queries.getPlayQueue("rosmontis");
+  q = await queries.getPlayQueue("tester");
   assert(q !== null, "queue is persisted");
   assert(q!.current_id === "song-b", `current_id = song-b (got ${q!.current_id})`);
   assert(q!.position_ms === 10000, `position_ms = 10000 (got ${q!.position_ms})`);
@@ -268,13 +268,13 @@ console.log("PlayQueue:");
 
   // Last-write-wins: smaller queue, new current
   await queries.savePlayQueue({
-    username: "rosmontis",
+    username: "tester",
     songIds: ["song-c"],
     currentId: "song-c",
     positionMs: 0,
     changedBy: null,
   });
-  q = await queries.getPlayQueue("rosmontis");
+  q = await queries.getPlayQueue("tester");
   const reparsed = JSON.parse(q!.song_ids);
   assert(reparsed.length === 1 && reparsed[0] === "song-c",
     "savePlayQueue overwrites previous queue (last-write-wins)");

@@ -4,14 +4,14 @@
 // reason. dryRun:true returns the plan without touching storage.
 //
 // Body:
-//   { template: string, ids: string[], source?: "r2"|"webdav", dryRun?: boolean }
+//  { template: string, ids: string[], source?: "r2"|"webdav", dryRun?: boolean }
 // Response:
-//   {
-//     ok: true,
-//     planned: [{ id, instanceId, from, to, skipped? }],
-//     applied: [{ id, instanceId, ok, error? }],
-//     failed: number
-//   }
+//  {
+//   ok: true,
+//   planned: [{ id, instanceId, from, to, skipped? }],
+//   applied: [{ id, instanceId, ok, error? }],
+//   failed: number
+//  }
 //
 // Permission: manage_files (session-only). See migration 0013.
 

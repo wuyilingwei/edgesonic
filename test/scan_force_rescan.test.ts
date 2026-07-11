@@ -89,7 +89,7 @@ function makeDb(state: MockState): unknown {
           }
         } else if (/UPDATE song_instances/i.test(sql)) {
           // bind order in scan.ts UPDATE:
-          //   etag, lm, size, contentType, suffix, now, id
+          //  etag, lm, size, contentType, suffix, now, id
           const id = args[args.length - 1] as string;
           state.updates.push({ id, tag_scanned: 0 });
           const row = state.instances.find((r) => r.id === id);

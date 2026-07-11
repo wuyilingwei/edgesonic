@@ -1,12 +1,12 @@
 //
 // Coverage:
-//   * getAnnotationsMap chunks ≤ 80 ids per query, merges results into a Map.
-//   * getAnnotationsMap(empty) short-circuits with zero prepare() calls.
-//   * getSongMastersByIds chunks ≤ 80, concatenates rows, dedupes input.
-//   * getSongMastersByIds(empty) short-circuits.
-//   * getAlbumsByArtist chunks album_id list returned by the DISTINCT scan
-//     and re-applies ORDER BY year DESC, sort_name ASC NULLS LAST in JS.
-//   * computePlaylistTotals chunks song id list, sums COUNT(*) + duration.
+//  * getAnnotationsMap chunks ≤ 80 ids per query, merges results into a Map.
+//  * getAnnotationsMap(empty) short-circuits with zero prepare() calls.
+//  * getSongMastersByIds chunks ≤ 80, concatenates rows, dedupes input.
+//  * getSongMastersByIds(empty) short-circuits.
+//  * getAlbumsByArtist chunks album_id list returned by the DISTINCT scan
+//   and re-applies ORDER BY year DESC, sort_name ASC NULLS LAST in JS.
+//  * computePlaylistTotals chunks song id list, sums COUNT(*) + duration.
 //
 // The mock D1 here is a spy that records every prepare() / bind() call so we
 // can assert chunk counts deterministically without spinning up node:sqlite.
@@ -223,8 +223,8 @@ async function run() {
   {
     const albumIds = Array.from({ length: 200 }, (_, i) => `al-${i}`);
     // Plan responses:
-    //   1st prepare = DISTINCT song_masters scan → 200 rows
-    //   subsequent prepares = 3 batched album fetches
+    //  1st prepare = DISTINCT song_masters scan → 200 rows
+    //  subsequent prepares = 3 batched album fetches
     let stage = 0;
     const { db, calls } = makeSpyDb((call) => {
       if (call.sql.includes("SELECT DISTINCT album_id")) {

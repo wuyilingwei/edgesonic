@@ -40,11 +40,11 @@ export function isBrowserParse(suffix: string): boolean {
 // ExtractedMetadata — 落地到 /rest/submitMetadata 的 payload 形状
 // ----------------------------------------------------------------------------
 // 字段对齐策略（见 049/findings.md D + 041/findings.md）：
-//   - logical：title/artist/album/albumArtist/genre/year/track/disc → song_masters
-//   - physical：duration/bitrate/sampleRate/channels → song_instances
-//   - lyrics：109 起持久化到 song_masters.lyrics（applyMetadataResult 用
-//     COALESCE(NULLIF(lyrics,''), ?) 只填空列，不覆盖已有的用户编辑/外部抓取结果）
-//   - container/codec：只用于诊断/未来回填；后端目前忽略
+//  - logical：title/artist/album/albumArtist/genre/year/track/disc → song_masters
+//  - physical：duration/bitrate/sampleRate/channels → song_instances
+//  - lyrics：109 起持久化到 song_masters.lyrics（applyMetadataResult 用
+//   COALESCE(NULLIF(lyrics,''), ?) 只填空列，不覆盖已有的用户编辑/外部抓取结果）
+//  - container/codec：只用于诊断/未来回填；后端目前忽略
 // ============================================================================
 export interface ExtractedMetadata {
   title?: string;
@@ -104,12 +104,12 @@ export async function extractMetadata(file: File): Promise<ExtractedMetadata> {
 // ----------------------------------------------------------------------------
 // music-metadata's ILyricsTag shape: { text?, syncText?: {text,timestamp}[] }
 // (some builds instead hand back a bare string[]). Preference order:
-//   1. An entry with syncText → rebuild LRC `[mm:ss.xx]line` per timestamp so
-//      the backend's parseLrc (worker/src/endpoints/subsonic/lyrics.ts, 108)
-//      round-trips it back into per-line start offsets for Subsonic clients.
-//      Before 109 we only joined the plain text, discarding every timestamp.
-//   2. An entry with plain `.text`.
-//   3. A bare string element.
+//  1. An entry with syncText → rebuild LRC `[mm:ss.xx]line` per timestamp so
+//    the backend's parseLrc (worker/src/endpoints/subsonic/lyrics.ts, 108)
+//    round-trips it back into per-line start offsets for Subsonic clients.
+//    Before 109 we only joined the plain text, discarding every timestamp.
+//  2. An entry with plain `.text`.
+//  3. A bare string element.
 // ============================================================================
 export function lyricsTagsToText(lyrics: unknown): string | undefined {
   if (!Array.isArray(lyrics) || lyrics.length === 0) return undefined;

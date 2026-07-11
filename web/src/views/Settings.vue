@@ -528,9 +528,9 @@ async function saveCron() {
 }
 
 // Behaviour:
-//   - applied=true  → CF schedules were empty, default re-applied; toast OK
-//   - applied=false → schedules already populated, no change; informational toast
-//   - error path    → surface the CF error verbatim
+//  - applied=true → CF schedules were empty, default re-applied; toast OK
+//  - applied=false → schedules already populated, no change; informational toast
+//   - error path  → surface the CF error verbatim
 async function ensureDefaultCron() {
   cfEnsureCronBusy.value = true;
   try {
@@ -1020,14 +1020,14 @@ onMounted(() => {
               @click="clearLastfm"
               style="margin-right: 0.6rem"
             >
-              {{ t("settings.common.lastfm.clear") }}
+             {{ t("settings.common.lastfm.clear") }}
             </button>
             <button
               class="btn-primary"
               :disabled="lastfmBusy || !lastfmKeyInput"
               @click="saveLastfm"
             >
-              {{ t("settings.common.lastfm.save") }}
+             {{ t("settings.common.lastfm.save") }}
             </button>
           </div>
         </div>
@@ -1145,7 +1145,7 @@ onMounted(() => {
                 :disabled="!isSuperAdmin || transcodeBusy"
                 @click="saveTranscode"
               >
-                {{ t("settings.common.transcode.save") }}
+               {{ t("settings.common.transcode.save") }}
               </button>
             </div>
           </div>
@@ -1194,7 +1194,7 @@ onMounted(() => {
               :disabled="!isSuperAdmin || scrapeBusy"
               @click="saveScrape"
             >
-              {{ t("settings.common.scrape.save") }}
+             {{ t("settings.common.scrape.save") }}
             </button>
           </div>
         </div>
@@ -1253,7 +1253,7 @@ onMounted(() => {
                 :disabled="!isSuperAdmin || scanBusy"
                 @click="saveScan"
               >
-                {{ t("settings.common.scan.save") }}
+               {{ t("settings.common.scan.save") }}
               </button>
             </div>
           </div>
@@ -1298,7 +1298,7 @@ onMounted(() => {
                 :disabled="!isSuperAdmin || cioBusy"
                 @click="saveCio"
               >
-                {{ t("settings.common.crossOriginIsolation.save") }}
+               {{ t("settings.common.crossOriginIsolation.save") }}
               </button>
             </div>
           </div>
@@ -1347,14 +1347,14 @@ onMounted(() => {
                 @click="testCfConn"
                 style="margin-right: 0.6rem"
               >
-                {{ t("settings.common.cf.test") }}
+               {{ t("settings.common.cf.test") }}
               </button>
               <button
                 class="btn-primary"
                 :disabled="cfBusy || !cfToken || !cfAccountId"
                 @click="saveCfToken"
               >
-                {{ t("settings.common.cf.save") }}
+               {{ t("settings.common.cf.save") }}
               </button>
             </div>
           </div>
@@ -1382,14 +1382,14 @@ onMounted(() => {
                 @click="loadCfCron"
                 style="margin-right: 0.6rem"
               >
-                {{ t("settings.common.cf.loadCron") }}
+               {{ t("settings.common.cf.loadCron") }}
               </button>
               <button
                 class="btn-primary"
                 :disabled="!cfStatus.configured || cronBusy"
                 @click="saveCron"
               >
-                {{ t("settings.common.cf.saveCron") }}
+               {{ t("settings.common.cf.saveCron") }}
               </button>
             </div>
 
@@ -1402,7 +1402,7 @@ onMounted(() => {
                 :disabled="!cfStatus.configured || cfEnsureCronBusy"
                 @click="ensureDefaultCron"
               >
-                {{ t("settings.common.cf.ensureCron") }}
+               {{ t("settings.common.cf.ensureCron") }}
               </button>
             </div>
             <p class="feature-desc tc-desc">{{ t("settings.common.cf.ensureCronDesc") }}</p>
@@ -1476,7 +1476,7 @@ onMounted(() => {
                 :disabled="!isSuperAdmin || r2PresignBusy"
                 @click="saveR2Presign"
               >
-                {{ t("settings.common.presign.save") }}
+               {{ t("settings.common.presign.save") }}
               </button>
             </div>
 
@@ -1494,7 +1494,7 @@ onMounted(() => {
                 :disabled="!isSuperAdmin || webdavPresignBusy"
                 @click="saveWebdavPresign"
               >
-                {{ t("settings.common.presign.save") }}
+               {{ t("settings.common.presign.save") }}
               </button>
             </div>
           </div>
@@ -1562,7 +1562,7 @@ onMounted(() => {
                 :disabled="workerBackfillBusy"
                 @click="onBackfillCompleted"
               >
-                {{ workerBackfillBusy
+               {{ workerBackfillBusy
                   ? t("settings.common.workerPool.backfillRunning")
                   : t("settings.common.workerPool.backfillButton") }}
               </button>
@@ -1587,14 +1587,14 @@ onMounted(() => {
                 :disabled="metadataRecheckIntervalBusy"
                 @click="saveMetadataRecheckInterval"
               >
-                {{ t("settings.common.scan.save") }}
+               {{ t("settings.common.scan.save") }}
               </button>
               <button
                 class="btn-secondary"
                 :disabled="recheckMetadataBusy"
                 @click="onRecheckMetadataNow"
               >
-                {{ recheckMetadataBusy
+               {{ recheckMetadataBusy
                   ? t("settings.common.workerPool.recheckRunning")
                   : t("settings.common.workerPool.recheckButton") }}
               </button>
@@ -1627,7 +1627,7 @@ onMounted(() => {
               :disabled="cleanupCoversBusy"
               @click="onCleanupDuplicateCovers"
             >
-              {{ cleanupCoversBusy
+             {{ cleanupCoversBusy
                 ? t("settings.common.maintenance.cleanupCoversRunning")
                 : t("settings.common.maintenance.cleanupCoversButton") }}
             </button>
@@ -1647,7 +1647,7 @@ onMounted(() => {
               :disabled="reclaimBusy"
               @click="onReclaimStaleWork"
             >
-              {{ reclaimBusy
+             {{ reclaimBusy
                 ? t("settings.common.maintenance.reclaimRunning")
                 : t("settings.common.maintenance.reclaimButton") }}
             </button>
@@ -1671,7 +1671,7 @@ onMounted(() => {
               :disabled="resetFailedBusy"
               @click="onResetFailedWork"
             >
-              {{ resetFailedBusy
+             {{ resetFailedBusy
                 ? t("settings.common.maintenance.resetFailedRunning")
                 : t("settings.common.maintenance.resetFailedButton") }}
             </button>
@@ -1868,7 +1868,7 @@ onMounted(() => {
                 :value="cr.streamProxyStrategy"
                 @change="updateCredentialStrategy(cr, ($event.target as HTMLSelectElement).value)"
               >
-                <option v-for="opt in STRATEGY_OPTIONS" :key="opt.value" :value="opt.value">{{ t(opt.key) }}</option>
+               <option v-for="opt in STRATEGY_OPTIONS" :key="opt.value" :value="opt.value">{{ t(opt.key) }}</option>
               </select>
             </span>
             <span><button class="btn-danger btn-sm" @click="deleteCredential(cr.id)">{{ t("common.delete") }}</button></span>

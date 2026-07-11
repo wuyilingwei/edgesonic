@@ -1,8 +1,8 @@
 // ============================================================================
 // ----------------------------------------------------------------------------
-//   refreshChannel(db, channelId)   — fetch RSS, update channel meta + episodes
-//   refreshAllChannels(db)          — invoked by the hourly Cron Trigger
-//   downloadEpisodeToR2(...)        — fired from ctx.waitUntil for one episode
+//   refreshChannel(db, channelId) — fetch RSS, update channel meta + episodes
+//   refreshAllChannels(db)        — invoked by the hourly Cron Trigger
+//   downloadEpisodeToR2(...)      — fired from ctx.waitUntil for one episode
 //
 // All three swallow errors into the appropriate `status` + `error_message`
 // column so caller code (HTTP handlers / scheduled handler) never throws.
@@ -174,7 +174,7 @@ export async function refreshAllChannels(
 // downloadEpisodeToR2 — pulls the enclosure URL into R2.
 // ----------------------------------------------------------------------------
 // Lifecycle: episode.status transitions
-//   new → downloading → completed | error
+//  new → downloading → completed | error
 // The R2 key uses /podcasts/{channelId}/{episodeId}.{suffix} to keep podcast
 // bytes out of the music R2 namespace conventions (Schema.sql §R2 Convention).
 // ============================================================================

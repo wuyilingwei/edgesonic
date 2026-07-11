@@ -2,9 +2,9 @@
 // accordingly: makeDb now handles kv_store queries and exposes a kvStore Map.
 //
 // Asserts maybeRunScheduledScan honours scan_interval_hours:
-//   0     → returns without touching kv_store or scan_jobs
-//   1     → runs every tick, dispatches one job per enabled WebDAV source
-//   N > 1 → skipped when (now - last_scan_ts) < N*3600; ran otherwise
+//   0   → returns without touching kv_store or scan_jobs
+//   1   → runs every tick, dispatches one job per enabled WebDAV source
+//  N > 1 → skipped when (now - last_scan_ts) < N*3600; ran otherwise
 //
 // Run: npx tsx test/scheduled_scan.test.ts
 

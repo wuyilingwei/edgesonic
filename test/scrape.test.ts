@@ -1,10 +1,10 @@
 // /tag/scrapeHistory.
 //
 // Strategy mirrors test/batch_write_tags.test.ts:
-//   * In-memory SQLite (node:sqlite) shimmed as D1.
-//   * Hono harness injects an authenticated session user.
-//   * The proxy path is exercised with a stubbed global fetch so we never hit
-//     the real NetEase/QQ/Kugou endpoints.
+//  * In-memory SQLite (node:sqlite) shimmed as D1.
+//  * Hono harness injects an authenticated session user.
+//  * The proxy path is exercised with a stubbed global fetch so we never hit
+//   the real NetEase/QQ/Kugou endpoints.
 //
 // Run: npx tsx test/scrape.test.ts
 

@@ -1,12 +1,12 @@
 //
 // Coverage:
-//   1. Empty live schedules → PUT default, returns applied=true with the
-//      CF-canonical result echoed in `schedules`.
-//   2. Non-empty live schedules → NO PUT issued, returns applied=false with
-//      the existing schedules echoed (admin's custom cadence preserved).
-//   3. Missing CF_API_TOKEN / CF_ACCOUNT_ID → 400 with the same wording the
-//      054 endpoints use, so the Settings UI can switch on the wording.
-//   4. Non-super user (level < 3) → 403 (guard runs before any CF call).
+//  1. Empty live schedules → PUT default, returns applied=true with the
+//    CF-canonical result echoed in `schedules`.
+//  2. Non-empty live schedules → NO PUT issued, returns applied=false with
+//    the existing schedules echoed (admin's custom cadence preserved).
+//  3. Missing CF_API_TOKEN / CF_ACCOUNT_ID → 400 with the same wording the
+//    054 endpoints use, so the Settings UI can switch on the wording.
+//  4. Non-super user (level < 3) → 403 (guard runs before any CF call).
 //
 // Mirrors the style of test/cf_integration.test.ts so the two suites share
 // the fetch-mock harness shape exactly.
@@ -83,7 +83,7 @@ function makeApp(env: Record<string, string | undefined>, level = 3) {
   const app = new Hono();
   app.use("*", async (c, next) => {
     (c as unknown as { env: Record<string, unknown> }).env = env;
-    c.set("user", { username: "rosmontis", level });
+    c.set("user", { username: "tester", level });
     await next();
   });
   app.route("/edgesonic", cfRoutes);

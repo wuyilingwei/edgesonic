@@ -1,11 +1,11 @@
 //
 // Coverage:
-//   1. 3 albums share same cover_r2_key → 1 keeps it (smallest id), 2 NULL'd
-//   2. Multiple duplicate groups handled in one call
-//   3. Non-admin (level<3) → 403
-//   4. No duplicates in DB → ok:true with groups=0, cleared=0
-//   5. NULL cover_r2_key rows are ignored (not "duplicates of NULL")
-//   6. R2 objects are NOT touched (we only mutate the D1 row)
+//  1. 3 albums share same cover_r2_key → 1 keeps it (smallest id), 2 NULL'd
+//  2. Multiple duplicate groups handled in one call
+//  3. Non-admin (level<3) → 403
+//  4. No duplicates in DB → ok:true with groups=0, cleared=0
+//  5. NULL cover_r2_key rows are ignored (not "duplicates of NULL")
+//  6. R2 objects are NOT touched (we only mutate the D1 row)
 //
 // Run: npx tsx test/cleanup_duplicate_covers.test.ts
 
@@ -165,7 +165,7 @@ async function main() {
     assert(n.cover_r2_key === null, `NULL row stays NULL (got ${n.cover_r2_key})`);
   }
 
-  console.log("\nNon-admin (level=2) → 403 (087 — permissionMiddleware XML):");
+  console.log("\nNon-admin (level=2) → 403 (permissionMiddleware XML):");
   {
     const sqlite = buildDb();
     sqlite.exec(`

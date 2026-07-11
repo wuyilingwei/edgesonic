@@ -1,21 +1,21 @@
 //
 // Two entry points:
-//   - fetchLrcSidecar(env, storageUri): read the bytes of a sibling .lrc file
-//     next to the given audio instance. Returns the text content or null when
-//     the file is absent / too large / scheme unsupported.
-//   - importLrcOnScan(db, env, storageUri, masterId): fetch the sidecar and,
-//     on hit, write it back to song_masters.lyrics (only when D1 lyrics is
-//     currently empty, so we never clobber a tag-written or externally-fetched
-//     value).
+//  - fetchLrcSidecar(env, storageUri): read the bytes of a sibling .lrc file
+//   next to the given audio instance. Returns the text content or null when
+//   the file is absent / too large / scheme unsupported.
+//  - importLrcOnScan(db, env, storageUri, masterId): fetch the sidecar and,
+//   on hit, write it back to song_masters.lyrics (only when D1 lyrics is
+//   currently empty, so we never clobber a tag-written or externally-fetched
+//   value).
 //
 // Design notes:
-//   - Only `r2://` and `webdav://` schemes are eligible. `url://` and
-//     `subsonic://` carry no directory concept, so we short-circuit.
-//   - 100 KB size cap guards against pathological .lrc files dragging the scan
-//     or the getLyrics path. We trust contentLength when present; otherwise we
-//     accumulate bytes from the stream and abort on overflow.
-//   - All failures are swallowed: a missing .lrc is the common case, not an
-//     error. The caller treats null as "no lyrics available".
+//  - Only `r2://` and `webdav://` schemes are eligible. `url://` and
+//   `subsonic://` carry no directory concept, so we short-circuit.
+//  - 100 KB size cap guards against pathological .lrc files dragging the scan
+//   or the getLyrics path. We trust contentLength when present; otherwise we
+//   accumulate bytes from the stream and abort on overflow.
+//  - All failures are swallowed: a missing .lrc is the common case, not an
+//   error. The caller treats null as "no lyrics available".
 
 import { parseStorageUri, type StreamResult } from "../adapters";
 import { createR2Adapter } from "../adapters/r2";

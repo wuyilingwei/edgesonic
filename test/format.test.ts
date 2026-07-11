@@ -2,12 +2,12 @@
 // Verifies the f=json conversion pipeline (middleware/format.ts) against the
 // OpenSubsonic spec + reference-server behaviour observed on
 // imusic.wuyilingwei.com (music-tag-web):
-//   * numeric/boolean attributes emit as JSON numbers/booleans, by NAME
-//   * known list children are ALWAYS arrays, even with 1 element
-//   * single objects at response root (getAlbum's album) stay objects
-//   * openSubsonicExtensions/versions is an array of ints
-//   * envelope carries type/serverVersion/openSubsonic (XML + JSON)
-//   * mapSong emits album NAME (not id), albumId/artistId/type
+//  * numeric/boolean attributes emit as JSON numbers/booleans, by NAME
+//  * known list children are ALWAYS arrays, even with 1 element
+//  * single objects at response root (getAlbum's album) stay objects
+//  * openSubsonicExtensions/versions is an array of ints
+//  * envelope carries type/serverVersion/openSubsonic (XML + JSON)
+//  * mapSong emits album NAME (not id), albumId/artistId/type
 //
 // Run: npx tsx test/format_test.ts
 
@@ -171,7 +171,7 @@ const authPos = indexSrc.indexOf('app.use("/rest/*", authMiddleware)');
 assert(fmtPos !== -1 && authPos !== -1 && fmtPos < authPos, "formatMiddleware mounted before authMiddleware");
 
 // ---------------------------------------------------------------------------
-section("9. 108 — search empty-array defaults + query normalization");
+section("9. search empty-array defaults + query normalization");
 assert(normalizeQuery('""') === "", `literal "" → empty`);
 assert(normalizeQuery("''") === "", "literal '' → empty");
 assert(normalizeQuery("*") === "", "* → empty");
@@ -190,7 +190,7 @@ assert(Array.isArray(srE.artist) && Array.isArray(srE.album) && Array.isArray(sr
   "fully-empty searchResult3 still has three [] keys");
 
 // ---------------------------------------------------------------------------
-section("10. 108 — songLyrics: structured lines, synced/start typing");
+section("10. songLyrics: structured lines, synced/start typing");
 const lrc = "[ti:九光年宇宙]\n[ar:星尘]\n[by:someone]\n[00:00.00]第一句\n[00:08.12]✡\n[01:02.5]第三句";
 const pl = parseLrc(lrc);
 assert(pl.synced === true, "LRC detected as synced");
@@ -231,7 +231,7 @@ assert(typeof ul[0] === "object" && ul[0].value === "plain line",
   "unsynced line is still a {value} object, not a bare string");
 
 // ---------------------------------------------------------------------------
-section("11. 108 — mapSong physical fields + webdav presign default off");
+section("11. mapSong physical fields + webdav presign default off");
 const physRow = { ...songRow, inst_suffix: "flac", inst_content_type: "audio/flac",
   inst_bit_rate: 971, inst_size: 32406488, inst_duration: 207,
   inst_storage_uri: "webdav://src-1/music/像素荒原/6 谜.flac" };

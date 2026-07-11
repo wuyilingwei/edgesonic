@@ -4,8 +4,8 @@
 // staleness filter (WHERE updated_at > now-300) to match the old KV TTL.
 //
 // Visibility:
-//   view_all_users_items perm → all active listeners
-//   otherwise                 → only own row
+//  view_all_users_items perm → all active listeners
+//   otherwise               → only own row
 //
 // Permission: `browse` (consistent with getRandomSongs / search3).
 // ============================================================================

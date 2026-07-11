@@ -1,11 +1,11 @@
 // Subsonic Annotation endpoints (task 033).
 //
 // Routes:
-//   - star / unstar          (id|albumId|artistId, repeatable)
-//   - setRating              (id, rating 0-5; 0 clears)
-//   - scrobble               (id repeatable, time ms?, submission bool default true)
-//   - getStarred / getStarred2  (musicFolderId optional, ignored)
-//   - getRandomSongs         (size, genre, fromYear, toYear, musicFolderId)
+//   - star / unstar        (id|albumId|artistId, repeatable)
+//   - setRating            (id, rating 0-5; 0 clears)
+//   - scrobble             (id repeatable, time ms?, submission bool default true)
+//  - getStarred / getStarred2 (musicFolderId optional, ignored)
+//   - getRandomSongs       (size, genre, fromYear, toYear, musicFolderId)
 //
 // Each route is also exposed at /rest/<name>.view so native Subsonic clients
 // that append `.view` (Symfonium, DSub, Navidrome web, etc.) also hit it.
@@ -160,8 +160,8 @@ const scrobbleHandler = async (c: import("hono").Context) => {
   }
 
   // Subsonic spec:
-  //   submission=true  (default) → song actually played to completion: D1 count++
-  //   submission=false           → "now playing" heartbeat
+  //  submission=true (default) → song actually played to completion: D1 count++
+  //   submission=false         → "now playing" heartbeat
   // 047: BOTH update KV `now_playing:{username}` so getNowPlaying can surface
   // the active stream. submission=false only writes KV; submission=true writes
   // KV *and* the D1 annotations row.

@@ -6,7 +6,7 @@
 // need QQ/Kugou as additional fallbacks, the SOURCE_CHAIN constant is the
 // single drop-in extension point.
 //
-// All errors are swallowed: a missing lyric must not break /rest/getLyrics —
+// All errors are swallowed: a missing lyric must not break /rest/getLyrics
 // the endpoint returns an empty <lyrics/> element on null. Each upstream
 // timeout / non-2xx → next source → null.
 

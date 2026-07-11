@@ -1,13 +1,13 @@
 // POST /edgesonic/permissions/save (Settings → Permissions explicit
 // Save button, replacing the old real-time-per-toggle /permissions/update
 // RPH era). Two responsibilities per call:
-//   1. Batch-UPDATE the given (level, permission, enabled) rows into D1 —
-//      always, the durable source of truth.
-//   2. Best-effort: if CF_API_TOKEN/CF_ACCOUNT_ID are configured, push the
-//      FULL current matrix (not just this request's patch) as the
-//      PERMISSIONS_OVERRIDE Workers Secret via the CF API, so
-//      permissionMiddleware/hasPermission can skip the D1 round-trip on
-//      every subsequent request. A push failure must not fail the request.
+//  1. Batch-UPDATE the given (level, permission, enabled) rows into D1
+//    always, the durable source of truth.
+//  2. Best-effort: if CF_API_TOKEN/CF_ACCOUNT_ID are configured, push the
+//    FULL current matrix (not just this request's patch) as the
+//    PERMISSIONS_OVERRIDE Workers Secret via the CF API, so
+//    permissionMiddleware/hasPermission can skip the D1 round-trip on
+//    every subsequent request. A push failure must not fail the request.
 //
 // Run: npx tsx test/permissions_save.test.ts
 
@@ -182,7 +182,7 @@ async function main() {
       permissions: [{ level: 2, name: "manage_sources", enabled: true }],
     });
     uninstallMock();
-    assert(r.status === 200, `still 200 — D1 write already succeeded (got ${r.status})`);
+    assert(r.status === 200, `still D1 write already succeeded (got ${r.status})`);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body = await r.json() as any;
     assert(body.ok === true, "ok:true despite CF push failure");

@@ -1,12 +1,12 @@
 //
 // Coverage:
-//   1. parseS3RootPath: bucket-only / bucket/prefix / deep prefix
-//   2. buildAuthorizationHeader (sigv4.ts): header format, credential, signed headers, signature
-//   3. listS3Objects: 2-object XML; empty list; truncated with NextContinuationToken
-//   4. createS3Adapter().stream(): 200; 206 range; 404 → body:null
-//   5. createS3Adapter().put(): PUT method + required headers
-//   6. getS3Config: s3 source row → S3Config; missing/disabled → null
-//   7. asyncScanS3Source: creates song_instances + work_queue rows with correct dedupKey
+//  1. parseS3RootPath: bucket-only / bucket/prefix / deep prefix
+//  2. buildAuthorizationHeader (sigv4.ts): header format, credential, signed headers, signature
+//  3. listS3Objects: 2-object XML; empty list; truncated with NextContinuationToken
+//  4. createS3Adapter().stream(): 200; 206 range; 404 → body:null
+//  5. createS3Adapter().put(): PUT method + required headers
+//  6. getS3Config: s3 source row → S3Config; missing/disabled → null
+//  7. asyncScanS3Source: creates song_instances + work_queue rows with correct dedupKey
 //
 // Run: cd worker && npm test -- --reporter=verbose 2>&1 | grep s3_adapter
 

@@ -185,14 +185,14 @@ edgesonicAuthRoutes.post("/auth/credentials/create", permissionMiddleware("manag
 
 // on Pixel 9"). Doesn't touch the password or last_used; just lets the user
 // keep their device registry tidy.
-//   - body: { id, label }
-//   - username pinned to the session user — UPDATE WHERE id=? AND username=?
-//     ensures one user can never relabel another user's credential, and
-//     skips the need for a separate "exists & owned" lookup.
-//   - label must be a non-null string ≤200 chars; we allow empty to clear.
-//   - meta.changes === 0 means no row matched → either bogus id or someone
-//     else's credential. Both are surfaced as 404 (consistent with the
-//     sessions/revoke handler above).
+//  - body: { id, label }
+//  - username pinned to the session user — UPDATE WHERE id=? AND username=?
+//   ensures one user can never relabel another user's credential, and
+//   skips the need for a separate "exists & owned" lookup.
+//  - label must be a non-null string ≤200 chars; we allow empty to clear.
+//  - meta.changes === 0 means no row matched → either bogus id or someone
+//   else's credential. Both are surfaced as 404 (consistent with the
+//   sessions/revoke handler above).
 edgesonicAuthRoutes.post("/auth/credentials/update", permissionMiddleware("manage_credentials"), async (c) => {
   const db = c.env.DB;
   const user = c.get("user");

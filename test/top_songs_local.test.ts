@@ -1,9 +1,9 @@
 //
 // Strategy:
-//   * In-memory SQLite shimmed as D1.
-//   * KV stub (used for lastfm 24h cache + feature_strings 60s cache).
-//   * Stubbed global fetch so we control whether last.fm "answers" or 401s.
-//   * Hono route directly invoked.
+//  * In-memory SQLite shimmed as D1.
+//  * KV stub (used for lastfm 24h cache + feature_strings 60s cache).
+//  * Stubbed global fetch so we control whether last.fm "answers" or 401s.
+//  * Hono route directly invoked.
 //
 // Run: npx tsx test/top_songs_local.test.ts
 

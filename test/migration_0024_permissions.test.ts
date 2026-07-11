@@ -2,11 +2,11 @@
 // (20 rows total) with the documented default matrix (L3=1, L2/L1/L0=0).
 //
 // Coverage:
-//   1. Apply Schema.sql → all 5 new permissions present at all 4 levels (20 rows)
-//   2. Default values match the matrix: super-admin enabled, all others off
-//   3. INSERT OR IGNORE is idempotent — re-running Schema.sql does not clobber
-//      changes a admin made via the Permissions UI (we simulate by flipping
-//      one row then re-applying)
+//  1. Apply Schema.sql → all 5 new permissions present at all 4 levels (20 rows)
+//  2. Default values match the matrix: super-admin enabled, all others off
+//  3. INSERT OR IGNORE is idempotent — re-running Schema.sql does not clobber
+//    changes a admin made via the Permissions UI (we simulate by flipping
+//    one row then re-applying)
 //
 // Note: dispatch_work is checked too but it's seeded by the 0021 block (052a).
 // Schema.sql does NOT re-seed it inside the 0024 block — we only assert the 5

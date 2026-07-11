@@ -18,7 +18,7 @@ interface SourceRow {
  *
  * 076 removed the directory-image fallback (cover/folder/front/albumart in
  * the file's parent dir): a shared NAS-root cover.jpg got assigned to every
- * child album. Embedded art (ID3v2 APIC / FLAC PICTURE) has no such hazard —
+ * child album. Embedded art (ID3v2 APIC / FLAC PICTURE) has no such hazard
  * the picture lives inside one of the album's own files — so 102 re-enables
  * the on-demand path restricted to embedded extraction. Albums without
  * embedded art keep cover_r2_key NULL and getCoverArt keeps returning 404.
@@ -80,7 +80,7 @@ export async function extractEmbedded(
   // know the file is bigger than one head window (a smaller file's "tail"
   // would just re-fetch bytes already in head — skip the redundant request).
   //
-  // WAV needs a much bigger tail window than other formats: rippers commonly
+ // WAV needs a much bigger tail window than other formats: rippers commonly
   // append the whole "id3 " chunk (tags + APIC art) after "data", and that
   // chunk's own size scales with the embedded picture — the same class of
   // bug 111 already fixed for the /tag/read text-tag path (slices.ts grew

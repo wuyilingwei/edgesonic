@@ -77,7 +77,7 @@ function buildDb(): DatabaseSync {
     INSERT INTO song_instances (id, master_id, storage_uri, suffix, size, missing, tag_scanned)
       VALUES ('si-incomplete', 'sm-2', 'r2://music/b.flac', 'flac', 2000, 0, 1);
 
-    -- Fully complete: scanned, cover present, lyrics AND disc both filled —
+    -- Fully complete: scanned, cover present, lyrics AND disc both filled
     -- must NOT be selected by either criterion.
     INSERT INTO albums (id, cover_r2_key) VALUES ('al-3', 'al-3-cover.jpg');
     INSERT INTO song_masters (id, album_id, lyrics, disc) VALUES ('sm-3', 'al-3', 'la la la', 1);

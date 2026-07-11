@@ -31,15 +31,15 @@ export const mediaRoutes = new Hono<{
 // Workers has no Canvas API; bundling @cf-wasm/photon would add ~1.5 MB of
 // cold-start cost for an end user benefit (sub-200 KB thumbnails) we can
 // approximate cheaply. The strategy:
-//   1. Validate `size` against an allow-list (only the values Subsonic
-//      clients actually request — DSub/Substreamer/Sonixd hover around
-//      64/128/256/512).
-//   2. If unset / invalid → behave like the legacy endpoint and serve the
-//      cached original at covers/<albumId>.
-//   3. If valid → serve covers/<albumId>_s<size>. First request copies the
-//      original into the sized slot (no real resize — fallback per
-//      findings.md decision 1). Clients still get a cache-friendly URL with
-//      a stable key per size; bandwidth optimisation is a follow-up.
+//  1. Validate `size` against an allow-list (only the values Subsonic
+//    clients actually request — DSub/Substreamer/Sonixd hover around
+//    64/128/256/512).
+//  2. If unset / invalid → behave like the legacy endpoint and serve the
+//    cached original at covers/<albumId>.
+//  3. If valid → serve covers/<albumId>_s<size>. First request copies the
+//    original into the sized slot (no real resize — fallback per
+//    findings.md decision 1). Clients still get a cache-friendly URL with
+//    a stable key per size; bandwidth optimisation is a follow-up.
 // ============================================================================
 const ALLOWED_COVER_SIZES = new Set([64, 96, 128, 192, 256, 384, 512]);
 
@@ -137,14 +137,14 @@ async function openSourceForTranscode(
 // GET /rest/stream
 // ----------------------------------------------------------------------------
 // New query params (036):
-//   format               — target codec/container; 'raw' to skip transcoding
-//   maxBitRate           — kbps cap; triggers transcode when exceeded
-//   timeOffset           — seconds; **accepted but not honoured** in v1 (the
-//                          049 engine interface has no offset parameter).
-//                          Response carries X-EdgeSonic-TimeOffset-Ignored:1
-//                          so clients can fall back gracefully.
-//   estimateContentLength — when 'true', emit a Content-Length header derived
-//                          from duration_seconds × bit_rate × 125.
+//   format             — target codec/container; 'raw' to skip transcoding
+//   maxBitRate         — kbps cap; triggers transcode when exceeded
+//   timeOffset         — seconds; **accepted but not honoured** in v1 (the
+//                        049 engine interface has no offset parameter).
+//                        Response carries X-EdgeSonic-TimeOffset-Ignored:1
+//                        so clients can fall back gracefully.
+//  estimateContentLength — when 'true', emit a Content-Length header derived
+//                        from duration_seconds × bit_rate × 125.
 //
 // If the engine is disabled or the picked profile is null → we serve the
 // original instance instead of failing. The Subsonic spec calls this out as
@@ -249,22 +249,22 @@ const streamHandler = async (c: Context) => {
   let result: StreamResult;
 
   //
-  // When the chosen instance is on a presign-capable scheme AND the request
+ // When the chosen instance is on a presign-capable scheme AND the request
   // is raw (no transcode), try to 302 the browser to a direct-fetch URL so
   // bytes bypass the Worker sub-request bandwidth pool. Each scheme has its
   // own global feature flag; the credential's stream_proxy_strategy further
   // gates which schemes a given client credential is allowed to 302 on.
   //
-  // Decision matrix:
-  //   scheme   | flag            | strategy allows scheme | → 302?
-  //   r2       | enable_r2_presign='1' + secrets set | always|r2_only      | yes
-  //   r2       | off / secrets missing               | *                   | no (proxy)
-  //   r2       | on                                  | never|webdav_only   | no (proxy)
-  //   webdav   | enable_webdav_presign='1'           | always|webdav_only   | yes
-  //   webdav   | off                                 | *                   | no (proxy)
-  //   webdav   | on                                  | never|r2_only       | no (proxy)
+ // Decision matrix:
+  //   scheme   | flag          | strategy allows scheme | → 302?
+  //   r2       | enable_r2_presign='1' + secrets set | always|r2_only    | yes
+  //   r2       | off / secrets missing               | *                 | no (proxy)
+  //   r2       | on                                  | never|webdav_only | no (proxy)
+  //   webdav   | enable_webdav_presign='1'           | always|webdav_only | yes
+  //   webdav   | off                                 | *                 | no (proxy)
+  //   webdav   | on                                  | never|r2_only     | no (proxy)
   //
-  // url/subsonic schemes never presign. Transcode branch never presigns.
+ // url/subsonic schemes never presign. Transcode branch never presigns.
   // Falls through to in-Worker stream on any failure / disabled path.
   if (!needsTranscode) {
     // play of this master rides the r2:// fast path instead of the proxied
@@ -317,7 +317,7 @@ const streamHandler = async (c: Context) => {
           // follows the 302 to a cross-origin R2 S3 host where EdgeSonic's
           // same-origin CORP would be wrong anyway.
           //
-          // 093b — Cache the 302 for the same TTL as the presigned URL so the
+        // 093b — Cache the 302 for the same TTL as the presigned URL so the
           // browser's <audio> Range follow-ups (seek, pre-buffer chunks) reuse
           // the cached redirect and skip the Worker entirely on subsequent
           // ranges. Without this, every Range request re-hit the Worker to
@@ -501,11 +501,11 @@ async function tryTranscodeStream(
 // GET /rest/getCoverArt
 // ----------------------------------------------------------------------------
 // New query param (036):
-//   size — numeric pixel hint (64 / 96 / 128 / 192 / 256 / 384 / 512). When
-//          present and allowed, the cached R2 key becomes covers/<id>_s<size>
-//          so different size requests stay separate in client caches. The
-//          server does **not** actually resize the image (see findings.md
-//          decision 1) — the underlying bytes are the original.
+//  size — numeric pixel hint (64 / 96 / 128 / 192 / 256 / 384 / 512). When
+//        present and allowed, the cached R2 key becomes covers/<id>_s<size>
+//        so different size requests stay separate in client caches. The
+//        server does **not** actually resize the image (see findings.md
+//        decision 1) — the underlying bytes are the original.
 // ============================================================================
 const getCoverArtHandler = async (c: Context) => {
   const id = c.req.query("id");

@@ -1,9 +1,9 @@
 //
 // Strategy:
-//   * Spin up an in-memory SQLite via Node's built-in node:sqlite.
-//   * Wrap it in a minimal D1Database shim (prepare/bind/run/first/all) so the
-//     production queries (createQueries) and endpoint handlers run unmodified.
-//   * Drive each Hono route through annotationRoutes.fetch().
+//  * Spin up an in-memory SQLite via Node's built-in node:sqlite.
+//  * Wrap it in a minimal D1Database shim (prepare/bind/run/first/all) so the
+//   production queries (createQueries) and endpoint handlers run unmodified.
+//  * Drive each Hono route through annotationRoutes.fetch().
 //
 // Run: npx tsx test/annotation.test.ts
 

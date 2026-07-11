@@ -2,12 +2,12 @@
 // All endpoints are JSON-shaped (the /edgesonic/* bucket is web-session only,
 // the web frontend consumes JSON). Authorisation matrix:
 //
-//   GET  /edgesonic/work/poll       — permission participate_work
-//   POST /edgesonic/work/submit     — claimed_by must equal current user
-//   POST /edgesonic/work/heartbeat  — claimed_by must equal current user
-//   POST /edgesonic/work/dispatch   — permission dispatch_work (super-admin)
-//   GET  /edgesonic/work/status     — level >= 3 (super-admin)
-//   POST /edgesonic/work/cancel     — level >= 3 (super-admin)
+//   GET  /edgesonic/work/poll     — permission participate_work
+//   POST /edgesonic/work/submit   — claimed_by must equal current user
+//  POST /edgesonic/work/heartbeat — claimed_by must equal current user
+//   POST /edgesonic/work/dispatch — permission dispatch_work (super-admin)
+//   GET  /edgesonic/work/status   — level >= 3 (super-admin)
+//   POST /edgesonic/work/cancel   — level >= 3 (super-admin)
 //
 // The atomic claim uses D1's RETURNING clause inside a single UPDATE-by-subquery
 // so two browsers can't grab the same row. caps filtering is done on the worker
@@ -159,7 +159,7 @@ workRoutes.post("/work/submit", async (c) => {
   // path knows whether to cascade the result into song_masters/song_instances.
   // Before 077 we only ever stored result_json against work_queue and called it
   // done; admins saw rows pile up as "completed" while song_instances stayed
-  // tag_scanned=0 (82 completed → 1 with tag_scanned, per Rosmontis' report).
+  // tag_scanned=0 (82 completed → 1 with tag_scanned,
   const row = await env.DB.prepare(
     "SELECT status, claimed_by, attempts, max_attempts, task_type, payload FROM work_queue WHERE id = ?",
   ).bind(body.id).first<{
@@ -534,7 +534,7 @@ export interface DispatchInput {
   // up duplicate rows in work_queue. Scan.ts uses this with the instanceId.
   dedupKey?: string;
   // dedupKey + plain INSERT OR IGNORE is a *one-shot-ever* mechanism:
-  // once a row with that deterministic id exists (in ANY terminal state —
+  // once a row with that deterministic id exists (in ANY terminal state
   // completed/failed/canceled), every future re-dispatch under the same key
   // silently no-ops. That's correct for the common "don't pile up duplicates
   // while still queued/claimed" case, but wrong for an explicit force-rescan

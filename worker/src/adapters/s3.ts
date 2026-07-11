@@ -1,12 +1,12 @@
 //
 // Design decisions:
-//   • Always path-style URL: {endpoint}/{bucket}/{key}
-//     – universally supported by all S3-compatible servers
-//     – required for MinIO when endpoint is an IP address
-//     – avoids the virtual-hosted DNS problem with self-hosted servers
-//   • SigV4 Authorization header (proxy mode, no presign in v1)
-//   • UNSIGNED-PAYLOAD for both GET and PUT (safe over HTTPS)
-//   • ListObjectsV2 XML API for scanning (no SDK dependency)
+//  • Always path-style URL: {endpoint}/{bucket}/{key}
+//   – universally supported by all S3-compatible servers
+//   – required for MinIO when endpoint is an IP address
+//   – avoids the virtual-hosted DNS problem with self-hosted servers
+//  • SigV4 Authorization header (proxy mode, no presign in v1)
+//  • UNSIGNED-PAYLOAD for both GET and PUT (safe over HTTPS)
+//  • ListObjectsV2 XML API for scanning (no SDK dependency)
 
 import type { StorageAdapter, StreamResult } from "./index";
 import { buildAuthorizationHeader } from "../utils/sigv4";

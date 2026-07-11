@@ -57,8 +57,8 @@ app.use("/rest/*", async (c, next) => {
 app.use("/rest/*", formatMiddleware);
 
 // strategy inside authMiddleware picks the right policy:
-//   /rest/*       → Subsonic token+salt / apiKey / guestToken
-//   /tag /storage /edgesonic → web-session credential only
+//   /rest/*     → Subsonic token+salt / apiKey / guestToken
+//  /tag /storage /edgesonic → web-session credential only
 app.use("/rest/*", authMiddleware);
 app.use("/tag/*", authMiddleware);
 app.use("/storage/*", authMiddleware);
@@ -91,7 +91,7 @@ app.onError((err, c) => {
 
 // expression lives in wrangler.toml; this handler is what the Cloudflare
 // runtime invokes for each tick. We use ctx.waitUntil so any failures inside
-// refreshAllChannels (network blips, parse errors) don't crash the worker —
+// refreshAllChannels (network blips, parse errors) don't crash the worker
 // per-channel errors are recorded into the channel row instead.
 //
 // scan_interval_hours + cron:last_scan_ts to decide whether to dispatch a new

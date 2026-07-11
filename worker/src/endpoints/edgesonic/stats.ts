@@ -21,7 +21,7 @@ statsRoutes.get("/stats/storage", async (c) => {
   // storage_uri r2://cache/webdav/...) don't inflate the 'r2' bucket. Only
   // source_type != 'cached' with r2:// URIs count as native R2 storage.
   //
-  // The bucket CASE is repeated in GROUP BY rather than referenced by its
+ // The bucket CASE is repeated in GROUP BY rather than referenced by its
   // "source_type" alias: song_instances has a REAL column also named
   // source_type, and SQLite resolves a bare GROUP BY identifier that matches
   // BOTH an input column and an output alias to the INPUT column — so

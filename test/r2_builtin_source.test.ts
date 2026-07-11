@@ -3,17 +3,17 @@
 // song_instances.source_id='r2-local' without ever creating a
 // storage_sources row, so it never showed up on the Sources page and had no
 // way to be edited. This test covers the fix:
-//   1. /sources/list synthesises a virtual r2-local entry when no real row
-//      exists yet, so it's always visible.
-//   2. If a real r2 row already exists (e.g. a future migration seeds one),
-//      list returns that instead of a duplicate synthetic entry.
-//   3. /sources/update upserts (INSERT) the built-in row on its first edit
-//      instead of 404ing like it would for any other missing id.
-//   4. A second edit after that first upsert goes through the normal UPDATE
-//      path (no duplicate rows).
-//   5. /sources/delete rejects id='r2-local' — it's built-in and un-removable.
-//   6. Regular (non-r2) sources are unaffected: still 404 on update-missing,
-//      still deletable.
+//  1. /sources/list synthesises a virtual r2-local entry when no real row
+//    exists yet, so it's always visible.
+//  2. If a real r2 row already exists (e.g. a future migration seeds one),
+//    list returns that instead of a duplicate synthetic entry.
+//  3. /sources/update upserts (INSERT) the built-in row on its first edit
+//    instead of 404ing like it would for any other missing id.
+//  4. A second edit after that first upsert goes through the normal UPDATE
+//    path (no duplicate rows).
+//  5. /sources/delete rejects id='r2-local' — it's built-in and un-removable.
+//  6. Regular (non-r2) sources are unaffected: still 404 on update-missing,
+//    still deletable.
 //
 // Run: npx tsx test/r2_builtin_source.test.ts
 

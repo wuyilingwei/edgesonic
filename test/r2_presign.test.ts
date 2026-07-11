@@ -1,21 +1,21 @@
 //
 // Strategy:
-//   * In-memory SQLite D1 shim with song_masters + song_instances rows.
-//   * R2 Map-backed shim (for the fallback stream path).
-//   * feature_strings row `enable_r2_presign` flipped per scenario.
-//   * R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / CF_ACCOUNT_ID injected via env.
-//   * Hono harness mounts mediaRoutes; we assert 302 + Location header shape
-//     and the fallback (200 in-Worker stream) when presign is off / misconfig.
+//  * In-memory SQLite D1 shim with song_masters + song_instances rows.
+//  * R2 Map-backed shim (for the fallback stream path).
+//  * feature_strings row `enable_r2_presign` flipped per scenario.
+//  * R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / CF_ACCOUNT_ID injected via env.
+//  * Hono harness mounts mediaRoutes; we assert 302 + Location header shape
+//   and the fallback (200 in-Worker stream) when presign is off / misconfig.
 //
 // Coverage:
-//   1. feature on + secrets set + raw r2 instance  → 302 with SigV4 Location
-//   2. feature off                                 → 200 in-Worker stream (fallback)
-//   3. secrets missing                             → 200 fallback (no 302)
-//   4. needsTranscode (format=mp3 mismatch)        → 200 (transcode/raw fallback, no 302)
-//   5. non-r2 scheme (webdav)                      → 200 (no 302; webdav adapter 404 body)
-//   6. Range header signed into the URL           → Location contains X-Amz-SignedHeaders=host;range
-//   7. presignR2Get unit: URL shape, host, query params, signature presence
-//   8. validator: enable_r2_presign accepts 0/1, rejects other
+//  1. feature on + secrets set + raw r2 instance → 302 with SigV4 Location
+//   2. feature off                               → 200 in-Worker stream (fallback)
+//   3. secrets missing                           → 200 fallback (no 302)
+//   4. needsTranscode (format=mp3 mismatch)      → 200 (transcode/raw fallback, no 302)
+//   5. non-r2 scheme (webdav)                    → 200 (no 302; webdav adapter 404 body)
+//   6. Range header signed into the URL         → Location contains X-Amz-SignedHeaders=host;range
+//  7. presignR2Get unit: URL shape, host, query params, signature presence
+//  8. validator: enable_r2_presign accepts 0/1, rejects other
 //
 // Run: npx tsx test/r2_presign.test.ts
 

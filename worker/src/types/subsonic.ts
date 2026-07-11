@@ -271,10 +271,10 @@ export function mapShareDetail(s: Share, publicUrl: string, songs: SongMaster[])
 // ============================================================================
 // ----------------------------------------------------------------------------
 // Subsonic spec shapes (subsonic-rest-api-1.16.1.xsd):
-//   <channel id url title description coverArt originalImageUrl status errorMessage>
-//     <episode id streamId channelId title description publishDate status
-//              duration bitRate size suffix contentType isDir=false isVideo=false />*
-//   </channel>
+//  <channel id url title description coverArt originalImageUrl status errorMessage>
+//   <episode id streamId channelId title description publishDate status
+//            duration bitRate size suffix contentType isDir=false isVideo=false />*
+//  </channel>
 //
 // coverArt is `pc-{id}` whenever the channel carries an image_url; getCoverArt
 // negotiates the actual asset on demand.

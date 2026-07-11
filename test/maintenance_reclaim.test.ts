@@ -4,14 +4,14 @@
 // guard and the no-op shape:
 //
 // Coverage:
-//   1. 3 claimed rows with heartbeat older than ttl and attempts<max → all
-//      requeued, claimed_by/claimed_at/heartbeat_at cleared, attempts intact
-//   2. 1 claimed row with attempts>=max → status=failed, error_message updated
-//   3. Mixed batch — stale + fresh-claimed + queued; only stale ones touched
-//   4. Non-admin (level=2) → 403, no rows mutated
-//   5. No stale rows → ok:true, reclaimed=0, items=[]
-//   6. Feature key worker_claim_ttl_seconds is honoured (default 60 used when
-//      missing; 300 used when set)
+//  1. 3 claimed rows with heartbeat older than ttl and attempts<max → all
+//    requeued, claimed_by/claimed_at/heartbeat_at cleared, attempts intact
+//  2. 1 claimed row with attempts>=max → status=failed, error_message updated
+//  3. Mixed batch — stale + fresh-claimed + queued; only stale ones touched
+//  4. Non-admin (level=2) → 403, no rows mutated
+//  5. No stale rows → ok:true, reclaimed=0, items=[]
+//  6. Feature key worker_claim_ttl_seconds is honoured (default 60 used when
+//    missing; 300 used when set)
 //
 // node:sqlite shim mirrors the cleanup_duplicate_covers.test.ts harness.
 //
@@ -256,7 +256,7 @@ async function main() {
     assert(byId["w-queued"].status === "queued", "already-queued row untouched");
   }
 
-  console.log("\nNon-admin (level=2) → 403, no mutation (087 — permissionMiddleware XML):");
+  console.log("\nNon-admin (level=2) → 403, no mutation (permissionMiddleware XML):");
   {
     const sqlite = buildDb();
     seedRow(sqlite, { id: "w-x", attempts: 1, heartbeatAgo: 200 });

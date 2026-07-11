@@ -5,9 +5,9 @@
 // when direct CORS fails (see netease.ts:tryDirectThenProxy).
 //
 // Public surface (used by ScrapeButton.vue):
-//   - searchAll({ query, sources, proxyFetch }) → SearchResponse
-//   - fetchLyric({ source, songId, proxyFetch })
-//   - submitResult({ result, songMasterId?, mode? }, authPost) → audit row id
+//  - searchAll({ query, sources, proxyFetch }) → SearchResponse
+//  - fetchLyric({ source, songId, proxyFetch })
+//  - submitResult({ result, songMasterId?, mode? }, authPost) → audit row id
 //
 // `proxyFetch` is injected by the caller (api.ts useAuth().authPost wrapped
 // to POST /rest/scrapeMetadata). This keeps the adapters dependency-light:

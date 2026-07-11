@@ -1,13 +1,13 @@
 // 089 S2 — crossCopy endpoint tests.
 //
 // Covers:
-//   • POST /storage/files/crossCopy with srcUri + destSource='r2' → ok, destUri
-//   • destSource is a storage_sources.id for webdav → ok, destUri
-//   • destSource not found → 404
-//   • destSource type 'url' → 400 read-only
-//   • destSource type 'subsonic' → 400 read-only
-//   • Missing params → 400
-//   • Source stream failure → 502
+//  • POST /storage/files/crossCopy with srcUri + destSource='r2' → ok, destUri
+//  • destSource is a storage_sources.id for webdav → ok, destUri
+//  • destSource not found → 404
+//  • destSource type 'url' → 400 read-only
+//  • destSource type 'subsonic' → 400 read-only
+//  • Missing params → 400
+//  • Source stream failure → 502
 //
 // Adapters are shimmed via globalThis.fetch + an in-memory R2 bucket mock so
 // no real network calls are made.

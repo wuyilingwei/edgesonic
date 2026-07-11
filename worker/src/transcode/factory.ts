@@ -7,11 +7,11 @@
 // tests can inject a FakeEngine without monkey-patching @cloudflare/sandbox.
 //
 // Resolution mirrors the original buildEngine() that shipped with 049:
-//   transcode_engine = 'disabled' → null
-//   transcode_engine = 'sandbox'  → SandboxTranscodeEngine (requires the
-//                                   Sandbox DO binding)
-//   transcode_engine = 'external' → ExternalTranscodeEngine (requires
-//                                   external_transcoder_url + secret)
+//  transcode_engine = 'disabled' → null
+//  transcode_engine = 'sandbox' → SandboxTranscodeEngine (requires the
+//                                 Sandbox DO binding)
+//  transcode_engine = 'external' → ExternalTranscodeEngine (requires
+//                                 external_transcoder_url + secret)
 // Any misconfiguration returns null — callers fall back to direct streaming.
 
 // Engine classes are loaded lazily — both pull in @cloudflare/sandbox /

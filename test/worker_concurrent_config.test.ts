@@ -1,9 +1,9 @@
 //
 // Covers the server-side knob added in 088:
-//   1. Migration 0025 default — feature_strings row exists with value '3'.
-//   2. POST /edgesonic/features/updateString accepts integers in [1, 8].
-//   3. Rejects 0, 9, "abc", "-1", "" (each with the canonical error string).
-//   4. Persists the new value end-to-end (round-trip via SELECT).
+//  1. Migration 0025 default — feature_strings row exists with value '3'.
+//  2. POST /edgesonic/features/updateString accepts integers in [1, 8].
+//  3. Rejects 0, 9, "abc", "-1", "" (each with the canonical error string).
+//  4. Persists the new value end-to-end (round-trip via SELECT).
 //
 // Mirrors the maintenance_reclaim / reset_failed_work shim (node:sqlite + Hono
 // + handwritten D1 stub) so the suite stays self-contained and runs under

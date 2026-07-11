@@ -1,31 +1,31 @@
 // ---------------------------------------------------------------------------
 // Two problems this closes:
 //
-//   A) "Other file formats should try to be compatible too" — the worker's
-//      embedded tag parser (utils/tags.ts) only recognizes MP3 (ID3v2),
-//      FLAC, and WAV. Anything else (M4A/OGG/Opus/WMA/APE/AIFF/ALAC/DSF)
-//      returns null from parseTags(), and endpoints/tag/read.ts permanently
-//      marks the row tag_scanned=2 ("leave scanned = 2 so we don't loop
-//      forever on broken files") — it never gets a second chance. We do NOT
-//      reimplement those container formats server-side (music-metadata
-//      already parses them robustly in the browser worker pool, 052a/052b);
-//      instead we hand the row to that pool once.
+// A) "Other file formats should try to be compatible too" — the worker's
+//    embedded tag parser (utils/tags.ts) only recognizes MP3 (ID3v2),
+//    FLAC, and WAV. Anything else (M4A/OGG/Opus/WMA/APE/AIFF/ALAC/DSF)
+//    returns null from parseTags(), and endpoints/tag/read.ts permanently
+//    marks the row tag_scanned=2 ("leave scanned = 2 so we don't loop
+//    forever on broken files") — it never gets a second chance. We do NOT
+//    reimplement those container formats server-side (music-metadata
+//    already parses them robustly in the browser worker pool, 052a/052b);
+//    instead we hand the row to that pool once.
 //
-//   B) "Auto-dispatch cases missing lyrics etc. but not missing cover art" —
-//      songs that were already successfully scanned (tag_scanned=1) and
-//      whose album already has a resolved cover (proof the pipeline mostly
-//      worked) but are still missing lyrics/disc — likely because they were
-//      scanned before 109 wired up lyrics/disc extraction. These get one
-//      more browser-pool pass so the now-fixed extraction can backfill them.
+// B) "Auto-dispatch cases missing lyrics etc. but not missing cover art"
+//    songs that were already successfully scanned (tag_scanned=1) and
+//    whose album already has a resolved cover (proof the pipeline mostly
+//    worked) but are still missing lyrics/disc — likely because they were
+//    scanned before 109 wired up lyrics/disc extraction. These get one
+//    more browser-pool pass so the now-fixed extraction can backfill them.
 //
-//   C) "WAV duration reads as ~3 seconds" — 111 fixed the root cause (a
-//      Range-truncated 512KB buffer made music-metadata's WaveParser clamp
-//      the audio "data" chunk length to whatever fit in the slice, instead of
-//      the file's real length), but library rows scanned BEFORE that fix
-//      already have the wrong (tiny) duration baked into D1. A WAV several
-//      MB in size that "lasts" under 10 real seconds is implausible at any
-//      realistic bitrate — flag those for one more pass so the fixed code
-//      recomputes them.
+// C) "WAV duration reads as ~3 seconds" — 111 fixed the root cause (a
+//    Range-truncated 512KB buffer made music-metadata's WaveParser clamp
+//    the audio "data" chunk length to whatever fit in the slice, instead of
+//    the file's real length), but library rows scanned BEFORE that fix
+//    already have the wrong (tiny) duration baked into D1. A WAV several
+//    MB in size that "lasts" under 10 real seconds is implausible at any
+//    realistic bitrate — flag those for one more pass so the fixed code
+//    recomputes them.
 //
 // All three dispatch the SAME 'metadata' task type via dispatchWorkBatch.
 // A/B use dedupKey namespace "recheck:<instanceId>"; C uses a separate

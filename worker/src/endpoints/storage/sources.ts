@@ -14,7 +14,7 @@ const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 // native MUSIC_BUCKET binding, never HTTP). Uploads/clone/hotcache/transcode
 // all write song_instances.source_id='r2-local' directly without ever
 // creating a storage_sources row, so R2 has historically been completely
-// invisible on this page — Rosmontis: "should include the built-in R2, but
+// invisible on this page
 // it has no edit function" (there was no entry to edit at all). If no real
 // row exists yet we synthesise one here so it always shows up; /sources/
 // update upserts it into a real row the first time an admin actually edits

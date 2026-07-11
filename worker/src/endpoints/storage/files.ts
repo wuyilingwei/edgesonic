@@ -114,7 +114,7 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
 
 // ── File operations (studio-style structured REST, no notes/color-labels) ──
 
-// POST /rest/files/delete  body: { key: "music/file.mp3" }
+// POST /rest/files/delete body: { key: "music/file.mp3" }
 filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
   const body = await c.req.json<{ key: string }>();
@@ -146,7 +146,7 @@ filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {
   return c.json({ ok: true });
 });
 
-// POST /rest/files/move  body: { key, dest }
+// POST /rest/files/move body: { key, dest }
 filesRoutes.post("/files/move", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
   const body = await c.req.json<{ key: string; dest: string }>();
@@ -165,7 +165,7 @@ filesRoutes.post("/files/move", permissionMiddleware("upload"), async (c) => {
   return c.json({ ok: true });
 });
 
-// POST /rest/files/copy  body: { key, dest }
+// POST /rest/files/copy body: { key, dest }
 filesRoutes.post("/files/copy", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
   const body = await c.req.json<{ key: string; dest: string }>();
@@ -181,22 +181,22 @@ filesRoutes.post("/files/copy", permissionMiddleware("upload"), async (c) => {
 
 // 089 S2 — Cross-source file copy (byte-level copy between any two adapters).
 //
-// POST /rest/files/crossCopy  body: { srcUri, destSource, destPath }
+// POST /rest/files/crossCopy body: { srcUri, destSource, destPath }
 //
-//   srcUri     — Full storage URI of the source file:
-//                  r2://music/album/track.mp3
-//                  webdav://<sourceId>/path/track.mp3
-//                  url://https://...
-//                  subsonic://<sourceId>/rest/stream?id=...
+//   srcUri   — Full storage URI of the source file:
+//                r2://music/album/track.mp3
+//                webdav://<sourceId>/path/track.mp3
+//                url://https://...
+//                subsonic://<sourceId>/rest/stream?id=...
 //
-//   destSource — 'r2' for the local R2 bucket, OR a storage_sources.id for
-//                a remote source. Only r2 and webdav sources are writable;
-//                url and subsonic always return an error.
+// destSource — 'r2' for the local R2 bucket, OR a storage_sources.id for
+//              a remote source. Only r2 and webdav sources are writable;
+//              url and subsonic always return an error.
 //
-//   destPath   — Relative path at the destination (e.g. "Music/album/track.mp3").
-//                For R2 destinations `music/` is prepended automatically if not
-//                already present. For WebDAV the path is relative to the
-//                source's root (as stored in the adapter credentials).
+//   destPath — Relative path at the destination (e.g. "Music/album/track.mp3").
+//              For R2 destinations `music/` is prepended automatically if not
+//              already present. For WebDAV the path is relative to the
+//              source's root (as stored in the adapter credentials).
 //
 // 093f — Optional `registerInstance` body field (mirror-to-R2 flow): when
 // present, the endpoint also INSERTs a song_instances row for the new R2

@@ -1,6 +1,6 @@
 # Cron Triggers — runtime managed via the Cloudflare API
 
-> Task 067 — wrangler.toml's `[triggers]` block is gone. The Worker's
+> Task wrangler.toml's `[triggers]` block is gone. The Worker's
 > cron schedules are now configured **exclusively** through the Cloudflare
 > REST API at runtime (Settings → Cloudflare integration). This document
 > explains why, how to operate it, and what to expect after each deploy.

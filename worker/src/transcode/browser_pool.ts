@@ -3,13 +3,13 @@
 // NOT run ffmpeg itself — it just turns a transcode request into a
 // work_queue row and waits for a browser-resident worker (52b) to pick it up,
 // decode the source, run ffmpeg.wasm and upload the result. The trade-off:
-//   + Zero Worker CPU / memory cost. No paid Sandbox container.
-//   + Capacity scales linearly with the number of browser tabs open.
-//   - Cannot serve real-time `/rest/stream` transcoding (latency is too
-//     unpredictable). Callers detect the engine kind and fall back to raw
-//     while pre-baking the requested profile asynchronously.
-//   - The browser-side worker writes its bytes back via
-//     `/edgesonic/work/upload?id=…&token=…` (HMAC-signed, 5 minute TTL).
+//  + Zero Worker CPU / memory cost. No paid Sandbox container.
+//  + Capacity scales linearly with the number of browser tabs open.
+//  - Cannot serve real-time `/rest/stream` transcoding (latency is too
+//   unpredictable). Callers detect the engine kind and fall back to raw
+//   while pre-baking the requested profile asynchronously.
+//  - The browser-side worker writes its bytes back via
+//   `/edgesonic/work/upload?id=…&token=…` (HMAC-signed, 5 minute TTL).
 //
 // Because the engine is async-only, `transcode()` is implemented as a hard
 // failure: any call path that goes through it without first short-circuiting

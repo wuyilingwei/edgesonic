@@ -6,8 +6,8 @@
 // when the upstream library is large.
 //
 // All endpoints live under /edgesonic/clone/* and require:
-//   1. authMiddleware (path prefix /edgesonic/ → web session only)
-//   2. permissionMiddleware("manage_users") — super-admin only
+//  1. authMiddleware (path prefix /edgesonic/ → web session only)
+//  2. permissionMiddleware("manage_users") — super-admin only
 //
 // Persistence is INSERT OR IGNORE for entity tables (artists/albums/
 // song_masters) so a re-clone is a no-op; annotations / playlists /
@@ -37,7 +37,7 @@ function signedUpstreamUrl(baseUrl: string, username: string, password: string, 
   return `${baseUrl.replace(/\/+$/, "")}/rest/${path}?${q.toString()}`;
 }
 
-// 110 — CORS-safe clone proxy. The browser POSTs upstream credentials to the
+// CORS-safe clone proxy. The browser POSTs upstream credentials to the
 // EdgeSonic worker; the worker performs the upstream fetch server-side and
 // returns the raw response. This avoids browser CORS restrictions when the
 // upstream Subsonic server doesn't emit Access-Control-Allow-Origin.
@@ -79,20 +79,20 @@ cloneRoutes.post("/clone/proxy", permissionMiddleware("manage_users"), async (c)
 // POST /edgesonic/clone/upsertMaster
 // ---------------------------------------------------------------------------
 // Body: { artist, album, song, albumArtist? }
-//   artist:      { id, name, sortName?, imageUrl? }
-//   album:       { id, name, sortName?, year?, genre?, coverUrl? }
-//   song:        { id, albumId, artistId, albumArtistId?, title, sortTitle?,
-//                  track?, disc?, duration?, genre?, compilation?, lyrics? }
-//   albumArtist: optional { id, name, sortName? }
+//   artist:    { id, name, sortName?, imageUrl? }
+//   album:     { id, name, sortName?, year?, genre?, coverUrl? }
+//   song:      { id, albumId, artistId, albumArtistId?, title, sortTitle?,
+//                track?, disc?, duration?, genre?, compilation?, lyrics? }
+//  albumArtist: optional { id, name, sortName? }
 //
 // Behaviour:
-//   * INSERT OR IGNORE artists (artist + optional albumArtist)
-//   * INSERT OR IGNORE albums
-//   * INSERT OR IGNORE song_masters
-//   * If song_masters row already existed, UPDATE the nullable columns with
-//     the upstream values (COALESCE keeps existing non-null values when the
-//     upstream omits a field). This lets a re-clone backfill fields that
-//     were empty on the first pass.
+//  * INSERT OR IGNORE artists (artist + optional albumArtist)
+//  * INSERT OR IGNORE albums
+//  * INSERT OR IGNORE song_masters
+//  * If song_masters row already existed, UPDATE the nullable columns with
+//   the upstream values (COALESCE keeps existing non-null values when the
+//   upstream omits a field). This lets a re-clone backfill fields that
+//   were empty on the first pass.
 //
 // Response: { ok: true, masterId }
 cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), async (c) => {
@@ -208,8 +208,8 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
 // POST /edgesonic/clone/upsertPlaylist
 // ---------------------------------------------------------------------------
 // Body: { playlist, entries }
-//   playlist: { id, name, owner, public?, comment?, coverUrl? }
-//   entries:  string[]   — song_master ids in order
+//  playlist: { id, name, owner, public?, comment?, coverUrl? }
+//   entries:  string[] — song_master ids in order
 //
 // Replaces local playlist rows + entries on each call (mirrors the
 // replacePlaylistSongs query semantics). INSERT OR REPLACE the playlist
@@ -307,8 +307,8 @@ cloneRoutes.post("/clone/upsertPlaylist", permissionMiddleware("manage_users"), 
 // POST /edgesonic/clone/upsertStarred
 // ---------------------------------------------------------------------------
 // Body: { userId, items }
-//   userId: local users.username to attribute the stars to
-//   items:  Array<{ id, type: 'song'|'album'|'artist', starredAt? }>
+//  userId: local users.username to attribute the stars to
+//  items: Array<{ id, type: 'song'|'album'|'artist', starredAt? }>
 //
 // Uses starItem() semantics: UPSERT annotations, set starred=1 + starred_at.
 // We don't unstar items that are absent from the upstream list — a clone is
@@ -348,10 +348,10 @@ cloneRoutes.post("/clone/upsertStarred", permissionMiddleware("manage_users"), a
 // POST /edgesonic/clone/upsertUser
 // ---------------------------------------------------------------------------
 // Body: { user, credentials? }
-//   user:        { username, masterPassword (already SHA-256 hashed upstream? no — plaintext),
-//                  level?, enabled? }
-//   credentials: Array<{ password, label?, streamProxyStrategy? }> — Subsonic client
-//                  passwords to mirror into local subsonic_credentials.
+//   user:      { username, masterPassword (already SHA-256 hashed upstream? no — plaintext),
+//                level?, enabled? }
+//  credentials: Array<{ password, label?, streamProxyStrategy? }> — Subsonic client
+//                passwords to mirror into local subsonic_credentials.
 //
 // EdgeSonic stores master_password as SHA-256(password). The upstream
 // getStarred/getUsers responses expose the password as plaintext (Subsonic
@@ -416,7 +416,7 @@ cloneRoutes.post("/clone/upsertUser", permissionMiddleware("manage_users"), asyn
 // ---------------------------------------------------------------------------
 // Body: raw bytes (the upstream /rest/stream payload).
 // Query: ?masterId=<song_master_id>&suffix=<ext>&contentType=<mime>&
-//        &artist=<...>&album=<...>&filename=<...>&size=<bytes>
+//      &artist=<...>&album=<...>&filename=<...>&size=<bytes>
 //
 // Writes R2 key `music/{artist}/{album}/{filename}` and creates a
 // song_instances row (source_type='original', source_id='r2-local',

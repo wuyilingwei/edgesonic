@@ -1,8 +1,8 @@
-//   1. Stamp every submission with [<task_type>:<task.id[0..8]>] prefix
-//   2. Clamp at 500 chars
-//   3. Accept Error | ErrorEvent-shaped { message } | string | unknown
-//   4. Never emit an empty body (the bug 078 fixes: "worker errored" with no
-//      task context flooding work_queue.error_message)
+//  1. Stamp every submission with [<task_type>:<task.id[0..8]>] prefix
+//  2. Clamp at 500 chars
+//  3. Accept Error | ErrorEvent-shaped { message } | string | unknown
+//  4. Never emit an empty body (the bug 078 fixes: "worker errored" with no
+//    task context flooding work_queue.error_message)
 //
 // We import formatTaskError directly — it's a pure function exported by the
 // store module precisely so this test can exercise it without spinning up

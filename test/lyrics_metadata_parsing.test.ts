@@ -1,11 +1,11 @@
-//   A. worker/src/utils/tags.ts — embedded lyrics (ID3v2 USLT, FLAC vorbis
-//      LYRICS/SYNCEDLYRICS/UNSYNCEDLYRICS) + disc number (TPOS/DISCNUMBER),
-//      previously declared but never parsed.
-//   B. worker/src/utils/metadataApply.ts — applyMetadataResult now persists
-//      tags.lyrics to song_masters.lyrics (COALESCE-guarded: fills empty,
-//      never overwrites), independent of the hasLogical/relink gate.
-//   C. worker/src/endpoints/edgesonic/stats.ts — storage breakdown excludes
-//      missing=1 song_instances rows (the R2-cost-includes-WebDAV-size bug).
+//  A. worker/src/utils/tags.ts — embedded lyrics (ID3v2 USLT, FLAC vorbis
+//    LYRICS/SYNCEDLYRICS/UNSYNCEDLYRICS) + disc number (TPOS/DISCNUMBER),
+//    previously declared but never parsed.
+//  B. worker/src/utils/metadataApply.ts — applyMetadataResult now persists
+//    tags.lyrics to song_masters.lyrics (COALESCE-guarded: fills empty,
+//    never overwrites), independent of the hasLogical/relink gate.
+//  C. worker/src/endpoints/edgesonic/stats.ts — storage breakdown excludes
+//    missing=1 song_instances rows (the R2-cost-includes-WebDAV-size bug).
 //
 // Run: npx tsx test/lyrics_metadata_parsing.test.ts
 
@@ -266,7 +266,7 @@ async function main() {
     assert(r2?.bytes === 104857600, "r2 bucket only counts the native upload (100MB) — not the stuck claim or the completed hotcache copy");
     assert(r2?.count === 1, "r2 bucket count excludes both the stuck missing=1 claim and the completed cached row");
     assert(webdav?.bytes === 52428800, "webdav bucket unaffected (its own 50MB, not inflated by the stuck claim)");
-    assert(cached?.bytes === 31457280, "110 — completed hotcache copy (missing=0) lands in its own 'cached' bucket, not 'r2'");
+    assert(cached?.bytes === 31457280, "completed hotcache copy (missing=0) lands in its own 'cached' bucket, not 'r2'");
     assert(cached?.count === 1, "cached bucket count excludes the still-in-flight (missing=1) claim row");
     const totalBytes = body.breakdown.reduce((s, r) => s + r.bytes, 0);
     assert(totalBytes === 104857600 + 52428800 + 31457280, "stuck claim's 200MB placeholder never appears in ANY bucket total");

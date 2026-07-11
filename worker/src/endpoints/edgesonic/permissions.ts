@@ -66,19 +66,19 @@ permissionsRoutes.post("/permissions/update", permissionMiddleware("manage_permi
 });
 
 // ============================================================================
-// POST /edgesonic/permissions/save  body: { permissions: Array<{level, name, enabled}> }
+// POST /edgesonic/permissions/save body: { permissions: Array<{level, name, enabled}> }
 // ============================================================================
 // The whole-matrix save behind the Settings UI's explicit Save button.
 // Two steps:
-//   1. D1 is always updated first — the durable source of truth and the
-//      fallback path permissionMiddleware/hasPermission use when the env
-//      override below is unset or fails to parse.
-//   2. Best-effort: if CF_API_TOKEN/CF_ACCOUNT_ID are configured (054), push
-//      the same matrix as the PERMISSIONS_OVERRIDE Workers Secret (same
-//      write pattern as cf.ts:setToken) so subsequent requests skip the D1
-//      round-trip entirely. A push failure does NOT fail the request — D1
-//      already has the update, so behaviour is correct either way, just one
-//      D1 read slower per permission check until the next successful push.
+//  1. D1 is always updated first — the durable source of truth and the
+//    fallback path permissionMiddleware/hasPermission use when the env
+//    override below is unset or fails to parse.
+//  2. Best-effort: if CF_API_TOKEN/CF_ACCOUNT_ID are configured (054), push
+//    the same matrix as the PERMISSIONS_OVERRIDE Workers Secret (same
+//    write pattern as cf.ts:setToken) so subsequent requests skip the D1
+//    round-trip entirely. A push failure does NOT fail the request — D1
+//    already has the update, so behaviour is correct either way, just one
+//    D1 read slower per permission check until the next successful push.
 permissionsRoutes.post("/permissions/save", permissionMiddleware("manage_permissions"), async (c) => {
   const body = await c.req.json<{ permissions?: Array<{ level: number; name: string; enabled: boolean }> }>().catch(() => null);
   if (!body || !Array.isArray(body.permissions) || body.permissions.length === 0) {

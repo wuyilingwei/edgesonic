@@ -399,7 +399,7 @@ function locateFLACPicture(buf: Uint8Array): PictureLocation | null {
     const size = (buf[pos + 1] << 16) | (buf[pos + 2] << 8) | buf[pos + 3];
     pos += 4;
     if (type === 6) {
-      // PICTURE block (all big-endian); fields may extend past the fetched head —
+      // PICTURE block (all big-endian); fields may extend past the fetched head
       // we only need the lengths, which sit near the block start
       let p = pos;
       if (p + 8 > buf.length) return null;
