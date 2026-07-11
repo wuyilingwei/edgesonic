@@ -78,6 +78,13 @@ function buildDb() {
     );
     INSERT INTO user_permissions VALUES (3, 'manage_sources', 1, 0);
 
+    -- 121 — /sources/list joins this for the per-source fileCount/sizeBytes
+    -- footprint; empty is fine, the query just needs the table to exist.
+    CREATE TABLE song_instances (
+      id TEXT PRIMARY KEY, source_id TEXT, size INTEGER DEFAULT 0,
+      missing INTEGER DEFAULT 0
+    );
+
     INSERT INTO storage_sources (id, type, name, base_url, username, password, root_path, enabled)
       VALUES ('wd-1', 'webdav', 'My NAS', 'https://nas.example.com/dav', 'nasuser', 'naspass', 'music', 1);
   `);
