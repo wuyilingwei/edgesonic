@@ -287,12 +287,28 @@ export const authMiddleware = createMiddleware<{
   }
 
   const q = c.req.query();
-  const username = q.u;
+  let username = q.u;
   const token = q.t;
   const salt = q.s;
   const apiKey = q.apiKey;
   const guestToken = q.guestToken;
   const db = c.env.DB;
+
+  // apiKeyAuthentication (OpenSubsonic extension): the key IS the
+  // credential — api_keys.api_key is the D1 primary key, so it already
+  // identifies exactly one account. Per spec a client using this extension
+  // may omit `u` entirely; look the row up before the "Missing username"
+  // check so that path works. A caller who sends `u` alongside `apiKey`
+  // still gets cross-checked below (can't ride someone else's key under a
+  // different claimed username).
+  let apiKeyRow: { username: string } | null = null;
+  if (apiKey) {
+    apiKeyRow = await db
+      .prepare("SELECT username FROM api_keys WHERE api_key = ?")
+      .bind(apiKey)
+      .first<{ username: string }>();
+    if (apiKeyRow && !username) username = apiKeyRow.username;
+  }
 
   if (!username) {
     return authFail(40, "Missing username", 401);
@@ -307,11 +323,7 @@ export const authMiddleware = createMiddleware<{
   let authMethod: AuthMethod | null = null;
 
   if (apiKey) {
-    const row = await db
-      .prepare("SELECT username FROM api_keys WHERE api_key = ?")
-      .bind(apiKey)
-      .first<{ username: string }>();
-    if (row?.username === username) {
+    if (apiKeyRow?.username === username) {
       authMethod = "apikey";
     }
   } else if (token && salt) {

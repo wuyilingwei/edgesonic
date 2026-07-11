@@ -19,6 +19,7 @@ import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 import { setLocale, SUPPORTED_LOCALES, type AppLocale } from "../i18n";
+import { setTheme, activeTheme, SUPPORTED_THEMES, type AppTheme } from "../theme";
 import PermissionsMatrix from "../components/PermissionsMatrix.vue";
 import { useWorkerPool } from "../stores/workerPool";
 
@@ -52,6 +53,11 @@ function showToast(msg: string, type = "success") {
 const localeLabels: Record<AppLocale, string> = { "zh-CN": "中文（简体）", en: "English" };
 function onLocaleChange(e: Event) {
   setLocale((e.target as HTMLSelectElement).value as AppLocale);
+}
+
+// === Common: theme ===
+function onThemeChange(next: AppTheme) {
+  setTheme(next);
 }
 
 // === Common: features + instance ===
@@ -1058,6 +1064,25 @@ onMounted(() => {
             <select class="form-select lang-select" :value="locale" @change="onLocaleChange">
               <option v-for="l in SUPPORTED_LOCALES" :key="l" :value="l">{{ localeLabels[l] }}</option>
             </select>
+          </div>
+        </div>
+
+        <!-- Theme -->
+        <div class="sub-block">
+          <div class="sub-header"><span class="mono-label">{{ t("settings.common.theme") }}</span></div>
+          <div class="lang-row">
+            <span class="feature-desc">{{ t("settings.common.themeDesc") }}</span>
+            <div class="theme-swatches">
+              <button
+                v-for="th in SUPPORTED_THEMES"
+                :key="th"
+                type="button"
+                class="theme-swatch"
+                :class="[`theme-swatch-${th}`, { active: activeTheme === th }]"
+                :title="t(`settings.common.themeOptions.${th}`)"
+                @click="onThemeChange(th)"
+              />
+            </div>
           </div>
         </div>
 
@@ -2091,6 +2116,26 @@ onMounted(() => {
 
 .lang-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .lang-select { width: auto; min-width: 160px; }
+
+.theme-swatches { display: flex; align-items: center; gap: 0.6rem; }
+.theme-swatch {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border-subtle);
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
+}
+.theme-swatch:hover { transform: scale(1.1); }
+.theme-swatch.active { border-color: var(--color-text-primary); }
+.theme-swatch-black { background: #0a0a0b; }
+.theme-swatch-red { background: #e53d3d; }
+.theme-swatch-green { background: #1ed760; }
+.theme-swatch-yellow { background: #f5c518; }
+.theme-swatch-stardust {
+  background:
+    radial-gradient(circle at 72% 24%, #ffd64a 0 12%, transparent 13%),
+    linear-gradient(135deg, #fffdf8 0 28%, #eeeaff 28% 48%, #6b63ff 48% 76%, #6fc7ff 100%);
+}
 
 .feature-list { display: flex; flex-direction: column; }
 .feature-row {

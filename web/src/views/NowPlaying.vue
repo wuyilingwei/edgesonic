@@ -14,26 +14,12 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onUnmounted } from "vue";
-import { useI18n } from "vue-i18n";
+import { ref, computed, watch, nextTick } from "vue";
 import { usePlayerStore } from "../stores/player";
-import { useAuth, parseXmlInner, formatDuration } from "../api";
+import { useAuth, parseXmlInner } from "../api";
 
-const { t } = useI18n();
 const player = usePlayerStore();
 const { coverArtUrl, authFetch } = useAuth();
-
-const playModeTitle = computed(() => t(`player.playMode.${player.playMode}`));
-
-// Resting display stays mm:ss (formatDuration); while dragging the seek bar
-// a floating tooltip shows hundredths precision at the thumb position.
-function fmtPrecise(sec: number): string {
-  if (!isFinite(sec) || sec < 0) return "0:00.00";
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  const cs = Math.floor((sec % 1) * 100);
-  return `${m}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
-}
 
 // ---- Lyrics: original + translation (dual axis) ----
 interface LyricLine { time: number; text: string; tr?: string }
@@ -42,8 +28,17 @@ const lyricsLoading = ref(false);
 const lyricsError = ref("");
 const hasSynced = computed(() => lyrics.value.some((l) => l.time > 0));
 const userScrolled = ref(false);
-const autoScrollTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const lyricsScrollEl = ref<HTMLElement | null>(null);
+// Auto-scroll calling container.scrollTo() itself fires the container's
+// "scroll" event, which onLyricsScroll can't tell apart from a real user
+// scroll — every auto-scroll was self-marking userScrolled=true and locking
+// out the *next* auto-scroll for 5s. Lyric lines are usually <5s apart, so in
+// practice only the first line ever scrolled into view. Suppress the scroll
+// handler until this timestamp (end of the smooth-scroll animation) so only
+// genuine user-initiated scrolls arm the pause.
+const suppressScrollUntil = ref(0);
+const autoScrolling = ref(false);
+const ACTIVE_CENTER_TOLERANCE_PX = 24;
 
 // Parse LRC into timed lines. Handles dual-language LRC where original and
 // translation alternate at the same timestamp.
@@ -185,7 +180,8 @@ const activeIdx = computed(() => {
   return idx;
 });
 
-// Scroll active line to center. Paused for 5s after user scrolls manually.
+// Scroll active line to center. Manual scrolling pauses auto-follow until the
+// user scrolls the active line back near center (or clicks a timed lyric).
 //
 // lyricsScrollEl is bound to .np-right — the actual overflow:auto scroll
 // container — not the inner .np-lyrics-scroll wrapper; scrollTo() on the
@@ -199,32 +195,42 @@ watch(activeIdx, async (idx) => {
   const el = container.querySelectorAll(".np-lyric-line")[idx] as HTMLElement | undefined;
   if (!el) return;
   const target = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+  suppressScrollUntil.value = Date.now() + 600;
+  autoScrolling.value = true;
   container.scrollTo({ top: target, behavior: "smooth" });
+  setTimeout(() => { autoScrolling.value = false; }, 600);
 });
 
 function onLyricsScroll() {
-  userScrolled.value = true;
-  if (autoScrollTimer.value) clearTimeout(autoScrollTimer.value);
-  autoScrollTimer.value = setTimeout(() => { userScrolled.value = false; }, 5000);
+  if (Date.now() < suppressScrollUntil.value) return;
+  userScrolled.value = !activeLineIsCentered();
+}
+
+function activeLineIsCentered(): boolean {
+  const idx = activeIdx.value;
+  const container = lyricsScrollEl.value;
+  if (idx < 0 || !container) return false;
+  const el = container.querySelectorAll(".np-lyric-line")[idx] as HTMLElement | undefined;
+  if (!el) return false;
+  const activeCenter = el.offsetTop + el.clientHeight / 2;
+  const viewportCenter = container.scrollTop + container.clientHeight / 2;
+  return Math.abs(activeCenter - viewportCenter) <= ACTIVE_CENTER_TOLERANCE_PX;
 }
 
 // Click a lyric line to jump playback there. Only meaningful for synced (LRC
 // timestamped) lyrics — plain unsynced text has every line's time=0.
 function onLyricClick(line: LyricLine) {
   if (!hasSynced.value || !player.hasTrack) return;
+  userScrolled.value = false;
   player.seek(line.time);
   if (!player.playing) player.toggle();
 }
-
-onUnmounted(() => {
-  if (autoScrollTimer.value) clearTimeout(autoScrollTimer.value);
-});
 
 const coverFailed = ref(false);
 const track = computed(() => player.current);
 // coverArtUrl generates a fresh random salt each call; calling it in the
 // template directly (e.g. :src="coverArtUrl(track.coverArt, 512)") re-fetches
-// the cover image 4×/s because timeupdate → progressPct triggers re-render.
+// the cover image 4×/s because timeupdate → activeIdx triggers re-render.
 //
 // 400 isn't in the backend's ALLOWED_COVER_SIZES allow-list (64/96/128/192/
 // 256/384/512 — media.ts parseCoverSize), so a request with size=400 silently
@@ -237,30 +243,6 @@ const coverSrc = computed(() => {
 });
 watch(coverSrc, () => { coverFailed.value = false; });
 
-// ---- Seek by dragging ----
-const seeking = ref(false);
-function onSeekStart(e: MouseEvent) {
-  if (player.duration <= 0) return;
-  seeking.value = true;
-  seekFromEvent(e);
-  const move = (ev: MouseEvent) => seekFromEvent(ev);
-  const up = () => { seeking.value = false; window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
-}
-function seekFromEvent(e: MouseEvent) {
-  const el = document.getElementById("np-seek-bar");
-  if (!el) return;
-  const rect = el.getBoundingClientRect();
-  const ratio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-  player.seek(ratio * player.duration);
-}
-
-// Fast-forward / rewind 10s
-function rewind10() { player.seek(Math.max(0, player.currentTime - 10)); }
-function forward10() { player.seek(Math.min(player.duration, player.currentTime + 10)); }
-
-const progressPct = computed(() => player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0);
 </script>
 
 <template>
@@ -277,45 +259,10 @@ const progressPct = computed(() => player.duration > 0 ? (player.currentTime / p
         <div class="np-album" v-if="track?.album">{{ track.album }}</div>
       </div>
 
-      <!-- Progress bar -->
-      <div class="np-progress-bar" id="np-seek-bar" @mousedown="onSeekStart">
-        <div class="np-progress-fill" :style="{ width: progressPct + '%' }"></div>
-        <div class="np-progress-thumb" :class="{ active: seeking }" :style="{ left: progressPct + '%' }"></div>
-        <div v-if="seeking" class="np-progress-tooltip" :style="{ left: progressPct + '%' }">{{ fmtPrecise(player.currentTime) }}</div>
-      </div>
-      <div class="np-time-row">
-        <span class="np-time">{{ formatDuration(Math.floor(player.currentTime)) }}</span>
-        <span class="np-time">{{ formatDuration(Math.floor(player.duration)) }}</span>
-      </div>
-
-      <!-- Controls: centered, ff/rewind symmetric -->
-      <div class="np-controls">
-        <button class="np-btn" :class="{ active: player.playMode !== 'sequential' }" :disabled="!player.hasTrack" @click="player.cyclePlayMode()" :title="playModeTitle">
-          <svg v-if="player.playMode === 'shuffle'" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17L10.59 9.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.92 7.41-1.42 1.42 3.54 3.54L20 14.5V20h-5.5l2.04-2.04-3.12-3.12z"/></svg>
-          <svg v-else-if="player.playMode === 'single'" viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="9" y="17" fill="currentColor" font-size="8" font-weight="bold">1</text></svg>
-          <svg v-else viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
-        </button>
-        <button class="np-btn" :disabled="!player.hasTrack" @click="rewind10" :title="t('player.rewind10')">
-          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M11 18V6l-8.5 6 8.5 6zm.5-6 8.5 6V6l-8.5 6z"/></svg>
-        </button>
-        <button class="np-btn" :disabled="!player.hasTrack" @click="player.prev()" :title="t('player.previous')">
-          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z"/></svg>
-        </button>
-        <button class="np-btn np-play" @click="player.toggle()" :disabled="!player.hasTrack">
-          <svg v-if="player.playing" viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M6 4h4v16H6V4zm8 0h4v16h-4V4z"/></svg>
-          <svg v-else viewBox="0 0 24 24" width="28" height="28"><path fill="currentColor" d="M8 5v14l11-7L8 5z"/></svg>
-        </button>
-        <button class="np-btn" :disabled="!player.hasTrack" @click="player.next()" :title="t('player.next')">
-          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
-        </button>
-        <button class="np-btn" :disabled="!player.hasTrack" @click="forward10" :title="t('player.forward10')">
-          <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M4 18l8.5-6L4 6v12zm9.5-12v12L22 12l-8.5-6z"/></svg>
-        </button>
-      </div>
     </div>
 
     <!-- Right: lyrics with auto-scroll + translation -->
-    <div class="np-right" ref="lyricsScrollEl" @scroll.passive="onLyricsScroll">
+    <div class="np-right" :class="{ 'auto-scrolling': autoScrolling }" ref="lyricsScrollEl" @scroll.passive="onLyricsScroll">
       <div v-if="lyricsLoading" class="np-lyrics-status">加载歌词中…</div>
       <div v-else-if="lyricsError" class="np-lyrics-status">{{ lyricsError }}</div>
       <div v-else-if="lyrics.length === 0" class="np-lyrics-status">暂无歌词</div>
@@ -356,12 +303,37 @@ const progressPct = computed(() => player.duration > 0 ? (player.currentTime / p
   gap: 1rem;
 }
 .np-cover-wrap {
+  position: relative;
   width: 280px;
   height: 280px;
   border-radius: 12px;
   overflow: hidden;
   box-shadow: 0 8px 40px rgba(0,0,0,0.5);
   background: var(--color-bg-tertiary);
+}
+:root[data-theme="stardust"] .np-cover-wrap {
+  border: 1px solid rgba(107,99,255,0.22);
+  box-shadow:
+    0 26px 58px rgba(107,99,255,0.16),
+    0 0 0 8px rgba(255,214,74,0.1),
+    0 0 0 1px rgba(255,255,255,0.88) inset;
+  background: linear-gradient(145deg, rgba(255,255,255,0.92), rgba(238,234,255,0.72));
+}
+:root[data-theme="stardust"] .np-cover-wrap::after {
+  content: "";
+  position: absolute;
+  inset: 10px;
+  border: 1px solid rgba(255,214,74,0.42);
+  border-radius: 10px;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+:root[data-theme="stardust"] .np-track-info {
+  padding: 0.75rem 1.2rem;
+  border: 1px solid rgba(107,99,255,0.14);
+  border-radius: 999px;
+  background: rgba(255,255,255,0.62);
+  box-shadow: 0 14px 34px rgba(107,99,255,0.1);
 }
 .np-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
 .np-cover-placeholder {
@@ -374,94 +346,15 @@ const progressPct = computed(() => player.duration > 0 ? (player.currentTime / p
 .np-artist { font-size: 0.95rem; color: var(--color-text-secondary); }
 .np-album { font-size: var(--fs-sm); color: var(--color-text-muted); margin-top: 0.1rem; }
 
-/* Progress bar */
-.np-progress-bar {
-  width: 100%; max-width: 300px;
-  height: 4px;
-  background: var(--color-border);
-  border-radius: 2px;
-  cursor: pointer;
-  position: relative;
-}
-.np-progress-fill {
-  height: 100%;
-  background: var(--color-accent-primary);
-  border-radius: 2px;
-  transition: width 0.1s linear;
-}
-.np-progress-thumb {
-  position: absolute; top: 50%; width: 10px; height: 10px;
-  background: var(--color-accent-primary);
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  opacity: 0; transition: opacity 0.15s;
-}
-.np-progress-bar:hover .np-progress-thumb, .np-progress-thumb.active { opacity: 1; }
-.np-progress-tooltip {
-  position: absolute;
-  bottom: 14px;
-  transform: translateX(-50%);
-  background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  padding: 0.2rem 0.4rem;
-  border-radius: 3px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-.np-time-row {
-  display: flex;
-  justify-content: space-between;
-  width: 100%; max-width: 300px;
-}
-.np-time {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-}
-
-/* Controls */
-.np-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.np-btn {
-  background: none;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 50%;
-  width: 38px; height: 38px;
-  color: var(--color-text-secondary);
-  cursor: pointer;
-  transition: all 0.2s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-}
-.np-btn:hover:not(:disabled) { color: var(--color-text-primary); border-color: var(--color-accent-dim); }
-.np-btn.active { color: var(--color-accent-primary); border-color: var(--color-accent-primary); }
-.np-btn:disabled { opacity: 0.3; cursor: default; }
-.np-play {
-  width: 52px; height: 52px;
-  border-color: var(--color-accent-primary);
-  color: var(--color-accent-primary);
-}
 
 /* Right: lyrics */
 .np-right {
   flex: 1;
   overflow-y: auto;
   position: relative;
-  /* Custom scrollbar */
-  scrollbar-width: thin;
-  scrollbar-color: var(--color-accent-dim) transparent;
+  scrollbar-width: none;
 }
-.np-right::-webkit-scrollbar { width: 6px; }
-.np-right::-webkit-scrollbar-thumb { background: var(--color-accent-dim); border-radius: 3px; }
-.np-right::-webkit-scrollbar-track { background: transparent; }
+.np-right::-webkit-scrollbar { display: none; }
 
 .np-lyrics-status {
   display: flex;
@@ -505,6 +398,32 @@ const progressPct = computed(() => player.duration > 0 ? (player.currentTime / p
 }
 .np-lyric-line.active .np-lyric-translation {
   color: var(--color-text-secondary);
+}
+
+:root[data-theme="stardust"] .np-lyric-line {
+  opacity: 0.52;
+}
+:root[data-theme="stardust"] .np-lyric-line.active {
+  opacity: 1;
+  transform: scale(1.08);
+  text-shadow: 0 0 18px rgba(107,99,255,0.18);
+}
+:root[data-theme="stardust"] .np-lyric-line.active .np-lyric-original {
+  color: var(--color-accent-primary);
+  font-weight: 700;
+}
+:root[data-theme="stardust"] .np-lyric-line.active::before,
+:root[data-theme="stardust"] .np-lyric-line.active::after {
+  content: "✦";
+  display: inline-block;
+  color: var(--color-stardust-gold);
+  margin: 0 0.55rem;
+  filter: drop-shadow(0 0 8px rgba(255,214,74,0.55));
+  animation: lyricStarPulse 2.4s ease-in-out infinite;
+}
+@keyframes lyricStarPulse {
+  0%, 100% { transform: scale(0.78) rotate(0deg); opacity: 0.6; }
+  50% { transform: scale(1.15) rotate(24deg); opacity: 1; }
 }
 
 /* Mobile */

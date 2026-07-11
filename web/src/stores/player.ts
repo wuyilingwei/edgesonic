@@ -15,7 +15,7 @@
 
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
-import { useAuth } from "../api";
+import { useAuth, parseXmlAttrs } from "../api";
 
 export interface Track {
   id: string;
@@ -66,6 +66,41 @@ export const usePlayerStore = defineStore("player", () => {
   const current = computed<Track | null>(() => queue.value[index.value] || null);
   const hasTrack = computed(() => index.value >= 0 && index.value < queue.value.length);
 
+  // ---- Favorite (Subsonic star/unstar) ----
+  // Queue entries (built ad hoc by each view from search3/getAlbum/etc. XML)
+  // don't carry a `starred` field, so we look it up fresh per track via
+  // getSong rather than threading it through every call site that builds a
+  // Track. `current.value?.id !== id` guards against a stale response
+  // landing after the user has already skipped to another track.
+  const starred = ref(false);
+  async function _refreshStarred(id: string) {
+    try {
+      const { authFetch } = useAuth();
+      const xml = await authFetch("getSong", { id });
+      if (current.value?.id !== id) return;
+      starred.value = !!parseXmlAttrs(xml, "song")[0]?.starred;
+    } catch {
+      if (current.value?.id === id) starred.value = false;
+    }
+  }
+  watch(current, (tr) => {
+    if (!tr) { starred.value = false; return; }
+    void _refreshStarred(tr.id);
+  }, { immediate: true });
+
+  async function toggleStar() {
+    const tr = current.value;
+    if (!tr) return;
+    const next = !starred.value;
+    starred.value = next; // optimistic
+    try {
+      const { authFetch } = useAuth();
+      await authFetch(next ? "star" : "unstar", { id: tr.id });
+    } catch {
+      if (current.value?.id === tr.id) starred.value = !next; // revert on failure
+    }
+  }
+
   let elA: HTMLAudioElement | null = null;
   let elB: HTMLAudioElement | null = null;
   let active: HTMLAudioElement | null = null;
@@ -91,18 +126,48 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
+  // Preload the next track once the current one is within this many seconds
+  // of ending, or past this fraction played — whichever comes first (so a
+  // short track that's under NEXT_TRACK_PRELOAD_SECONDS total still starts
+  // preloading right away instead of waiting for a 75% mark it may never
+  // meaningfully clear). That timing gate is ANDed with "current track has
+  // finished downloading" — both current and next now buffer the whole file
+  // (preload="auto"), so starting the next download while the current one is
+  // still mid-flight would have the two fight over the same connection's
+  // bandwidth; waiting for the current track's own buffered range to reach
+  // its end means the next-track fetch only starts once it has the pipe to
+  // itself.
+  const NEXT_TRACK_PRELOAD_SECONDS = 30;
+  const NEXT_TRACK_PRELOAD_FRACTION = 0.75;
+
+  function isFullyBuffered(el: HTMLAudioElement, dur: number): boolean {
+    try {
+      const n = el.buffered.length;
+      return n > 0 && el.buffered.end(n - 1) >= dur - 0.5;
+    } catch {
+      return false;
+    }
+  }
+
   function makeAudio(): HTMLAudioElement {
     const el = new Audio();
-    // 093c — metadata: only fetch the header (duration + first frames) on
-    // element creation. The browser fetches subsequent byte ranges on demand
-    // as playback progresses, so a 64 MB FLAC doesn't get pulled into memory
-    // in one shot. Combined with the R2 presign 302 cache, only the first
-    // request hits the Worker; the rest go direct to R2 in seek-sized chunks.
-    // Pre-buffering the next track (preloadNext) overrides this to "auto" so
-    // the cross-fade swap stays instant.
-    el.preload = "metadata";
+    // Buffer the currently-playing track aggressively (whole file, not just
+    // on-demand byte ranges) — reliable full playback matters more than
+    // trimming memory use for the active track. The R2 presign 302 cache
+    // means only the first request hits the Worker either way; the rest go
+    // direct to R2.
+    el.preload = "auto";
     el.volume = volume.value;
-    el.addEventListener("timeupdate", () => { if (el === active) currentTime.value = el.currentTime; });
+    el.addEventListener("timeupdate", () => {
+      if (el !== active) return;
+      currentTime.value = el.currentTime;
+      const dur = el.duration;
+      if (isFinite(dur) && dur > 0) {
+        const remaining = dur - el.currentTime;
+        const timingOk = remaining <= NEXT_TRACK_PRELOAD_SECONDS || el.currentTime / dur >= NEXT_TRACK_PRELOAD_FRACTION;
+        if (timingOk && isFullyBuffered(el, dur)) preloadNext();
+      }
+    });
     el.addEventListener("durationchange", () => {
       if (el === active && isFinite(el.duration)) duration.value = el.duration;
     });
@@ -111,9 +176,6 @@ export const usePlayerStore = defineStore("player", () => {
     el.addEventListener("ended", () => { if (el === active) next(); });
     el.addEventListener("error", () => { if (el === active) playing.value = false; });
     el.addEventListener("progress", () => syncBuffered(el));
-    // Start prebuffering the next track only once the current one can play
-    // a slow upstream shouldn't have to feed two streams during startup.
-    el.addEventListener("canplay", () => { if (el === active) preloadNext(); });
     return el;
   }
 
@@ -130,14 +192,13 @@ export const usePlayerStore = defineStore("player", () => {
   function invalidatePreload() {
     if (preloaded) {
       preloaded.el.removeAttribute("src");
-      // Reset to metadata so the next reuse doesn't keep the auto preload.
-      preloaded.el.preload = "metadata";
+      preloaded.el.preload = "auto";
       preloaded.el.load();
       preloaded = null;
     }
   }
 
-  /** Prebuffer the next queue entry into the inactive element. */
+  /** Fully prebuffer the next queue entry into the inactive element. */
   function preloadNext() {
     ensureElements();
     const ni = index.value + 1;
@@ -146,9 +207,8 @@ export const usePlayerStore = defineStore("player", () => {
     invalidatePreload();
     const { streamUrl } = useAuth();
     const el = inactiveEl();
-    // Aggressive preload for the upcoming track so the cross-fade swap is
-    // instant. The active element keeps "metadata" so it doesn't pull the
-    // whole file when the user is just scrubbing.
+    // preload="auto" — whole file, same as the active track — so the
+    // cross-fade swap on next()/ended is instant and gapless.
     el.preload = "auto";
     el.src = streamUrl(queue.value[ni].id);
     el.load();
@@ -374,8 +434,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   return {
     queue, index, playing, currentTime, duration, volume, bufferedRanges,
-    current, hasTrack, playMode,
+    current, hasTrack, playMode, starred,
     setQueue, playAt, toggle, next, prev, seek, setVolume,
-    cyclePlayMode, clear,
+    cyclePlayMode, toggleStar, clear,
   };
 });

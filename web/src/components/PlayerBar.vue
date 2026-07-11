@@ -39,6 +39,7 @@ function goNowPlaying() {
 }
 
 const playModeTitle = computed(() => t(`player.playMode.${player.playMode}`));
+const expandTitle = computed(() => t(route.path === "/now-playing" ? "player.collapse" : "player.expand"));
 
 const coverFailed = ref(false);
 const coverSrc = computed(() => {
@@ -112,11 +113,11 @@ function removeFromQueue(i: number) {
   <footer class="player-bar">
     <!-- Track info -->
     <div class="pb-track">
-      <div class="pb-cover" @click="goNowPlaying" :class="{ clickable: player.hasTrack }">
+      <div class="pb-cover" @click="goNowPlaying" :class="{ clickable: player.hasTrack }" :title="player.hasTrack ? expandTitle : ''">
         <img v-if="coverSrc && !coverFailed" :src="coverSrc" alt="" @error="coverFailed = true" />
         <svg v-else viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
       </div>
-      <div v-if="player.current" class="pb-meta" @click="goNowPlaying" :class="{ clickable: player.hasTrack }">
+      <div v-if="player.current" class="pb-meta" @click="goNowPlaying" :class="{ clickable: player.hasTrack }" :title="expandTitle">
         <div class="pb-title" :title="player.current.title">{{ player.current.title }}</div>
         <div class="pb-artist">{{ player.current.artist || t("player.unknownArtist") }}</div>
       </div>
@@ -129,10 +130,9 @@ function removeFromQueue(i: number) {
     <!-- Controls + progress -->
     <div class="pb-center">
       <div class="pb-controls">
-        <button class="pb-btn" :class="{ active: player.playMode !== 'sequential' }" :disabled="!player.hasTrack" :title="playModeTitle" @click="player.cyclePlayMode()">
-          <svg v-if="player.playMode === 'shuffle'" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17L10.59 9.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.92 7.41-1.42 1.42 3.54 3.54L20 14.5V20h-5.5l2.04-2.04-3.12-3.12z"/></svg>
-          <svg v-else-if="player.playMode === 'single'" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="9.5" y="15.5" fill="currentColor" font-size="8" font-weight="bold">1</text></svg>
-          <svg v-else viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
+        <button class="pb-btn pb-fav" :class="{ active: player.starred }" :disabled="!player.hasTrack" :title="player.starred ? t('player.unlike') : t('player.like')" @click="player.toggleStar()">
+          <svg v-if="player.starred" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+          <svg v-else viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35zm0-2.7C16.76 14.24 20 11.39 20 8.5 20 6.5 18.5 5 16.5 5c-1.54 0-3.04.99-3.57 2.36h-1.87C10.54 5.99 9.04 5 7.5 5 5.5 5 4 6.5 4 8.5c0 2.89 3.24 5.74 8 10.15z"/></svg>
         </button>
         <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.previous')" @click="player.prev()">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 6h2v12H6V6zm3.5 6 8.5 6V6l-8.5 6z"/></svg>
@@ -143,6 +143,11 @@ function removeFromQueue(i: number) {
         </button>
         <button class="pb-btn" :disabled="!player.hasTrack" :title="t('player.next')" @click="player.next()">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+        </button>
+        <button class="pb-btn pb-mode" :class="{ active: player.playMode !== 'sequential' }" :disabled="!player.hasTrack" :title="playModeTitle" @click="player.cyclePlayMode()">
+          <svg v-if="player.playMode === 'shuffle'" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17L10.59 9.17zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.92 7.41-1.42 1.42 3.54 3.54L20 14.5V20h-5.5l2.04-2.04-3.12-3.12z"/></svg>
+          <svg v-else-if="player.playMode === 'single'" viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/><text x="9.5" y="15.5" fill="currentColor" font-size="8" font-weight="bold">1</text></svg>
+          <svg v-else viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M7 7h10v3l4-4-4-4v3H5v6h2V7zm10 10H7v-3l-4 4 4 4v-3h12v-6h-2v4z"/></svg>
         </button>
       </div>
       <div class="pb-progress-row">
@@ -226,6 +231,25 @@ function removeFromQueue(i: number) {
   border-top: 1px solid var(--color-border-subtle);
 }
 
+/* Stardust theme: light glass player with cube/facet progress treatment. */
+:root[data-theme="stardust"] .player-bar {
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.88), rgba(248,243,255,0.78), rgba(255,255,255,0.9));
+  border-top: none;
+  box-shadow: inset 0 1px 0 0 rgba(107, 99, 255, 0.22), 0 -12px 36px rgba(107, 99, 255, 0.14);
+}
+:root[data-theme="stardust"] .pb-play {
+  border-color: transparent;
+  color: #fffdf8;
+  background: linear-gradient(135deg, var(--color-accent-primary), var(--color-stardust-violet));
+  box-shadow: 0 0 18px rgba(107, 99, 255, 0.28), 0 0 0 3px rgba(255, 214, 74, 0.14);
+}
+:root[data-theme="stardust"] .pb-cover {
+  border-radius: 8px;
+  border-color: rgba(107,99,255,0.22);
+  box-shadow: 0 0 0 3px rgba(255, 214, 74, 0.12), 0 10px 24px rgba(107,99,255,0.12);
+}
+
 /* --- track info --- */
 .pb-track { display: flex; align-items: center; gap: 0.8rem; width: 240px; min-width: 0; flex-shrink: 0; }
 .pb-cover {
@@ -258,7 +282,7 @@ function removeFromQueue(i: number) {
 
 /* --- center controls --- */
 .pb-center { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 0.15rem; }
-.pb-controls { display: flex; align-items: center; gap: 0.6rem; }
+.pb-controls { position: relative; display: flex; align-items: center; gap: 0.6rem; }
 .pb-btn {
   background: none; border: none;
   color: var(--color-text-secondary);
@@ -271,6 +295,24 @@ function removeFromQueue(i: number) {
 .pb-btn:hover:not(:disabled) { color: var(--color-accent-primary); }
 .pb-btn:disabled { color: var(--color-text-muted); opacity: 0.4; cursor: not-allowed; }
 .pb-btn.active { color: var(--color-accent-primary); }
+/* pb-mode is absolutely positioned (out of flex flow) so it doesn't skew
+   the centering of the prev/play/next trio — it sits as an "extra" just past
+   the trio's right edge instead of counting toward the row's own width. */
+.pb-mode {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-left: 0.6rem;
+}
+/* pb-fav mirrors pb-mode on the opposite side, same reasoning. */
+.pb-fav {
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-right: 0.6rem;
+}
 .pb-play {
   width: 34px; height: 34px;
   border: 1px solid var(--color-border-strong);
@@ -321,6 +363,44 @@ function removeFromQueue(i: number) {
   border-radius: 3px;
   white-space: nowrap;
   pointer-events: none;
+}
+
+:root[data-theme="stardust"] .pb-progress { height: 18px; }
+:root[data-theme="stardust"] .pb-progress::before {
+  height: 8px;
+  border-radius: 0;
+  background:
+    repeating-linear-gradient(90deg, rgba(107,99,255,0.14) 0 10px, transparent 10px 16px),
+    linear-gradient(180deg, rgba(255,255,255,0.92), rgba(238,234,255,0.7));
+  border: 1px solid rgba(107,99,255,0.18);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
+}
+:root[data-theme="stardust"] .pb-progress-fill {
+  height: 8px;
+  border-radius: 0;
+  background:
+    repeating-linear-gradient(90deg, rgba(255,255,255,0.42) 0 7px, transparent 7px 14px),
+    linear-gradient(135deg, var(--color-accent-primary), var(--color-stardust-blue) 52%, var(--color-stardust-gold));
+  box-shadow: 0 0 16px rgba(107,99,255,0.32);
+}
+:root[data-theme="stardust"] .pb-progress-buffered {
+  height: 8px;
+  background: rgba(107,99,255,0.18);
+  opacity: 1;
+}
+:root[data-theme="stardust"] .pb-progress-thumb {
+  width: 14px;
+  height: 14px;
+  opacity: 1;
+  background: linear-gradient(135deg, #fffdf8 0 18%, var(--color-stardust-gold) 18% 44%, var(--color-accent-primary) 44% 72%, var(--color-stardust-blue) 72%);
+  border: 1px solid rgba(107,99,255,0.42);
+  transform: translateX(-50%) rotate(45deg) skew(-6deg, -6deg);
+  box-shadow: 0 0 0 3px rgba(255,214,74,0.18), 0 0 18px rgba(107,99,255,0.36);
+}
+:root[data-theme="stardust"] .pb-progress-tooltip {
+  background: rgba(255,255,255,0.92);
+  border-color: rgba(107,99,255,0.28);
+  box-shadow: 0 10px 24px rgba(107,99,255,0.12);
 }
 
 /* --- right: volume + queue --- */

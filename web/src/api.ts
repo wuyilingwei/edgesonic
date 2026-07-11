@@ -108,17 +108,28 @@ export function useAuth() {
     localStorage.removeItem("edgesonic_level");
   }
 
-  /** Build standard Subsonic auth params, freshly signed per call: t = md5(sessionToken + salt). */
-  function signedParams(extra?: Record<string, string>): URLSearchParams {
+  /**
+   * Build standard Subsonic auth params, freshly signed per call: t = md5(sessionToken + salt).
+   * A value can be a string[] to emit the same key multiple times (Subsonic's
+   * convention for repeatable params like createShare/star's `id`).
+   */
+  function signedParams(extra?: Record<string, string | string[]>): URLSearchParams {
     const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
-    return new URLSearchParams({
+    const params = new URLSearchParams({
       u: username.value, t: md5(token.value + s), s, v: "1.16.1", c: "EdgeSonicWeb",
-      ...extra,
     });
+    for (const [key, value] of Object.entries(extra ?? {})) {
+      if (Array.isArray(value)) {
+        for (const v of value) params.append(key, v);
+      } else {
+        params.append(key, value);
+      }
+    }
+    return params;
   }
 
   /** Build a fully signed /rest URL (for <audio src>, <img src>, download links…). */
-  function restUrl(path: string, params?: Record<string, string>): string {
+  function restUrl(path: string, params?: Record<string, string | string[]>): string {
     return `${REST_BASE}/${path}?${signedParams(params).toString()}`;
   }
 
@@ -130,8 +141,12 @@ export function useAuth() {
     return restUrl("getCoverArt", { id: coverId, ...(size ? { size: String(size) } : {}) });
   }
 
+  function downloadUrl(songId: string): string {
+    return restUrl("download", { id: songId });
+  }
+
   // -------- Subsonic protocol (/rest/*) --------
-  async function authFetch(path: string, params?: Record<string, string>): Promise<string> {
+  async function authFetch(path: string, params?: Record<string, string | string[]>): Promise<string> {
     const resp = await fetch(`${REST_BASE}/${path}?${signedParams(params).toString()}`);
     return resp.text();
   }
@@ -319,7 +334,7 @@ export function useAuth() {
     login, logout, handleAuthError, authFetch, authPost, uploadFile, crossCopy, makeSalt, md5,
     tagFetch, tagPost, storageFetch, storagePost, edgesonicFetch, edgesonicPost,
     readTags, writeTags, batchWriteTags, rescanSongs, submitMetadata, tidyFolder,
-    signedParams, restUrl, streamUrl, coverArtUrl };
+    signedParams, restUrl, streamUrl, coverArtUrl, downloadUrl };
 }
 
 /** Parse XML tag attributes into array of objects */
