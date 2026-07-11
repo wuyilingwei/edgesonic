@@ -7,6 +7,7 @@ import PlayerBar from "./components/PlayerBar.vue";
 import UpdateBanner from "./components/UpdateBanner.vue";
 import { usePlayerStore } from "./stores/player";
 import { useWorkerPool } from "./stores/workerPool";
+import { activeTheme } from "./theme";
 
 const router = useRouter();
 const route = useRoute();
@@ -25,6 +26,19 @@ watch(isLoggedIn, (now) => {
 
 const menuOpen = ref(false);
 watch(() => route.path, () => { menuOpen.value = false; });
+
+// Page-switch transition: entering/leaving /now-playing gets a bottom-sheet
+// "expand"/"collapse" motion that echoes the player bar it opens from;
+// regular navigation between other pages gets a plain fade/slide. Decided in
+// beforeEach (not a computed on route.path) so we know both the `to` and
+// `from` side of the navigation before the transition starts.
+const pageTransitionName = ref("page");
+router.beforeEach((to, from) => {
+  if (to.path === "/now-playing") pageTransitionName.value = "expand";
+  else if (from.path === "/now-playing") pageTransitionName.value = "collapse";
+  else pageTransitionName.value = "page";
+  return true;
+});
 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 const levelLabel = computed(() => levelKeys[level.value] ? t(`app.levels.${levelKeys[level.value]}`) : String(level.value));
@@ -68,9 +82,84 @@ function doLogout() {
   logout();
   router.push("/login");
 }
+
+// === stardust theme: celestial geometry background ===
+// Light Stardust mode adds slow cube/hexagram/star motion behind every page.
+// Randomized once per mount rather than fixed nth-child CSS so reloads feel
+// slightly alive without introducing runtime animation state.
+const isStardust = computed(() => activeTheme.value === "stardust");
+interface DriftCube { top: string; size: string; duration: string; delay: string; spin: string; opacity: number; }
+interface StardustSpark { left: string; top: string; size: string; duration: string; delay: string; opacity: number; }
+interface StardustHex { left: string; top: string; size: string; duration: string; delay: string; opacity: number; }
+function randomCube(): DriftCube {
+  const size = 22 + Math.random() * 34;
+  return {
+    top: `${Math.random() * 90}vh`,
+    size: `${size}px`,
+    duration: `${26 + Math.random() * 26}s`,
+    delay: `-${Math.random() * 30}s`,
+    spin: `${9 + Math.random() * 16}s`,
+    opacity: 0.2 + Math.random() * 0.28,
+  };
+}
+function randomSpark(): StardustSpark {
+  const size = 6 + Math.random() * 12;
+  return {
+    left: `${Math.random() * 100}vw`,
+    top: `${Math.random() * 100}vh`,
+    size: `${size}px`,
+    duration: `${3.5 + Math.random() * 5}s`,
+    delay: `-${Math.random() * 8}s`,
+    opacity: 0.35 + Math.random() * 0.4,
+  };
+}
+function randomHex(): StardustHex {
+  const size = 80 + Math.random() * 130;
+  return {
+    left: `${Math.random() * 100}vw`,
+    top: `${Math.random() * 100}vh`,
+    size: `${size}px`,
+    duration: `${18 + Math.random() * 24}s`,
+    delay: `-${Math.random() * 20}s`,
+    opacity: 0.08 + Math.random() * 0.11,
+  };
+}
+const driftCubes = Array.from({ length: 6 }, randomCube);
+const stardustSparks = Array.from({ length: 26 }, randomSpark);
+const stardustHexes = Array.from({ length: 5 }, randomHex);
 </script>
 
 <template>
+  <div v-if="isStardust" class="stardust-bg" aria-hidden="true">
+    <div
+      v-for="(h, i) in stardustHexes"
+      :key="`h-${i}`"
+      class="stardust-hex"
+      :style="{ left: h.left, top: h.top, width: h.size, height: h.size, animationDuration: h.duration, animationDelay: h.delay, opacity: h.opacity }"
+    ></div>
+    <i
+      v-for="(s, i) in stardustSparks"
+      :key="`s-${i}`"
+      class="stardust-spark"
+      :style="{ left: s.left, top: s.top, width: s.size, height: s.size, animationDuration: s.duration, animationDelay: s.delay, opacity: s.opacity }"
+    ></i>
+    <div
+      v-for="(c, i) in driftCubes"
+      :key="`c-${i}`"
+      class="star-cube-drift"
+      :style="{ top: c.top, animationDuration: c.duration, animationDelay: c.delay, opacity: c.opacity, '--cube-half': `calc(${c.size} / 2)` }"
+    >
+      <div class="star-cube-spin" :style="{ width: c.size, height: c.size, animationDuration: c.spin }">
+        <span class="cube-face cube-front"></span>
+        <span class="cube-face cube-back"></span>
+        <span class="cube-face cube-top"></span>
+        <span class="cube-face cube-bottom"></span>
+        <span class="cube-face cube-left"></span>
+        <span class="cube-face cube-right"></span>
+      </div>
+    </div>
+  </div>
+
   <UpdateBanner />
 
   <!-- 未登录：全屏渲染（Login） -->
@@ -116,7 +205,11 @@ function doLogout() {
     </aside>
 
     <main class="main">
-      <router-view />
+      <router-view v-slot="{ Component, route: activeRoute }">
+        <transition :name="pageTransitionName" mode="out-in">
+          <component :is="Component" :key="activeRoute.path" />
+        </transition>
+      </router-view>
     </main>
 
     <PlayerBar />
@@ -126,8 +219,106 @@ function doLogout() {
 <style>
 @import "./assets/palette.css";
 
+/* === stardust theme: celestial background ===
+ * Hexagrams rotate slowly, yellow sparks pulse, and cube props drift across
+ * the light page. Kept CSS-only and behind content for cheap compositing.
+ */
+.stardust-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    linear-gradient(115deg, rgba(255,255,255,0.18), rgba(107,99,255,0.06), rgba(255,214,74,0.08)),
+    radial-gradient(circle at 20% 25%, rgba(154,123,255,0.16), transparent 28rem),
+    radial-gradient(circle at 80% 10%, rgba(111,199,255,0.18), transparent 24rem),
+    radial-gradient(circle at 62% 86%, rgba(255,214,74,0.18), transparent 26rem);
+}
+.stardust-hex {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  animation: stardustHexSpin linear infinite;
+  filter: drop-shadow(0 0 18px rgba(107, 99, 255, 0.18));
+}
+.stardust-hex::before,
+.stardust-hex::after {
+  content: "";
+  position: absolute;
+  inset: 16%;
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+  border: 1px solid rgba(107, 99, 255, 0.5);
+  background: linear-gradient(135deg, rgba(107,99,255,0.05), rgba(255,214,74,0.08));
+}
+.stardust-hex::after {
+  transform: rotate(30deg) scale(0.72);
+  border-color: rgba(255, 214, 74, 0.75);
+}
+.stardust-spark {
+  position: absolute;
+  display: block;
+  transform: translate(-50%, -50%) rotate(45deg);
+  background: var(--color-stardust-gold);
+  clip-path: polygon(50% 0%, 61% 36%, 100% 50%, 61% 64%, 50% 100%, 39% 64%, 0% 50%, 39% 36%);
+  box-shadow: 0 0 18px rgba(255, 214, 74, 0.75);
+  animation: stardustSparkPulse ease-in-out infinite;
+}
+.star-cube-drift {
+  position: absolute;
+  left: 0;
+  perspective: 700px;
+  animation: cubeDrift linear infinite;
+}
+.star-cube-spin {
+  transform-style: preserve-3d;
+  animation: cubeSpin linear infinite;
+  filter: drop-shadow(0 0 12px rgba(107, 99, 255, 0.3));
+}
+.cube-face {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(107, 99, 255, 0.42);
+  background: linear-gradient(135deg, rgba(107, 99, 255, 0.12), rgba(255, 214, 74, 0.18));
+}
+.cube-front  { transform: translateZ(var(--cube-half)); }
+.cube-back   { transform: translateZ(calc(var(--cube-half) * -1)) rotateY(180deg); }
+.cube-right  { transform: rotateY(90deg) translateZ(var(--cube-half)); }
+.cube-left   { transform: rotateY(-90deg) translateZ(var(--cube-half)); }
+.cube-top    { transform: rotateX(90deg) translateZ(var(--cube-half)); }
+.cube-bottom { transform: rotateX(-90deg) translateZ(var(--cube-half)); }
+
+@keyframes cubeDrift {
+  from { transform: translateX(-10vw); }
+  to   { transform: translateX(110vw); }
+}
+@keyframes cubeSpin {
+  from { transform: rotateX(0deg) rotateY(0deg); }
+  to   { transform: rotateX(360deg) rotateY(360deg); }
+}
+@keyframes stardustHexSpin {
+  from { transform: translate(-50%, -50%) rotate(0deg) scale(0.92); }
+  50%  { transform: translate(-50%, -50%) rotate(180deg) scale(1.04); }
+  to   { transform: translate(-50%, -50%) rotate(360deg) scale(0.92); }
+}
+@keyframes stardustSparkPulse {
+  0%, 100% { transform: translate(-50%, -50%) rotate(45deg) scale(0.7); filter: blur(0); }
+  50% { transform: translate(-50%, -50%) rotate(45deg) scale(1.25); filter: blur(0.2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stardust-bg { display: none; }
+}
+
 /* === App shell === */
+.shell,
+.login-view {
+  position: relative;
+  z-index: 1;
+}
 .shell { min-height: 100vh; }
+:root[data-theme="stardust"] .login-view {
+  background: transparent !important;
+  background-image: none !important;
+}
 
 /* --- NavBar (fixed, 60px) --- */
 .navbar {
@@ -263,6 +454,26 @@ function doLogout() {
   padding: calc(var(--nav-h) + 1.5rem) 1.75rem calc(var(--player-h) + 1.5rem);
   min-height: 100vh;
 }
+
+/* --- Page transitions ---
+ * "page": plain navigation between regular views.
+ * "expand"/"collapse": entering/leaving /now-playing — a bottom-sheet motion
+ * that reads as the detail view growing out of (and shrinking back into) the
+ * player bar it's opened from.
+ */
+.page-enter-active, .page-leave-active { transition: opacity 0.16s ease, transform 0.16s ease; }
+.page-enter-from { opacity: 0; transform: translateY(8px); }
+.page-leave-to { opacity: 0; transform: translateY(-8px); }
+
+.expand-enter-active { transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+.expand-enter-from { opacity: 0; transform: translateY(48px) scale(0.97); }
+.expand-leave-active { transition: opacity 0.15s ease; }
+.expand-leave-to { opacity: 0; }
+
+.collapse-enter-active { transition: opacity 0.2s ease; }
+.collapse-enter-from { opacity: 0; }
+.collapse-leave-active { transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.4, 0, 1, 1); }
+.collapse-leave-to { opacity: 0; transform: translateY(48px) scale(0.97); }
 
 /* --- Responsive: ≤960px 侧栏收起为汉堡 --- */
 @media (max-width: 960px) {

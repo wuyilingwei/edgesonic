@@ -22,6 +22,7 @@ import { Hono } from "hono";
 import type { User } from "../../types/entities";
 import { getFeatureString } from "../../utils/features";
 import { permissionMiddleware } from "../../auth";
+import { getSourceCredentials } from "../../adapters/index";
 
 export const maintenanceRoutes = new Hono<{
   Bindings: Env;
@@ -297,4 +298,134 @@ maintenanceRoutes.get("/maintenance/webdavThroughput",
     elapsedMs,
     originMBps: Number((received / 1024 / 1024 / (transferMs / 1000)).toFixed(2)),
   });
+});
+
+// ---------------------------------------------------------------------------
+// GET /edgesonic/maintenance/orphanSongs
+// ---------------------------------------------------------------------------
+// "Orphan" = a song_masters row still parked under the /files/upload
+// placeholder bucket (artist_id='unknown-artist' OR album_id='pending-uploads'
+// — see files.ts's upload handler). applyMetadataResult (metadataApply.ts)
+// is supposed to relink these to real artist/album once the browser worker
+// pool parses tags, but it unconditionally sets tag_scanned=1 even when the
+// parse came back empty (no usable tags) — so a file with no embedded
+// metadata at all gets permanently stuck here indistinguishable from
+// "still waiting to be scanned" without checking tag_scanned itself. This
+// endpoint surfaces the whole stuck bucket so an admin can retry the scan
+// (via the existing /tag/rescan) or just delete the dead weight.
+//
+// Response: { ok: true, songs: [{ masterId, title, createdAt, instanceCount,
+//   suffix, totalSize, tagScanned, missing }] }
+//  - tagScanned/missing are MAX() across a master's instances — "worst case"
+//    (any instance still unscanned, or gone missing, surfaces as such).
+maintenanceRoutes.get("/maintenance/orphanSongs",
+  permissionMiddleware("maintenance_cleanup"),
+  async (c) => {
+  const env = c.env as Env;
+  const rows = (await env.DB.prepare(
+    `SELECT sm.id AS master_id, sm.title, sm.created_at,
+            COUNT(si.id) AS instance_count,
+            MIN(si.suffix) AS suffix,
+            COALESCE(SUM(si.size), 0) AS total_size,
+            MAX(si.tag_scanned) AS tag_scanned,
+            MAX(si.missing) AS missing
+     FROM song_masters sm
+     LEFT JOIN song_instances si ON si.master_id = sm.id
+     WHERE sm.artist_id = 'unknown-artist' OR sm.album_id = 'pending-uploads'
+     GROUP BY sm.id
+     ORDER BY sm.created_at DESC
+     LIMIT 200`,
+  ).all<{
+    master_id: string; title: string; created_at: number;
+    instance_count: number; suffix: string | null; total_size: number;
+    tag_scanned: number | null; missing: number | null;
+  }>()).results;
+
+  return c.json({
+    ok: true,
+    songs: rows.map((r) => ({
+      masterId: r.master_id,
+      title: r.title,
+      createdAt: r.created_at,
+      instanceCount: r.instance_count,
+      suffix: r.suffix,
+      totalSize: r.total_size,
+      tagScanned: r.tag_scanned ?? 0,
+      missing: !!r.missing,
+    })),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /edgesonic/maintenance/orphanSongs/delete  body: { masterIds: string[] }
+// ---------------------------------------------------------------------------
+// Deletes the underlying storage object(s) for every instance of each given
+// master (best-effort — a storage-side failure doesn't block the D1 cleanup,
+// mirroring /files/delete's "the DB record is the source of truth" stance),
+// then the song_instances rows, then the song_masters row itself. Does NOT
+// touch the shared 'unknown-artist'/'pending-uploads' placeholder rows —
+// they're a reusable bucket for future uploads (INSERT OR IGNORE recreates
+// them on demand), not per-song state.
+//
+// Only r2:// and webdav:// instances can come from the upload path this
+// endpoint is meant to clean up; any other scheme (url/subsonic — external,
+// read-only mounts) just gets its D1 rows dropped, no storage call.
+//
+// Response: { ok: true, deleted, failed, items: [{ masterId, ok, error? }] }
+const ORPHAN_DELETE_MAX = 200;
+maintenanceRoutes.post("/maintenance/orphanSongs/delete",
+  permissionMiddleware("maintenance_cleanup"),
+  async (c) => {
+  const env = c.env as Env;
+  const body = await c.req.json<{ masterIds?: string[] }>().catch(() => ({ masterIds: [] as string[] }));
+  const masterIds = (body.masterIds || []).slice(0, ORPHAN_DELETE_MAX);
+  if (masterIds.length === 0) {
+    return c.json({ ok: false, error: "Missing masterIds" }, 400);
+  }
+
+  const items: Array<{ masterId: string; ok: boolean; error?: string }> = [];
+  for (const masterId of masterIds) {
+    try {
+      const instances = (await env.DB.prepare(
+        "SELECT storage_uri FROM song_instances WHERE master_id = ?",
+      ).bind(masterId).all<{ storage_uri: string }>()).results;
+
+      for (const inst of instances) {
+        try {
+          if (inst.storage_uri.startsWith("r2://")) {
+            await env.MUSIC_BUCKET.delete(inst.storage_uri.substring("r2://".length));
+          } else if (inst.storage_uri.startsWith("webdav://")) {
+            const rest = inst.storage_uri.substring("webdav://".length);
+            const slash = rest.indexOf("/");
+            const path = slash >= 0 ? rest.substring(slash + 1) : "";
+            const creds = await getSourceCredentials(env.DB, "webdav", env);
+            if (creds) {
+              const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+              const fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${encodedPath}`;
+              await fetch(fullUrl, {
+                method: "DELETE",
+                headers: { Authorization: `Basic ${btoa(`${creds.username}:${creds.password}`)}` },
+              });
+            }
+          }
+        } catch (e) {
+          // Storage-side failure is logged but doesn't block the D1 cleanup
+          // below — a file that's already gone (the common orphan case)
+          // would otherwise permanently block deleting the dead DB rows.
+          console.error(`[orphanSongs/delete] storage delete failed for ${inst.storage_uri}:`, e);
+        }
+      }
+
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM song_instances WHERE master_id = ?").bind(masterId),
+        env.DB.prepare("DELETE FROM song_masters WHERE id = ?").bind(masterId),
+      ]);
+      items.push({ masterId, ok: true });
+    } catch (e) {
+      items.push({ masterId, ok: false, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  const deleted = items.filter((i) => i.ok).length;
+  return c.json({ ok: true, deleted, failed: items.length - deleted, items });
 });

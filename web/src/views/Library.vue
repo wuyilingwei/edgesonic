@@ -5,11 +5,12 @@ import { useAuth, parseXmlAttrs, formatDuration } from "../api";
 import { usePlayerStore, type Track } from "../stores/player";
 import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
+import SongRowMenu from "../components/SongRowMenu.vue";
 import type { ScrapeResult } from "../lib/scrape";
 
 const { t } = useI18n();
 
-const { authFetch, writeTags, batchWriteTags, rescanSongs, coverArtUrl, isAdmin } = useAuth();
+const { authFetch, writeTags, batchWriteTags, rescanSongs, coverArtUrl, downloadUrl, isAdmin } = useAuth();
 const player = usePlayerStore();
 const BATCH_MAX = 50;
 
@@ -128,6 +129,17 @@ async function loadMoreAlbums() {
   loading.value = false;
 }
 
+function mapSongRow(s: Record<string, string>): Track {
+  return {
+    id: s.id || "",
+    title: s.title || "",
+    artist: s.artist || "",
+    album: s.album || "",
+    coverArt: s.coverArt || undefined,
+    duration: parseInt(s.duration || "0"),
+  };
+}
+
 async function loadMoreSongs() {
   loading.value = true;
   try {
@@ -135,19 +147,64 @@ async function loadMoreSongs() {
       query: "", artistCount: "0", albumCount: "0",
       songCount: String(SONG_PAGE), songOffset: String(songOffset.value),
     });
-    const page = parseXmlAttrs(xml, "song").map((s) => ({
-      id: s.id || "",
-      title: s.title || "",
-      artist: s.artist || "",
-      album: s.album || "",
-      coverArt: s.coverArt || undefined,
-      duration: parseInt(s.duration || "0"),
-    }));
+    const page = parseXmlAttrs(xml, "song").map(mapSongRow);
     allSongs.value.push(...page);
     songOffset.value += page.length;
     if (page.length < SONG_PAGE) songsDone.value = true;
   } catch { error.value = t("library.loadFailed"); }
   loading.value = false;
+}
+
+// === Library-wide search (search3), independent of the paged tab lists ===
+// Debounced so keystrokes don't hammer the API; searching a non-empty query
+// switches the songs/albums/artists tabs out for a combined results view,
+// clearing the box restores whichever tab was active before.
+const SEARCH_DEBOUNCE_MS = 300;
+const searchQuery = ref("");
+const searching = ref(false);
+const searchResults = ref<{ artists: Artist[]; albums: Album[]; songs: Track[] } | null>(null);
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function runSearch(query: string) {
+  searching.value = true;
+  // Drop any drilldown so the page-header title/breadcrumb don't show stale
+  // artist/album context behind the search results view.
+  currentArtist.value = null;
+  currentAlbum.value = null;
+  try {
+    const xml = await authFetch("search3", {
+      query, artistCount: "20", albumCount: "20", songCount: "100",
+    });
+    searchResults.value = {
+      artists: parseXmlAttrs(xml, "artist").map((a) => ({
+        id: a.id || "", name: a.name || "", albumCount: a.albumCount || "",
+      })),
+      albums: parseXmlAttrs(xml, "album").map((a) => ({
+        id: a.id || "", name: a.name || "", artist: a.artist || "",
+        year: a.year || "", coverArt: a.coverArt || "", songCount: a.songCount || "",
+      })),
+      songs: parseXmlAttrs(xml, "song").map(mapSongRow),
+    };
+  } catch {
+    searchResults.value = { artists: [], albums: [], songs: [] };
+  }
+  searching.value = false;
+}
+
+watch(searchQuery, (q) => {
+  if (searchTimer) clearTimeout(searchTimer);
+  const query = q.trim();
+  if (!query) { searchResults.value = null; return; }
+  searchTimer = setTimeout(() => void runSearch(query), SEARCH_DEBOUNCE_MS);
+});
+
+function clearSearch() {
+  searchQuery.value = "";
+  searchResults.value = null;
+}
+
+function playFromSearch(i: number) {
+  if (searchResults.value) player.setQueue(searchResults.value.songs, i);
 }
 
 async function openArtist(artist: Artist) {
@@ -403,6 +460,7 @@ watch(() => tab.value, () => {
 
 onUnmounted(() => {
   if (io) { io.disconnect(); io = null; }
+  if (searchTimer) clearTimeout(searchTimer);
 });
 
 // ============================================================================
@@ -416,6 +474,10 @@ onUnmounted(() => {
 // ============================================================================
 const shareOpen = ref(false);
 const shareTarget = ref<{ kind: "song" | "album"; id: string; label: string } | null>(null);
+// Set only for the batch-toolbar "share selected" flow — createShare's `id`
+// param is repeatable server-side, so a batch share is one call with every
+// selected song id rather than N separate shares.
+const shareBatchIds = ref<string[] | null>(null);
 const shareDescription = ref("");
 const shareExpiresType = ref<"never" | "days" | "datetime">("never");
 const shareExpiresDays = ref(7);
@@ -426,6 +488,19 @@ const shareCreatedUrl = ref("");
 
 function openShare(kind: "song" | "album", id: string, label: string) {
   shareTarget.value = { kind, id, label };
+  shareBatchIds.value = null;
+  shareDescription.value = "";
+  shareExpiresType.value = "never";
+  shareExpiresDays.value = 7;
+  shareExpiresAt.value = "";
+  shareError.value = "";
+  shareCreatedUrl.value = "";
+  shareOpen.value = true;
+}
+function openBatchShare() {
+  if (!selectedIds.value.length) return;
+  shareTarget.value = { kind: "song", id: selectedIds.value[0], label: t("library.selected", { n: selectedIds.value.length }) };
+  shareBatchIds.value = [...selectedIds.value];
   shareDescription.value = "";
   shareExpiresType.value = "never";
   shareExpiresDays.value = 7;
@@ -437,6 +512,7 @@ function openShare(kind: "song" | "album", id: string, label: string) {
 function closeShare() {
   shareOpen.value = false;
   shareTarget.value = null;
+  shareBatchIds.value = null;
   shareCreatedUrl.value = "";
 }
 function shareFailed(xml: string): boolean { return /status="failed"/.test(xml); }
@@ -455,7 +531,9 @@ async function submitShare() {
   shareError.value = "";
   shareCreatedUrl.value = "";
   try {
-    const params: Record<string, string> = { id: shareTarget.value.id };
+    const params: Record<string, string | string[]> = {
+      id: shareBatchIds.value ?? shareTarget.value.id,
+    };
     const desc = shareDescription.value.trim();
     if (desc) params.description = desc;
     if (shareExpiresType.value === "days") {
@@ -472,6 +550,7 @@ async function submitShare() {
       shareError.value = shareExtractError(xml) || t("library.shareCreateFailed");
     } else {
       shareCreatedUrl.value = shareExtractUrl(xml);
+      if (shareBatchIds.value) clearSelection();
     }
   } catch {
     shareError.value = t("library.shareCreateFailed");
@@ -485,9 +564,8 @@ async function copyShareUrl() {
 
 // ============================================================================
 //
-// Per-song button sits to the left of the 061 share-btn (also absolute, so the
-// existing --grid-cols template is untouched). Clicking opens a small modal
-// listing the caller's playlists; picking one calls updatePlaylist with
+// Reached from the per-song "⋮" menu (SongRowMenu). Clicking opens a small
+// modal listing the caller's playlists; picking one calls updatePlaylist with
 // songIdToAdd. A "Create new playlist..." sentinel option creates the playlist
 // on the fly (createPlaylist with the seed song), avoiding a forced detour
 // through /playlists for first-time users.
@@ -591,6 +669,27 @@ async function submitCreateAndAdd() {
     addPlaylistBusy.value = false;
   }
 }
+
+// === Per-row "⋮" menu ===
+// Replaces the old always-visible edit/share/add-to-playlist button cluster —
+// one menu per row (keyed by song id) collapses those three actions plus the
+// new download action into a single grid column. Only one row's menu is open
+// at a time; a window-level click listener closes it when the click lands
+// outside any `.row-menu-wrap` (the menu button + popover itself stop
+// propagation so they don't immediately close their own click).
+const openMenuId = ref<string | null>(null);
+function toggleRowMenu(id: string) {
+  openMenuId.value = openMenuId.value === id ? null : id;
+}
+function closeRowMenu() {
+  openMenuId.value = null;
+}
+function onWindowClick(e: MouseEvent) {
+  if (!openMenuId.value) return;
+  if (!(e.target as HTMLElement).closest(".row-menu-wrap")) closeRowMenu();
+}
+onMounted(() => window.addEventListener("click", onWindowClick));
+onUnmounted(() => window.removeEventListener("click", onWindowClick));
 </script>
 
 <template>
@@ -607,6 +706,13 @@ async function submitCreateAndAdd() {
       <button v-if="currentAlbum && songs.length" class="btn-primary" @click="playAlbumFromStart">{{ t("library.playAlbum") }}</button>
     </div>
 
+    <!-- Library-wide search — always visible, independent of tabs/drilldown. -->
+    <div class="library-search">
+      <input v-model="searchQuery" class="form-input search-input" :placeholder="t('library.searchPlaceholder')" />
+      <button v-if="searchQuery" class="search-clear" :title="t('common.close')" @click="clearSearch">✕</button>
+    </div>
+
+    <template v-if="!searchResults">
     <!-- View tabs (hidden while drilled into an artist/album) -->
     <div v-if="!currentArtist && !currentAlbum" class="view-tabs">
       <button :class="['view-tab', { active: tab === 'songs' }]" @click="switchTab('songs')">{{ t("library.tabSongs") }}</button>
@@ -617,13 +723,12 @@ async function submitCreateAndAdd() {
     <div v-if="error" class="status-badge error">{{ error }}</div>
 
     <!-- Drill-down: songs of an album (any tab) -->
-    <!-- 102: share/add-playlist buttons are grid-inline since 086 v3, so the
-         column template must carry their two 32px tracks; `auto` tracks are
-         banned — each .table-row is its own grid, so content-sized tracks
-         misalign across rows. -->
-    <div v-if="currentAlbum" class="table-wrap song-table" :style="`--grid-cols: 36px 2fr 1fr 64px${isAdmin ? ' 32px' : ''} 32px 32px`">
+    <!-- The trailing 32px track holds the per-row "⋮" menu (SongRowMenu) —
+         `auto` tracks are banned since each .table-row is its own grid, so
+         content-sized tracks would misalign across rows. -->
+    <div v-if="currentAlbum" class="table-wrap song-table" style="--grid-cols: 36px 2fr 1fr 64px 32px">
       <div class="table-header">
-        <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span><span></span><span></span>
+        <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span>
       </div>
       <!-- 061: album-level share affordance, sits above the track table. -->
       <button v-if="currentAlbum" class="album-share-btn" :title="t('library.share')" @click.stop="openShare('album', currentAlbum.id, currentAlbum.name)">⤴ {{ t("library.share") }}</button>
@@ -638,11 +743,17 @@ async function submitCreateAndAdd() {
         <span class="song-title">{{ s.title }}</span>
         <span class="song-artist">{{ s.artist }}</span>
         <span class="song-time">{{ formatDuration(s.duration) }}</span>
-        <button v-if="isAdmin" class="edit-btn" :title="t('library.editSong')" @click.stop="openEditor(s)">✎</button>
-        <!-- 061: per-song share, absolute-positioned so we don't touch grid-cols. -->
-        <button class="share-btn" :title="t('library.share')" @click.stop="openShare('song', s.id, s.title)">⤴</button>
-        <!-- 069: per-song add-to-playlist, also absolute (right: 3.6rem leaves room for share-btn). -->
-        <button class="add-playlist-btn" :title="t('library.addToPlaylist')" @click.stop="openAddToPlaylist(s.id, s.title)">＋</button>
+        <SongRowMenu
+          :song-id="s.id"
+          :title="s.title"
+          :is-admin="isAdmin"
+          :open="openMenuId === s.id"
+          @toggle="toggleRowMenu(s.id)"
+          @close="closeRowMenu"
+          @edit="openEditor(s)"
+          @share="openShare('song', s.id, s.title)"
+          @add-playlist="openAddToPlaylist(s.id, s.title)"
+        />
       </div>
       <div v-if="loading" class="empty-state">{{ t("common.loading") }}</div>
       <div v-else-if="!songs.length" class="empty-state">{{ t("library.noTracks") }}</div>
@@ -760,14 +871,20 @@ async function submitCreateAndAdd() {
           :title="selectedIds.length > BATCH_MAX ? t('library.batchTooMany') : ''"
           @click="batchRescan"
         >{{ rescanBusy ? t("library.rescanning") : t("library.rescan") }}</button>
+        <button
+          class="btn-secondary btn-sm"
+          :disabled="selectedIds.length > BATCH_MAX"
+          :title="selectedIds.length > BATCH_MAX ? t('library.batchTooMany') : ''"
+          @click="openBatchShare"
+        >{{ t("library.batchShare") }}</button>
         <span v-if="rescanMsg" class="mono-label">{{ rescanMsg }}</span>
       </div>
       <!-- 102: no `auto` tracks (per-row grids misalign); artist/time get
            fixed-share tracks so columns line up across every row. -->
-      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin && editMode ? '24px ' : ''}36px 2fr 1.5fr 1fr 64px${isAdmin ? ' 32px' : ''} 32px 32px`">
+      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin && editMode ? '24px ' : ''}36px 2fr 1.5fr 1fr 64px 32px`">
         <div class="table-header">
           <span v-if="isAdmin && editMode"></span>
-          <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span v-if="isAdmin"></span><span></span><span></span>
+          <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span>
         </div>
         <div
           v-for="(s, i) in allSongs"
@@ -789,11 +906,17 @@ async function submitCreateAndAdd() {
           <span class="song-album">{{ s.album }}</span>
           <span class="song-artist">{{ s.artist }}</span>
           <span class="song-time">{{ formatDuration(s.duration) }}</span>
-          <button v-if="isAdmin" class="edit-btn" :title="t('library.editSong')" @click.stop="openEditor(s)">✎</button>
-          <!-- 061: per-song share. -->
-          <button class="share-btn" :title="t('library.share')" @click.stop="openShare('song', s.id, s.title)">⤴</button>
-          <!-- 069: per-song add-to-playlist. -->
-          <button class="add-playlist-btn" :title="t('library.addToPlaylist')" @click.stop="openAddToPlaylist(s.id, s.title)">＋</button>
+          <SongRowMenu
+            :song-id="s.id"
+            :title="s.title"
+            :is-admin="isAdmin"
+            :open="openMenuId === s.id"
+            @toggle="toggleRowMenu(s.id)"
+            @close="closeRowMenu"
+            @edit="openEditor(s)"
+            @share="openShare('song', s.id, s.title)"
+            @add-playlist="openAddToPlaylist(s.id, s.title)"
+          />
         </div>
         <div v-if="!allSongs.length && !loading" class="empty-state">{{ t("library.noTracks") }}</div>
       </div>
@@ -803,6 +926,93 @@ async function submitCreateAndAdd() {
         <div ref="songListEnd" class="scroll-sentinel" data-kind="songs" aria-hidden="true"></div>
       </div>
     </div>
+    </template>
+
+    <!-- Library-wide search results: replaces tabs/drilldown while a query is active. -->
+    <div v-else class="search-results">
+      <div v-if="searching" class="empty-state">{{ t("common.loading") }}</div>
+      <div
+        v-else-if="!searchResults.artists.length && !searchResults.albums.length && !searchResults.songs.length"
+        class="empty-state"
+      >{{ t("library.searchNoResults") }}</div>
+      <template v-else>
+        <div v-if="searchResults.artists.length" class="search-section">
+          <div class="search-section-title">{{ t("library.tabArtists") }}</div>
+          <div class="artist-grid">
+            <div
+              v-for="a in searchResults.artists"
+              :key="a.id"
+              class="card hoverable artist-card"
+              @click="openArtist(a); clearSearch()"
+            >
+              <div class="artist-glyph">{{ a.name.charAt(0).toUpperCase() || "?" }}</div>
+              <div class="artist-name">{{ a.name }}</div>
+              <div class="mono-label" v-if="a.albumCount">{{ t("library.albumCount", { n: a.albumCount }) }}</div>
+              <div class="corner corner-tr"></div>
+              <div class="corner corner-bl"></div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="searchResults.albums.length" class="search-section">
+          <div class="search-section-title">{{ t("library.tabAlbums") }}</div>
+          <div class="album-grid">
+            <div
+              v-for="al in searchResults.albums"
+              :key="al.id"
+              class="card hoverable album-card"
+              @click="openAlbum(al); clearSearch()"
+            >
+              <div class="album-cover">
+                <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
+                <span v-else class="album-cover-placeholder">♪</span>
+              </div>
+              <div class="album-body">
+                <div class="album-name">{{ al.name }}</div>
+                <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
+              </div>
+              <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
+              <div class="corner corner-tr"></div>
+              <div class="corner corner-bl"></div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="searchResults.songs.length" class="search-section">
+          <div class="search-section-title">{{ t("library.tabSongs") }}</div>
+          <div class="table-wrap song-table" style="--grid-cols: 36px 2fr 1.5fr 1fr 64px 32px">
+            <div class="table-header">
+              <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span>
+            </div>
+            <div
+              v-for="(s, i) in searchResults.songs"
+              :key="s.id"
+              class="table-row song-row"
+              :class="{ playing: player.current?.id === s.id }"
+              @click="playFromSearch(i)"
+            >
+              <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
+              <span class="song-title">{{ s.title }}</span>
+              <span class="song-album">{{ s.album }}</span>
+              <span class="song-artist">{{ s.artist }}</span>
+              <span class="song-time">{{ formatDuration(s.duration) }}</span>
+              <SongRowMenu
+                :song-id="s.id"
+                :title="s.title"
+                :is-admin="isAdmin"
+                :open="openMenuId === s.id"
+                @toggle="toggleRowMenu(s.id)"
+                @close="closeRowMenu"
+                @edit="openEditor(s)"
+                @share="openShare('song', s.id, s.title)"
+                @add-playlist="openAddToPlaylist(s.id, s.title)"
+              />
+            </div>
+          </div>
+        </div>
+      </template>
+    </div>
+
     <!-- Tag editor (single + batch) -->
     <TagEditor
       :open="editorOpen"
@@ -949,6 +1159,35 @@ async function submitCreateAndAdd() {
 .view-tab:hover { color: var(--color-text-primary); }
 .view-tab.active { color: var(--color-accent-primary); border-bottom-color: var(--color-accent-primary); }
 
+/* library-wide search */
+.library-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+  max-width: 360px;
+}
+.search-input { width: 100%; padding-right: 2rem; }
+.search-clear {
+  position: absolute;
+  right: 0.5rem;
+  background: none; border: none; cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: var(--fs-sm);
+  padding: 0.2rem;
+}
+.search-clear:hover { color: var(--color-accent-primary); }
+
+.search-section { margin-bottom: 1.75rem; }
+.search-section-title {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-bottom: 0.6rem;
+}
+
 .load-more { display: flex; justify-content: center; padding: 1.25rem 0 0.5rem; }
 /* invisible IntersectionObserver sentinel: must occupy vertical space
    inside the scroll flow so the observer can see it approach the viewport.
@@ -1001,19 +1240,6 @@ async function submitCreateAndAdd() {
 .song-album { font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-artist { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-time { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); }
-
-/* tag editor — 079: keep ✎ permanently visible at 0.5 opacity so admins
-   discover the entry point without having to hover the row. Hover / focus
-   still snap to full opacity for the active row. */
-.edit-btn {
-  background: none; border: none; cursor: pointer;
-  color: var(--color-text-muted); font-size: var(--fs-sm);
-  padding: 0 0.25rem; opacity: 0.5;
-  transition: opacity 0.15s, color 0.15s;
-}
-.song-row:hover .edit-btn { opacity: 1; }
-.song-row .edit-btn:focus-visible { opacity: 1; outline: 1px solid var(--color-accent-primary); }
-.edit-btn:hover { color: var(--color-accent-primary); }
 
 /* 079: songs-tab discoverability hint. Sits above the song table on admins
    only; auto-fades to 50% opacity after 5s (see songsHintFaded). */
@@ -1070,28 +1296,16 @@ async function submitCreateAndAdd() {
 .song-row.selected { background: var(--color-accent-dim); }
 .song-row.selected:hover { background: var(--color-accent-dim); }
 
-/* === 061: Share affordances ===
-   share-btn (per-song): absolute-positioned on the right edge so we don't
-   have to widen the grid — gives us an extra action without rewriting the
-   --grid-cols template that downstream tasks (069 Playlist) will also touch.
+/* === Share affordances ===
    card-share-btn (per-album): top-right of the cover area.
-   album-share-btn: standalone button above the song table in album drilldown. */
+   album-share-btn: standalone button above the song table in album drilldown.
+   Per-song share now lives inside the SongRowMenu "⋮" dropdown (see that
+   component) rather than as its own row button. */
 .song-row { position: relative; }
-.share-btn {
-  /* 086 fix v3: 改为 grid inline (与 edit-btn 一致)，从 grid 列中分配空间 */
-  background: none; border: none; cursor: pointer;
-  color: var(--color-text-muted);
-  font-size: var(--fs-md);
-  padding: 0 0.25rem;
-  opacity: 0.5;
-  transition: opacity 0.15s, color 0.15s;
-}
-.song-row:hover .share-btn { opacity: 1; }
-.share-btn:hover { color: var(--color-accent-primary); }
-/* Nudge share-btn left when an edit-btn is also visible so they don't overlap.
-   The edit-btn lives inside the grid cell; share-btn floats outside it. */
-/* 086 fix: 删除 ~ 选择器 (edit-btn 在 grid cell 内，share-btn 在 song-row 内，
-   不是兄弟节点，~ 不匹配)；改在默认 right 中处理避开重叠。 */
+/* :deep() reaches into SongRowMenu's scoped .row-menu-btn — dimmed by
+   default (matches the old edit/share/add-playlist affordances), full
+   opacity when its row is hovered. */
+.song-row:hover :deep(.row-menu-btn) { opacity: 1; }
 
 .album-card { position: relative; }
 .card-share-btn {
@@ -1159,25 +1373,6 @@ async function submitCreateAndAdd() {
   color: var(--color-text-muted);
   letter-spacing: 0.05em;
 }
-
-/* === 069: Add-to-Playlist affordances ===
-   add-playlist-btn (per-song): absolute-positioned to the LEFT of share-btn
-   so they don't collide. share-btn lives at right: 0.4rem; this one sits at
-   right: 3.6rem. When an edit-btn is also visible the share-btn floats over
-   to right: 1.8rem (see existing rule) so we push this one further to
-   right: 4.8rem to keep the gap consistent. */
-.add-playlist-btn {
-  /* 086 fix v3: 改为 grid inline */
-  background: none; border: none; cursor: pointer;
-  color: var(--color-text-muted);
-  font-size: var(--fs-md);
-  padding: 0 0.25rem;
-  opacity: 0.5;
-  transition: opacity 0.15s, color 0.15s;
-}
-.song-row:hover .add-playlist-btn { opacity: 1; }
-.add-playlist-btn:hover { color: var(--color-accent-primary); }
-/* 086 fix: 同上 ~ 选择器不匹配，已在默认 right:5.5rem 中处理。 */
 
 .add-playlist-modal { max-width: 480px; }
 .add-playlist-list {

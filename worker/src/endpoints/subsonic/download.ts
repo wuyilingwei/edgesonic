@@ -19,7 +19,17 @@ const downloadHandler = async (c: Context): Promise<Response> => {
 
   const env = c.env as Env;
   const queries = createQueries(env.DB);
-  const instance = await queries.getSongInstance(id);
+  // Subsonic song id = song_masters.id ('sm-' prefix) — that's what every
+  // client (and every other endpoint: getSong, star, createShare, stream…)
+  // passes here. getSongInstance() looks up by song_instances.id ('si-'
+  // prefix) instead, so `id` never matched anything and every download 404'd
+  // with a generic "File not found" XML. Resolve like streamHandler does:
+  // getSongInstances(masterId) and take its top pick (ordered r2-first, then
+  // highest bit_rate — see queries.ts). Still tolerate a raw instance id for
+  // any caller that has one directly.
+  const instance = id.startsWith("si-")
+    ? await queries.getSongInstance(id)
+    : (await queries.getSongInstances(id))[0] ?? null;
 
   if (!instance) {
     return c.text(subsonicError(70, "File not found"), 404, {
@@ -96,8 +106,12 @@ const downloadMultipleHandler = async (c: Context): Promise<Response> => {
   const queries = createQueries(env.DB);
 
   const items: Array<{ id: string; name: string; suffix: string; size: number }> = [];
-  for (const id of idList) {
-    const instance = await queries.getSongInstance(id.trim());
+  for (const rawId of idList) {
+    const id = rawId.trim();
+    // Same id-semantics fix as downloadHandler above.
+    const instance = id.startsWith("si-")
+      ? await queries.getSongInstance(id)
+      : (await queries.getSongInstances(id))[0] ?? null;
     if (instance) {
       const master = await queries.getSongMaster(instance.master_id);
       items.push({

@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createRouter, createWebHashHistory } from "vue-router";
 import { createPinia } from "pinia";
 import { i18n } from "./i18n";
+import "./theme"; // side-effect: applies saved theme attribute before first paint
 import App from "./App.vue";
 import Login from "./views/Login.vue";
 import Dashboard from "./views/Dashboard.vue";

@@ -47,6 +47,100 @@
   --glow: 0 0 20px rgba(255, 255, 255, 0.12);
 }
 
+/* --- Theme variants ---
+   "black" (default) is the palette above; each variant below only retints
+   the accent-related tokens (bg/border/typography stay identical) so every
+   existing component keeps its structure and only the highlight color shifts. */
+:root[data-theme="red"] {
+  --color-accent-primary: #e53d3d;
+  --color-accent-dim: rgba(229, 61, 61, 0.18);
+  --color-text-inverse: #fdf2f2;
+  --glow: 0 0 20px rgba(229, 61, 61, 0.25);
+}
+
+:root[data-theme="green"] {
+  --color-accent-primary: #1ed760;
+  --color-accent-dim: rgba(30, 215, 96, 0.18);
+  --color-text-inverse: #05170c;
+  --glow: 0 0 20px rgba(30, 215, 96, 0.25);
+}
+
+:root[data-theme="yellow"] {
+  --color-accent-primary: #f5c518;
+  --color-accent-dim: rgba(245, 197, 24, 0.18);
+  --color-text-inverse: #1a1400;
+  --glow: 0 0 20px rgba(245, 197, 24, 0.25);
+}
+
+/* "stardust" is a fuller reskin, not just an accent retint: a light celestial
+   theme for the Stardust virtual singer, built from white/lavender space,
+   violet-blue vocals, and warm yellow star geometry. */
+:root[data-theme="stardust"] {
+  --color-bg-primary: #fffdf8;
+  --color-bg-secondary: #f8f3ff;
+  --color-bg-tertiary: #eeeaff;
+  --color-bg-elevated: rgba(255, 255, 255, 0.82);
+  --color-bg-overlay: rgba(54, 42, 120, 0.22);
+
+  --color-text-primary: #241a4f;
+  --color-text-secondary: #5e5596;
+  --color-text-muted: #9188ba;
+  --color-text-inverse: #fffdf8;
+
+  --color-accent-primary: #6b63ff;
+  --color-accent-dim: rgba(107, 99, 255, 0.16);
+  --color-stardust-blue: #6fc7ff;
+  --color-stardust-violet: #9a7bff;
+  --color-stardust-gold: #ffd64a;
+
+  --color-border-subtle: rgba(107, 99, 255, 0.14);
+  --color-border-default: rgba(107, 99, 255, 0.28);
+  --color-border-strong: rgba(107, 99, 255, 0.48);
+
+  --glow: 0 0 26px rgba(107, 99, 255, 0.24), 0 0 18px rgba(255, 214, 74, 0.2);
+}
+
+/* .navbar/.player-bar paint hardcoded rgba() backgrounds, so the stardust
+   reskin needs explicit light-glass overrides. */
+:root[data-theme="stardust"] .navbar,
+:root[data-theme="stardust"] .player-bar {
+  background: rgba(255, 253, 248, 0.74);
+  border-color: rgba(107, 99, 255, 0.2);
+  box-shadow: 0 10px 34px rgba(107, 99, 255, 0.08);
+}
+
+:root[data-theme="stardust"] body {
+  background:
+    radial-gradient(circle at 12% 8%, rgba(255, 214, 74, 0.22), transparent 24rem),
+    radial-gradient(circle at 86% 14%, rgba(111, 199, 255, 0.22), transparent 28rem),
+    radial-gradient(circle at 55% 95%, rgba(154, 123, 255, 0.2), transparent 30rem),
+    var(--color-bg-primary);
+}
+
+:root[data-theme="stardust"] .card,
+:root[data-theme="stardust"] .settings-section,
+:root[data-theme="stardust"] .modal,
+:root[data-theme="stardust"] .browser-card {
+  background: linear-gradient(145deg, rgba(255,255,255,0.86), rgba(248,243,255,0.72));
+  border-color: rgba(107, 99, 255, 0.18);
+  box-shadow: 0 18px 48px rgba(107, 99, 255, 0.08), inset 0 1px 0 rgba(255,255,255,0.86);
+  backdrop-filter: blur(16px);
+}
+
+:root[data-theme="stardust"] .btn-primary {
+  background: linear-gradient(135deg, var(--color-accent-primary), var(--color-stardust-violet));
+  border-color: transparent;
+  color: #fffdf8;
+}
+:root[data-theme="stardust"] .btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #7c75ff, #b293ff);
+  box-shadow: var(--glow);
+}
+:root[data-theme="stardust"] .btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 214, 74, 0.2);
+  border-color: var(--color-stardust-gold);
+}
+
 /* --- Reset & Base --- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 

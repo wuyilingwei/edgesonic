@@ -12,12 +12,12 @@ on:
     branches: [main]
     paths:
       - "worker/src/endpoints/subsonic/**"
-      - "test/subsonic_endpoint_coverage.test.ts"
+      - "test/subsonic/subsonic_endpoint_coverage.test.ts"
       - ".github/workflows/subsonic-coverage.yml"
   pull_request:
     paths:
       - "worker/src/endpoints/subsonic/**"
-      - "test/subsonic_endpoint_coverage.test.ts"
+      - "test/subsonic/subsonic_endpoint_coverage.test.ts"
       - ".github/workflows/subsonic-coverage.yml"
   workflow_dispatch:
 
@@ -45,7 +45,7 @@ jobs:
         run: npm run typecheck
 
       - name: Run Subsonic endpoint coverage test
-        run: npx tsx test/subsonic_endpoint_coverage.test.ts
+        run: npx tsx test/subsonic/subsonic_endpoint_coverage.test.ts
 
       - name: Coverage summary
         if: always()

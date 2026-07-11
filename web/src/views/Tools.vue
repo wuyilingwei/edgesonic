@@ -8,7 +8,7 @@ import { useAuth } from "../api";
 import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
-const { isSuperAdmin, edgesonicPost, edgesonicFetch, md5, signedParams, restUrl } = useAuth();
+const { isSuperAdmin, edgesonicPost, edgesonicFetch, rescanSongs, md5, signedParams, restUrl } = useAuth();
 const workerPool = useWorkerPool();
 
 // "auto-start in mm:ss" countdown next to the manual poll button.
@@ -149,6 +149,83 @@ async function saveFreeAlloc() {
   try { await edgesonicPost("features/updateString", { key: "r2_free_allocation_gb", value: String(freeAllocInput.value) }); } catch { /* */ } finally { freeAllocSaving.value = false; }
 }
 
+// ---- Orphan songs (files.ts upload placeholder bucket that never got
+// relinked to real artist/album — see worker/src/endpoints/edgesonic/
+// maintenance.ts's orphanSongs endpoints for the full rationale) ----
+interface OrphanSong {
+  masterId: string; title: string; createdAt: number; instanceCount: number;
+  suffix: string | null; totalSize: number; tagScanned: number; missing: boolean;
+}
+const orphanSongs = ref<OrphanSong[]>([]);
+const orphanLoading = ref(false);
+const orphanSelected = ref<string[]>([]);
+const orphanSelectedSet = computed(() => new Set(orphanSelected.value));
+const orphanAllSelected = computed(() => orphanSongs.value.length > 0 && orphanSelected.value.length === orphanSongs.value.length);
+const orphanRescanBusy = ref(false);
+const orphanDeleteBusy = ref(false);
+
+async function loadOrphanSongs() {
+  orphanLoading.value = true;
+  try {
+    const data = JSON.parse(await edgesonicFetch("maintenance/orphanSongs")) as { ok?: boolean; songs?: OrphanSong[] };
+    orphanSongs.value = data.songs ?? [];
+    const stillPresent = new Set(orphanSongs.value.map((s) => s.masterId));
+    orphanSelected.value = orphanSelected.value.filter((id) => stillPresent.has(id));
+  } catch {
+    orphanSongs.value = [];
+  } finally {
+    orphanLoading.value = false;
+  }
+}
+
+function toggleOrphanSelect(id: string) {
+  const idx = orphanSelected.value.indexOf(id);
+  if (idx >= 0) orphanSelected.value.splice(idx, 1);
+  else orphanSelected.value.push(id);
+}
+function toggleOrphanAll() {
+  orphanSelected.value = orphanAllSelected.value ? [] : orphanSongs.value.map((s) => s.masterId);
+}
+
+async function rescanSelectedOrphans() {
+  if (!orphanSelected.value.length || orphanRescanBusy.value) return;
+  orphanRescanBusy.value = true;
+  try {
+    const res = await rescanSongs(orphanSelected.value);
+    showToast(res.ok ? `已重新加入扫描队列 ${res.dispatched ?? 0} 个` : `重新扫描失败：${res.error || "unknown"}`, res.ok ? "success" : "error");
+    orphanSelected.value = [];
+    await loadOrphanSongs();
+  } catch (e) {
+    showToast(`重新扫描失败：${e instanceof Error ? e.message : String(e)}`, "error");
+  } finally {
+    orphanRescanBusy.value = false;
+  }
+}
+
+async function deleteSelectedOrphans() {
+  if (!orphanSelected.value.length || orphanDeleteBusy.value) return;
+  orphanDeleteBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("maintenance/orphanSongs/delete", { masterIds: orphanSelected.value })) as
+      { ok?: boolean; deleted?: number; failed?: number; error?: string };
+    if (data.ok) {
+      showToast(`已删除 ${data.deleted ?? 0} 首${data.failed ? `，失败 ${data.failed} 首` : ""}`, data.failed ? "error" : "success");
+    } else {
+      showToast(`删除失败：${data.error || "unknown"}`, "error");
+    }
+    orphanSelected.value = [];
+    await loadOrphanSongs();
+  } catch (e) {
+    showToast(`删除失败：${e instanceof Error ? e.message : String(e)}`, "error");
+  } finally {
+    orphanDeleteBusy.value = false;
+  }
+}
+
+function formatOrphanDate(unixSec: number): string {
+  return new Date(unixSec * 1000).toLocaleString();
+}
+
 // handle, so it leaked a new 10s poller every time this component
 // (re)mounted (e.g. navigating away from /tools and back). Store the handle
 // and clear it on unmount, same pattern as Files.vue's workStatusHandle.
@@ -157,6 +234,7 @@ let nowTickHandle: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   void loadWorkStatus();
   void loadStorageStats();
+  void loadOrphanSongs();
   workStatusPollHandle = window.setInterval(() => { if (!document.hidden) void loadWorkStatus(); }, 10000);
   nowTickHandle = window.setInterval(() => { nowTick.value = Date.now(); }, 1000);
 });
@@ -176,8 +254,8 @@ function showToast(msg: string, type = "success") {
 // this page used to have. Clone + Push are now one section ("migrate") with
 // an internal seg-btn switch (migrateMode) instead of two separate
 // top-level accordion entries.
-type SectionKey = "migrate" | "workPool" | "storage";
-const open = ref<Record<SectionKey, boolean>>({ migrate: false, workPool: false, storage: false });
+type SectionKey = "migrate" | "workPool" | "storage" | "orphanSongs";
+const open = ref<Record<SectionKey, boolean>>({ migrate: false, workPool: false, storage: false, orphanSongs: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
 const migrateMode = ref<"clone" | "push">("clone");
 
@@ -1390,6 +1468,58 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
       </div>
         </div>
       </section>
+
+      <!-- ============ 孤儿歌曲清理 ============ -->
+      <section class="settings-section card" :class="{ open: open.orphanSongs }">
+        <button class="section-header" @click="toggleSection('orphanSongs')">
+          <span class="section-title">孤儿歌曲清理</span>
+          <span class="section-caret">{{ open.orphanSongs ? '−' : '+' }}</span>
+        </button>
+        <div v-show="open.orphanSongs" class="section-body">
+      <div class="card tools-orphan-card">
+        <div class="card-header">
+          <span class="card-title">未匹配的孤儿歌曲</span>
+          <button class="wp-refresh" :disabled="orphanLoading" @click="loadOrphanSongs">↻</button>
+        </div>
+        <p class="orphan-hint mono-label">
+          上传后一直卡在"未知艺术家 / Pending Uploads"、从未被正确识别标签的歌曲。
+          文件本身可能只是当时解析失败（可重新扫描），也可能完全没有可用标签（建议直接删除）。
+        </p>
+        <div v-if="orphanLoading" class="storage-loading">加载中…</div>
+        <div v-else-if="orphanSongs.length === 0" class="storage-loading muted">没有发现孤儿歌曲</div>
+        <template v-else>
+          <div class="orphan-toolbar">
+            <label class="wp-toggle-label">
+              <input type="checkbox" :checked="orphanAllSelected" @change="toggleOrphanAll" />
+              <span>全选（{{ orphanSelected.length }}/{{ orphanSongs.length }}）</span>
+            </label>
+            <button class="btn-secondary btn-sm" :disabled="!orphanSelected.length || orphanRescanBusy" @click="rescanSelectedOrphans">
+              {{ orphanRescanBusy ? "提交中…" : "重新扫描" }}
+            </button>
+            <button class="btn-secondary btn-sm" :disabled="!orphanSelected.length || orphanDeleteBusy" @click="deleteSelectedOrphans">
+              {{ orphanDeleteBusy ? "删除中…" : "删除选中" }}
+            </button>
+          </div>
+          <table class="storage-table orphan-table">
+            <thead><tr><th></th><th>标题</th><th class="num-col">大小</th><th>状态</th><th>创建时间</th></tr></thead>
+            <tbody>
+              <tr v-for="s in orphanSongs" :key="s.masterId">
+                <td><input type="checkbox" :checked="orphanSelectedSet.has(s.masterId)" @change="toggleOrphanSelect(s.masterId)" /></td>
+                <td>{{ s.title }}<span v-if="s.suffix" class="muted"> .{{ s.suffix }}</span></td>
+                <td class="num-col">{{ fmtBytes(s.totalSize) }}</td>
+                <td>
+                  <span v-if="s.missing" class="status-badge error">文件缺失</span>
+                  <span v-else-if="s.tagScanned === 0" class="status-badge info">待扫描</span>
+                  <span v-else class="status-badge muted">标签为空</span>
+                </td>
+                <td class="mono-label">{{ formatOrphanDate(s.createdAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </template>
+      </div>
+        </div>
+      </section>
     </template>
   </div>
 </template>
@@ -1598,6 +1728,11 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
 .storage-table { width: 100%; border-collapse: collapse; margin-bottom: 1rem; }
 .storage-table th, .storage-table td { padding: 0.4rem 0.6rem; text-align: left; border-bottom: 1px solid var(--color-border-subtle); font-size: var(--fs-sm); }
 .storage-table .num-col { text-align: right; font-family: var(--font-mono); }
+
+/* 孤儿歌曲清理 */
+.orphan-hint { color: var(--color-text-muted); margin-bottom: 0.8rem; line-height: 1.5; }
+.orphan-toolbar { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.6rem; flex-wrap: wrap; }
+.orphan-table td:first-child, .orphan-table th:first-child { width: 28px; }
 .cost-rows { display: flex; flex-direction: column; gap: 0.4rem; }
 .cost-row { display: flex; justify-content: space-between; font-size: var(--fs-sm); }
 .cost-label { color: var(--color-text-muted); }

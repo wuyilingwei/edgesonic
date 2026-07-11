@@ -8,7 +8,9 @@
 // `formPost` extension.
 //
 // We ONLY advertise extensions EdgeSonic actually implements:
-//  * apiKeyAuthentication v1 — auth.ts supports `?apiKey=...` lookup via KV
+//  * apiKeyAuthentication v1 — auth.ts resolves `?apiKey=...` via the D1
+//   `api_keys` table (api_key is the primary key, so it alone identifies
+//   the account); `u` is optional when apiKey is present, matching spec.
 //   * tokenInfo v1          — this file
 //   * formPost v1           — all mutating Subsonic endpoints accept POST
 //   * songLyrics v1         — 108: getLyricsBySongId emits spec-shaped
