@@ -15,11 +15,11 @@
 
 //
 // Strategy:
-//   * Install formPostMiddleware in front of routes that read both
-//     query params and parseBody() — confirms the merge works transparently.
-//   * Drive scrobble (query-only) and createPlaylist (parseBody) via real
-//     Hono fetch with Content-Type: application/x-www-form-urlencoded bodies.
-//   * Also test that JSON & multipart bodies pass through untouched.
+//  * Install formPostMiddleware in front of routes that read both
+//   query params and parseBody() — confirms the merge works transparently.
+//  * Drive scrobble (query-only) and createPlaylist (parseBody) via real
+//   Hono fetch with Content-Type: application/x-www-form-urlencoded bodies.
+//  * Also test that JSON & multipart bodies pass through untouched.
 //
 // Run: npx tsx test/form_post.test.ts
 

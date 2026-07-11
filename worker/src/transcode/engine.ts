@@ -16,10 +16,10 @@
 //
 // This module defines the contract that every transcoder backend must
 // implement. Two backends ship with EdgeSonic:
-//   - SandboxTranscodeEngine (worker/src/transcode/sandbox.ts) — runs ffmpeg
-//     inside a Cloudflare Sandbox SDK container.
-//   - ExternalTranscodeEngine (worker/src/transcode/external.ts) — proxies to
-//     a self-hosted Node + Express + ffmpeg container (Fly.io / Hetzner / etc).
+//  - SandboxTranscodeEngine (worker/src/transcode/sandbox.ts) — runs ffmpeg
+//   inside a Cloudflare Sandbox SDK container.
+//  - ExternalTranscodeEngine (worker/src/transcode/external.ts) — proxies to
+//   a self-hosted Node + Express + ffmpeg container (Fly.io / Hetzner / etc).
 //
 // Both backends consume the same TranscodeProfile catalogue (profiles.ts) and
 // emit the same TranscodeJobRow status records (transcode_jobs table). The
@@ -111,9 +111,9 @@ export interface TranscodeEngine {
 export type EngineKind = "sandbox" | "external" | "browser_pool" | "disabled";
 
 // Mode selector — read from features.transcode_mode.
-//   on_demand : transcode at /stream time when no instance matches the request
-//   pre_bake  : transcode on upload, write to song_instances as new rows
-//   both      : pre-bake the default_profiles and fall back to on-demand
+//  on_demand : transcode at /stream time when no instance matches the request
+//  pre_bake : transcode on upload, write to song_instances as new rows
+//   both    : pre-bake the default_profiles and fall back to on-demand
 export type EngineMode = "on_demand" | "pre_bake" | "both";
 
 // Sentinel returned from the dispatcher when the engine is disabled. Callers

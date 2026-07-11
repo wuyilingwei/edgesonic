@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Rosmontis: "管理用户权限无权管理管理员，管理员和超管只能由超管控制" —
+// —
 // manage_users (grantable down to level 1) must not be able to create,
 // edit, or delete an admin (level 2) or super-admin (level 3) account, nor
 // promote anyone INTO that tier. Only a level-3 caller can touch the admin

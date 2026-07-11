@@ -15,10 +15,10 @@
 
 //
 // Validates the four decision branches in asyncScanSource:
-//   1. unchanged file        → no UPDATE / no INSERT, only tag_scanned stays
-//   2. etag changed          → UPDATE with tag_scanned reset to 0
-//   3. size changed          → UPDATE with tag_scanned reset to 0
-//   4. new file              → INSERT chain
+//   1. unchanged file      → no UPDATE / no INSERT, only tag_scanned stays
+//   2. etag changed        → UPDATE with tag_scanned reset to 0
+//   3. size changed        → UPDATE with tag_scanned reset to 0
+//   4. new file            → INSERT chain
 //
 // Also asserts parseMultistatus picks up getetag + getlastmodified.
 // Run: npx tsx test/incremental_scan.test.ts

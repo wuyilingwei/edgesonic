@@ -15,21 +15,21 @@
 
 //
 // Coverage:
-//   1. Feature ON  → response carries COOP=same-origin, COEP=require-corp,
-//                    CORP=same-origin on a vanilla handler.
-//   2. Feature OFF ('0' in feature_strings) → response carries NONE of the
-//                    three headers (middleware skips entirely).
-//   3. Default fallback — feature row absent in D1 → headers stamped (the
-//                    middleware treats missing as ON, matching the
-//                    0022 migration default).
-//   4. Handler-set CORP wins — if a route sets CORP=cross-origin (e.g. a
-//                    future public-embed endpoint), the middleware does NOT
-//                    overwrite it.
-//   5. Public /share/:id parity — the share route goes through the SAME global
-//                    middleware (it is registered on the bare Hono app), so a
-//                    GET against a Hono route mounted under the middleware
-//                    inherits the headers.
-//   6. KV cache hit — second call within TTL avoids a D1 round-trip.
+//  1. Feature ON → response carries COOP=same-origin, COEP=require-corp,
+//                  CORP=same-origin on a vanilla handler.
+//  2. Feature OFF ('0' in feature_strings) → response carries NONE of the
+//                  three headers (middleware skips entirely).
+//  3. Default fallback — feature row absent in D1 → headers stamped (the
+//                  middleware treats missing as ON, matching the
+//                  0022 migration default).
+//  4. Handler-set CORP wins — if a route sets CORP=cross-origin (e.g. a
+//                  future public-embed endpoint), the middleware does NOT
+//                  overwrite it.
+//  5. Public /share/:id parity — the share route goes through the SAME global
+//                  middleware (it is registered on the bare Hono app), so a
+//                  GET against a Hono route mounted under the middleware
+//                  inherits the headers.
+//  6. KV cache hit — second call within TTL avoids a D1 round-trip.
 //
 // Run: npx tsx test/cross_origin_isolation.test.ts
 
@@ -123,12 +123,12 @@ function buildDb(featureValue?: string) {
 
 // ---------------------------------------------------------------------------
 // App builder — mounts the middleware in front of two routes:
-//   GET /ping       → vanilla response (covers the default CORP path)
-//   GET /share/:id  → simulates the public share route (registered on the
-//                     bare app, same as production index.ts), so we verify
-//                     the share path inherits the headers.
-//   GET /cors-ext   → a hypothetical handler that opts into CORP=cross-origin
-//                     before middleware runs (Part F precedent).
+//   GET /ping     → vanilla response (covers the default CORP path)
+//  GET /share/:id → simulates the public share route (registered on the
+//                   bare app, same as production index.ts), so we verify
+//                   the share path inherits the headers.
+//   GET /cors-ext → a hypothetical handler that opts into CORP=cross-origin
+//                   before middleware runs (Part F precedent).
 // ---------------------------------------------------------------------------
 function makeApp(env: { DB: unknown; KV: unknown }) {
   const app = new Hono();

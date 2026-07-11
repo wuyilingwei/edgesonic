@@ -14,10 +14,10 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-//   GET    /rest/getInternetRadioStations         (any authed user)
-//   GET/POST /rest/createInternetRadioStation     (manage_radio)
-//   GET/POST /rest/updateInternetRadioStation     (manage_radio)
-//   GET/POST /rest/deleteInternetRadioStation     (manage_radio)
+//   GET    /rest/getInternetRadioStations       (any authed user)
+//   GET/POST /rest/createInternetRadioStation   (manage_radio)
+//   GET/POST /rest/updateInternetRadioStation   (manage_radio)
+//   GET/POST /rest/deleteInternetRadioStation   (manage_radio)
 // All four are reached through authFetch with query params — backend supports
 // both GET and POST (form-encoded). GET keeps the call sites readable and
 // avoids having to switch to multipart for the optional homepageUrl field.
@@ -192,7 +192,7 @@ onMounted(load);
         :class="showForm ? 'btn-secondary' : 'btn-primary'"
         @click="showForm = !showForm"
       >
-        {{ showForm ? t("common.cancel") : t("radio.add") }}
+       {{ showForm ? t("common.cancel") : t("radio.add") }}
       </button>
     </div>
 

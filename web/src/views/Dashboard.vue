@@ -86,22 +86,22 @@ async function saveFreeAlloc() {
 }
 const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year: string }>>([]);
 
-//   "ok"            — schedules present (no banner)
-//   "empty"         — CF responded ok with schedules=[] (the bug we warn about)
-//   "unconfigured"  — CF_API_TOKEN/CF_ACCOUNT_ID missing (info, not error)
-//   "error"         — getCron returned an unexpected failure; we stay quiet
-//                     here because the Dashboard isn't the place to surface
-//                     CF upstream errors (Settings does that).
-//   "checking"      — initial state before the request resolves
+//   "ok"          — schedules present (no banner)
+//   "empty"       — CF responded ok with schedules=[] (the bug we warn about)
+//  "unconfigured" — CF_API_TOKEN/CF_ACCOUNT_ID missing (info, not error)
+//   "error"       — getCron returned an unexpected failure; we stay quiet
+//                   here because the Dashboard isn't the place to surface
+//                   CF upstream errors (Settings does that).
+//   "checking"    — initial state before the request resolves
 type CronStatus = "checking" | "ok" | "empty" | "unconfigured" | "error";
 const cronStatus = ref<CronStatus>("checking");
 
 // inactive (flag off or secrets missing), explaining that R2 streams go
 // through the Worker and may be speed-limited. Three modes:
-//   "active"        — flag on + secrets set (no banner; presign is working)
-//   "inactive"      — flag off OR secrets missing (show "may be slow" hint)
-//   "checking"      — initial state before the request resolves
-//   "error"         — fetch failed (stay quiet; Settings is the debug surface)
+//   "active"      — flag on + secrets set (no banner; presign is working)
+//   "inactive"    — flag off OR secrets missing (show "may be slow" hint)
+//   "checking"    — initial state before the request resolves
+//   "error"       — fetch failed (stay quiet; Settings is the debug surface)
 type R2PresignStatus = "checking" | "active" | "inactive" | "error";
 const r2presignStatus = ref<R2PresignStatus>("checking");
 
@@ -347,7 +347,7 @@ onMounted(async () => {
     if (sourceXml) {
       stats.value.sources = parseXmlAttrs(sourceXml, "source").length;
     }
-    // 072 — /edgesonic/users/list is now JSON; older XML path stayed only
+    // /edgesonic/users/list is now JSON; older XML path stayed only
     // because Dashboard used parseXmlAttrs to count rows. JSON.parse-and-count
     // here mirrors the new Users.vue load().
     if (userXml) {
@@ -364,7 +364,7 @@ onMounted(async () => {
   }
   cronStatus.value = "ok";
   r2presignStatus.value = "active";
-  // 110 — version info + update check (all users)
+  // version info + update check (all users)
   void loadVersionInfo();
 });
 
@@ -385,7 +385,7 @@ onUnmounted(() => {
       </span>
     </div>
 
-    <!-- 083 — System Activity (super-admin only). Sits BEFORE stats because it's
+    <!-- System Activity (super-admin only). Sits BEFORE stats because it's
          actionable (failed tasks, stale claims) while the stats cards are
          informational. The 080 cron warning lives inside this section so all
          operational signals cluster instead of stacking down the page. -->
@@ -394,12 +394,12 @@ onUnmounted(() => {
         <span class="mono-label">{{ t("dashboard.systemActivity.label") }}</span>
       </div>
 
-      <!-- 080 — Cron missing warning. -->
+      <!-- Cron missing warning. -->
       <div
         v-if="cronStatus === 'empty'"
         class="cron-warning-card"
       >
-        <div class="cron-warning-icon">⚠</div>
+       <div class="cron-warning-icon">⚠</div>
         <div class="cron-warning-body">
           <div class="cron-warning-title">{{ t("dashboard.cronWarning.title") }}</div>
           <p class="cron-warning-message">{{ t("dashboard.cronWarning.message") }}</p>
@@ -417,7 +417,7 @@ onUnmounted(() => {
         v-else-if="cronStatus === 'unconfigured'"
         class="cron-warning-card cron-warning-info"
       >
-        <div class="cron-warning-icon">ⓘ</div>
+       <div class="cron-warning-icon">ⓘ</div>
         <div class="cron-warning-body">
           <div class="cron-warning-title">{{ t("dashboard.cronWarning.unconfiguredTitle") }}</div>
           <p class="cron-warning-message">{{ t("dashboard.cronWarning.unconfiguredMessage") }}</p>
@@ -429,12 +429,12 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 091 — R2 presign inactive hint. -->
+      <!-- R2 presign inactive hint. -->
       <div
         v-if="r2presignStatus === 'inactive'"
         class="cron-warning-card cron-warning-info"
       >
-        <div class="cron-warning-icon">ⓘ</div>
+       <div class="cron-warning-icon">ⓘ</div>
         <div class="cron-warning-body">
           <div class="cron-warning-title">{{ t("dashboard.r2Presign.title") }}</div>
           <p class="cron-warning-message">{{ t("dashboard.r2Presign.message") }}</p>
@@ -446,8 +446,8 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- 110 — Work pool + scan status moved to Tools page. -->
-      <!-- 110 — Storage + R2 cost moved to Tools page. -->
+      <!-- Work pool + scan status moved to Tools page. -->
+      <!-- Storage + R2 cost moved to Tools page. -->
     </section>
 
     <!-- Stats -->
@@ -520,7 +520,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 110 — Storage & R2 Cost Estimation moved to Tools page. -->
+    <!-- Storage & R2 Cost Estimation moved to Tools page. -->
   </div>
 </template>
 
@@ -572,7 +572,7 @@ onUnmounted(() => {
 .update-link:hover { text-decoration: underline; }
 .update-current { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); }
 
-/* 080 — Cron warning banner. Orange/amber accent for the "empty schedules"
+/* Cron warning banner. Orange/amber accent for the "empty schedules"
    case (an actionable problem), muted/info accent for the "CF unconfigured"
    case (informational, not blocking). */
 .cron-warning-card {
@@ -618,7 +618,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
 }
 
-/* 083 — System activity (super-admin only). Sits above the 4 stat cards;
+/* System activity (super-admin only). Sits above the 4 stat cards;
    work-pool + scan-status share a vertical stack so a tall failed list
    doesn't shove the scan row off to a side column. */
 .system-activity {

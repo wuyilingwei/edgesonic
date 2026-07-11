@@ -15,15 +15,15 @@
 
 //
 // Coverage:
-//   1. dispatchWork → row appears in queue with correct caps/payload
-//   2. dispatchWorkBatch → many rows in one D1 batch call
-//   3. /work/poll atomic claim (RETURNING)
-//   4. /work/poll caps filter — task with required_caps the caller lacks is NOT returned
-//   5. /work/submit success path → status='completed', result_json stored
-//   6. /work/submit error path — attempts left → re-queued ; exhausted → failed
-//   7. /work/heartbeat updates heartbeat_at on the claimed row only
-//   8. /work/cancel marks row canceled
-//   9. reclaimStaleWork puts heartbeat-aged claims back to queued (or failed when attempts exhausted)
+//  1. dispatchWork → row appears in queue with correct caps/payload
+//  2. dispatchWorkBatch → many rows in one D1 batch call
+//  3. /work/poll atomic claim (RETURNING)
+//  4. /work/poll caps filter — task with required_caps the caller lacks is NOT returned
+//  5. /work/submit success path → status='completed', result_json stored
+//  6. /work/submit error path — attempts left → re-queued ; exhausted → failed
+//  7. /work/heartbeat updates heartbeat_at on the claimed row only
+//  8. /work/cancel marks row canceled
+//  9. reclaimStaleWork puts heartbeat-aged claims back to queued (or failed when attempts exhausted)
 //
 // Run: npx tsx test/work_queue.test.ts
 

@@ -22,11 +22,11 @@
 // Reference: https://developers.cloudflare.com/r2/api/s3/presigned-urls/
 //
 // Required env (Workers Secrets, NOT in wrangler.toml vars):
-//   R2_ACCESS_KEY_ID     — S3 access key (R2 → Manage R2 API Tokens → Create)
-//   R2_SECRET_ACCESS_KEY — S3 secret key
-//   CF_ACCOUNT_ID        — Cloudflare account id (reused from 054 Cloudflare
-//                           integration; pushed via Settings UI or
-//                           `wrangler secret put CF_ACCOUNT_ID`)
+//   R2_ACCESS_KEY_ID   — S3 access key (R2 → Manage R2 API Tokens → Create)
+//  R2_SECRET_ACCESS_KEY — S3 secret key
+//   CF_ACCOUNT_ID      — Cloudflare account id (reused from 054 Cloudflare
+//                         integration; pushed via Settings UI or
+//                         `wrangler secret put CF_ACCOUNT_ID`)
 //
 // Region is hardcoded to "auto" — R2 ignores the region but SigV4 requires one.
 //
@@ -52,7 +52,7 @@ export interface PresignOpts {
 /**
  * Build a presigned R2 S3 GET URL with SigV4. The signature is in the query
  * string, so the browser can fetch it without any extra headers. If
- * `rangeHeader` is supplied, `range` is added to the signed headers list —
+ * `rangeHeader` is supplied, `range` is added to the signed headers list
  * the browser will include the same Range header on the redirected request
  * only if it was the one initiating the fetch with Range (which it does for
  * media). We sign it so R2 won't reject the request as a tampered header.

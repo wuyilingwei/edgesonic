@@ -122,7 +122,7 @@ async function runMetadata(payload: Record<string, unknown>): Promise<unknown> {
   // can't fetch those directly — but the /rest/stream endpoint resolves the
   // URI server-side using the same instanceId. To stay storage-agnostic we
   // request the first 512KB via stream which honours Range headers (023).
-  // The session signing is added by the main thread before postMessage —
+  // The session signing is added by the main thread before postMessage
   // see stores/workerPool.ts buildStreamUrl().
   const streamUrl = String(payload.streamUrl || "");
   if (!streamUrl) throw new Error("metadata task missing streamUrl (main thread should populate)");

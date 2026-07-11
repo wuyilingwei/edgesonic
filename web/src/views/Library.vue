@@ -52,7 +52,7 @@ const albumOffset = ref(0);
 const albumsDone = ref(false);
 
 // === Songs tab (paged flat list over the whole library) ===
-// 122 — bumped from 500 to 1000 per Rosmontis ("默认拉取1k"): the list is a
+// bumped from 500 to 1000 per ("默认拉取1k"): the list is a
 // flat alphabetical dump so larger pages both cut the number of round-trips
 // and make the load-more IntersectionObserver less trigger-happy on arrival.
 const SONG_PAGE = 1000;
@@ -63,7 +63,7 @@ const songsDone = ref(false);
 // IntersectionObserver sentinel elements for the two paged tabs. A single
 // observer watches whichever sentinel is currently in the DOM (only one is
 // visible at a time since tabs are v-if mutually exclusive); hitting it with
-// root=viewport triggers the matching loadMore automatically — Rosmontis no
+// root=viewport triggers the matching loadMore automatically
 // longer has to click "加载更多" by hand.
 const songListEnd = ref<HTMLElement | null>(null);
 const albumListEnd = ref<HTMLElement | null>(null);
@@ -402,14 +402,14 @@ onMounted(() => {
   else if (tab.value === "albums") loadMoreAlbums();
   else loadMoreSongs();
   setTimeout(() => { songsHintFaded.value = true; }, 5000);
-  // 122 — set up the infinite-scroll observer now that the first sentinel
+  // set up the infinite-scroll observer now that the first sentinel
   // (songs tab, the default) is in the DOM. switchTab's watch below
   // re-observes whichever sentinel becomes live when the user picks a
   // different tab.
   setupObserver();
 });
 
-// 122 — re-observe the new tab's sentinel after switchTab inserts it. Vue
+// re-observe the new tab's sentinel after switchTab inserts it. Vue
 // updates the ref before `nextTick` resolves, so by the time this watch
 // fires the sentinel is mounted and `io.observe` can take effect.
 watch(() => tab.value, () => {
@@ -649,7 +649,7 @@ async function submitCreateAndAdd() {
         :class="{ playing: player.current?.id === s.id }"
         @click="playSong(i)"
       >
-        <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
+       <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
         <span class="song-title">{{ s.title }}</span>
         <span class="song-artist">{{ s.artist }}</span>
         <span class="song-time">{{ formatDuration(s.duration) }}</span>
@@ -726,7 +726,7 @@ async function submitCreateAndAdd() {
       </div>
       <div class="load-more">
         <span v-if="loading" class="mono-label">{{ t("common.loading") }}</span>
-        <!-- 122 — invisible IntersectionObserver sentinel replaces the
+        <!-- invisible IntersectionObserver sentinel replaces the
              manual "加载更多" button. Pulled into the viewport by the
              album grid's natural flow when the user scrolls near the end;
              the observer fires loadMoreAlbums automatically. -->
@@ -791,7 +791,7 @@ async function submitCreateAndAdd() {
           :class="{ playing: player.current?.id === s.id, selected: selectedSet.has(s.id) }"
           @click="playFromAll(i)"
         >
-          <input
+         <input
             v-if="isAdmin && editMode"
             type="checkbox"
             class="row-check"
@@ -814,7 +814,7 @@ async function submitCreateAndAdd() {
       </div>
       <div class="load-more">
         <span v-if="loading" class="mono-label">{{ t("common.loading") }}</span>
-        <!-- 122 — infinite-scroll sentinel (see album tab sibling). -->
+        <!-- infinite-scroll sentinel (see album tab sibling). -->
         <div ref="songListEnd" class="scroll-sentinel" data-kind="songs" aria-hidden="true"></div>
       </div>
     </div>
@@ -830,7 +830,7 @@ async function submitCreateAndAdd() {
       @submit="onEditorSubmit"
       @close="closeEditor"
     >
-      <!-- 040: scrape button in extras slot. Single-mode only; batch UX has no
+     <!-- 040: scrape button in extras slot. Single-mode only; batch UX has no
            obvious "one master query" so we hide the button there. -->
       <template v-if="editorMode === 'single'" #extras="{ form, apply }">
         <ScrapeButton
@@ -911,7 +911,7 @@ async function submitCreateAndAdd() {
               class="add-playlist-row"
               @click="addSongToPlaylist(p.id)"
             >
-              <span class="add-playlist-name">{{ p.name }}</span>
+             <span class="add-playlist-name">{{ p.name }}</span>
               <span class="mono-label">{{ p.songCount }} ♪</span>
             </div>
           </div>
@@ -965,7 +965,7 @@ async function submitCreateAndAdd() {
 .view-tab.active { color: var(--color-accent-primary); border-bottom-color: var(--color-accent-primary); }
 
 .load-more { display: flex; justify-content: center; padding: 1.25rem 0 0.5rem; }
-/* 122 — invisible IntersectionObserver sentinel: must occupy vertical space
+/* invisible IntersectionObserver sentinel: must occupy vertical space
    inside the scroll flow so the observer can see it approach the viewport.
    1px tall is enough; a tiny margin keeps it clear of grid/table borders. */
 .scroll-sentinel { width: 1px; height: 1px; margin: 0; padding: 0; }

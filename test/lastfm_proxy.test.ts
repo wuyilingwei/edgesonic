@@ -16,10 +16,10 @@
 // /rest/getSimilarSongs[2], /rest/getTopSongs.
 //
 // Strategy mirrors test/scrape.test.ts:
-//   * In-memory SQLite shimmed as D1.
-//   * Hono harness for routing (info endpoints carry no auth middleware).
-//   * In-memory KV stub so we can verify the 24h cache layer.
-//   * Stubbed global fetch so we never hit ws.audioscrobbler.com.
+//  * In-memory SQLite shimmed as D1.
+//  * Hono harness for routing (info endpoints carry no auth middleware).
+//  * In-memory KV stub so we can verify the 24h cache layer.
+//  * Stubbed global fetch so we never hit ws.audioscrobbler.com.
 //
 // Run: npx tsx test/lastfm_proxy.test.ts
 

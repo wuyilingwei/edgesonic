@@ -50,11 +50,11 @@ export function listProfiles(): TranscodeProfile[] {
 // binary so callers can choose to spawn directly or send to a remote API.
 //
 // Layout:
-//   -hide_banner -loglevel error -i pipe:0
-//   -vn -sn -dn           (drop video/subtitle/data tracks)
-//   -c:a <codec>
-//   [-b:a <bitrate>k]     (omitted for lossless flac)
-//   -f <format> pipe:1
+//  -hide_banner -loglevel error -i pipe:0
+//   -vn -sn -dn         (drop video/subtitle/data tracks)
+//  -c:a <codec>
+//   [-b:a <bitrate>k]   (omitted for lossless flac)
+//  -f <format> pipe:1
 export function buildFfmpegArgs(profile: TranscodeProfile): string[] {
   const args = [
     "-hide_banner",

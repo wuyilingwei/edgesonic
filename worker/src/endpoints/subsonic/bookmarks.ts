@@ -15,11 +15,11 @@
 
 // ============================================================================
 // ----------------------------------------------------------------------------
-//   GET/POST /rest/getBookmarks(.view)        → list current user's bookmarks
-//   GET/POST /rest/createBookmark(.view)      → upsert (id, position, comment?)
-//   GET/POST /rest/deleteBookmark(.view)      → drop (id)
-//   GET/POST /rest/getPlayQueue(.view)        → fetch saved play queue
-//   GET/POST /rest/savePlayQueue(.view)       → save (id*, current?, position?)
+//   GET/POST /rest/getBookmarks(.view)      → list current user's bookmarks
+//   GET/POST /rest/createBookmark(.view)    → upsert (id, position, comment?)
+//   GET/POST /rest/deleteBookmark(.view)    → drop (id)
+//   GET/POST /rest/getPlayQueue(.view)      → fetch saved play queue
+//   GET/POST /rest/savePlayQueue(.view)     → save (id*, current?, position?)
 // Last-write-wins semantics; no cross-device merge.
 // ============================================================================
 
@@ -139,7 +139,7 @@ const getBookmarksHandler = async (c: Context<{ Bindings: Env; Variables: { user
 
 // ============================================================================
 // /rest/createBookmark — upsert
-//   Params: id (song_master_id), position (ms), comment?
+//  Params: id (song_master_id), position (ms), comment?
 // ============================================================================
 const createBookmarkHandler = async (c: Context<{ Bindings: Env; Variables: { user: User } }>) => {
   const user = c.get("user");
@@ -171,7 +171,7 @@ const createBookmarkHandler = async (c: Context<{ Bindings: Env; Variables: { us
 
 // ============================================================================
 // /rest/deleteBookmark — drop by song id
-//   Params: id (song_master_id)
+//  Params: id (song_master_id)
 // ============================================================================
 const deleteBookmarkHandler = async (c: Context<{ Bindings: Env; Variables: { user: User } }>) => {
   const user = c.get("user");
@@ -230,7 +230,7 @@ const getPlayQueueHandler = async (c: Context<{ Bindings: Env; Variables: { user
 
 // ============================================================================
 // /rest/savePlayQueue — upsert
-//   Params: id (multi, queue order), current? (song id), position? (ms), c? (client)
+//  Params: id (multi, queue order), current? (song id), position? (ms), c? (client)
 // ============================================================================
 const savePlayQueueHandler = async (c: Context<{ Bindings: Env; Variables: { user: User } }>) => {
   const user = c.get("user");

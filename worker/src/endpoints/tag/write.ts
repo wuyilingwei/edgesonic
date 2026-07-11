@@ -73,7 +73,7 @@ interface ApplyResult {
 }
 
 // ============================================================================
-// POST /rest/writeTags  body: { id: <masterId|instanceId>, tags: SongTags }
+// POST /rest/writeTags body: { id: <masterId|instanceId>, tags: SongTags }
 // Single-song edit. The batch endpoint reuses applyTagsToSong below.
 // ============================================================================
 tagEditRoutes.post("/write", permissionMiddleware("edit_tags"), async (c) => {
@@ -110,7 +110,7 @@ tagEditRoutes.post("/write", permissionMiddleware("edit_tags"), async (c) => {
 });
 
 // ============================================================================
-// POST /rest/batchWriteTags  body: { ids: string[], patch: Partial<SongTags> }
+// POST /rest/batchWriteTags body: { ids: string[], patch: Partial<SongTags> }
 // Applies the same tag patch to up to BATCH_MAX songs; per-song results.
 // ============================================================================
 tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) => {
@@ -170,7 +170,7 @@ tagEditRoutes.post("/batchWrite", permissionMiddleware("edit_tags"), async (c) =
 });
 
 // ============================================================================
-// POST /tag/rescan  body: { ids: string[] }
+// POST /tag/rescan body: { ids: string[] }
 // Library.vue batch toolbar "重新扫描" action. For each master id,
 // resets tag_scanned=0 on its 'original' instances (transcoded/cached
 // derivatives are skipped — re-reading a transcode output's tags is
@@ -355,11 +355,11 @@ async function applyTagsToSong(
   const now = Math.floor(Date.now() / 1000);
   const oldAlbumId = master.album_id;
 
-  //   `{null}` → explicit UPDATE lyrics = NULL (separate stmt below)
-  //   `{write}` → D1 unchanged; tags.lyrics now holds master.lyrics so the
-  //               COALESCE path writes the same value back (no-op effectively)
-  //   `{export}` → D1 unchanged (handled above, sidecar only)
-  //   normal string → COALESCE path (existing behaviour)
+  //  `{null}` → explicit UPDATE lyrics = NULL (separate stmt below)
+  //  `{write}` → D1 unchanged; tags.lyrics now holds master.lyrics so the
+  //             COALESCE path writes the same value back (no-op effectively)
+  //  `{export}` → D1 unchanged (handled above, sidecar only)
+  //  normal string → COALESCE path (existing behaviour)
   const lyricsNull = lyricsKeyword === KW_NULL;
 
   await db.batch([

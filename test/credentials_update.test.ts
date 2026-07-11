@@ -20,13 +20,13 @@
 // silently succeeding.
 //
 // Coverage:
-//   1. Own credential, valid label → 200 ok, label persisted.
-//   2. Empty string label → 200 ok, label cleared.
-//   3. Someone else's credential → 404 (no row matched).
-//   4. Missing id → 400.
-//   5. Missing label (undefined) → 400.
-//   6. label > 200 chars → 400.
-//   7. Unknown id (even for own user) → 404.
+//  1. Own credential, valid label → 200 ok, label persisted.
+//  2. Empty string label → 200 ok, label cleared.
+//  3. Someone else's credential → 404 (no row matched).
+//  4. Missing id → 400.
+//  5. Missing label (undefined) → 400.
+//  6. label > 200 chars → 400.
+//  7. Unknown id (even for own user) → 404.
 //
 // The test mounts edgesonicAuthRoutes under /edgesonic, sets c.user inline
 // (skipping the real authMiddleware), and stubs permissionMiddleware via a

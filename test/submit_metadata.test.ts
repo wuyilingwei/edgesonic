@@ -15,11 +15,11 @@
 
 //
 // Same shape as test/batch_write_tags.test.ts:
-//   * In-memory SQLite shimmed as D1 + real metadataRoutes
-//   * Hono harness injects a session-auth admin user so permissionMiddleware
-//     for "edit_tags" / "manage_sources" sees the seeded permission rows.
-//   * No R2 / no WebDAV — the endpoint never touches them anyway (041 is the
-//     "browser parsed everything, just record it" path).
+//  * In-memory SQLite shimmed as D1 + real metadataRoutes
+//  * Hono harness injects a session-auth admin user so permissionMiddleware
+//   for "edit_tags" / "manage_sources" sees the seeded permission rows.
+//  * No R2 / no WebDAV — the endpoint never touches them anyway (041 is the
+//   "browser parsed everything, just record it" path).
 //
 // Run: npx tsx test/submit_metadata.test.ts
 
@@ -227,7 +227,7 @@ console.log("happy path: existing instance + full tags:");
   assert(sm.duration === 240, "master duration updated");
   assert(sm.artist_id === body.artistId, "master.artist_id relinked");
   assert(sm.album_id === body.albumId, "master.album_id relinked");
-  assert(sm.lyrics === "la la la", "109 — lyrics persisted alongside the logical relink");
+  assert(sm.lyrics === "la la la", "lyrics persisted alongside the logical relink");
 
   // D1: song_instances physical params + tag_scanned
   const si = sqlite.prepare("SELECT * FROM song_instances WHERE id='inst-1'").get() as any;
@@ -312,7 +312,7 @@ console.log("missing body / missing tags → 400:");
   });
   assert(r4.status === 200, `lyrics-only submission → 200 (got ${r4.status})`);
   const sm4 = sqlite.prepare("SELECT lyrics FROM song_masters WHERE id='sg-1'").get() as any;
-  assert(sm4.lyrics === "lyrics-only submission", "109 — lyrics-only submission persists lyrics");
+  assert(sm4.lyrics === "lyrics-only submission", "lyrics-only submission persists lyrics");
 }
 
 console.log("findInstanceByUri: exact uri match:");

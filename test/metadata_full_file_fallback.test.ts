@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Rosmontis follow-up on 123 (WAV cover/metadata fix): "没找到信息的情况下所有格式都应该
+// follow-up on 123 (WAV cover/metadata fix): "没找到信息的情况下所有格式都应该
 // 拉取全歌找确认没有任何元信息字段" — when the head(+tail) scan window finds nothing, ALL
 // formats (not just WAV) should fall back to fetching the entire file before concluding it
 // truly has no metadata. A partial window can miss tags parked somewhere neither head nor

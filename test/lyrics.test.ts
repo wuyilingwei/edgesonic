@@ -15,14 +15,14 @@
 
 //
 // Coverage:
-//   1. getLyrics — D1 hit (song_masters.lyrics populated) → returns XML with
-//      both attributes + text body, never touches external fetch.
-//   2. getLyrics — D1 miss, external NetEase stub returns lyric → endpoint
-//      returns body AND song_masters.lyrics is filled.
-//   3. getLyrics — both D1 and external miss → 200 with empty <lyrics/>.
-//   4. getLyrics — missing both query params → 200 empty (Subsonic spec).
-//   5. getLyricsBySongId — D1 miss → external hit → OpenSubsonic lyricsList.
-//   6. getLyricsBySongId — id not found → 404 Subsonic error.
+//  1. getLyrics — D1 hit (song_masters.lyrics populated) → returns XML with
+//    both attributes + text body, never touches external fetch.
+//  2. getLyrics — D1 miss, external NetEase stub returns lyric → endpoint
+//    returns body AND song_masters.lyrics is filled.
+//  3. getLyrics — both D1 and external miss → 200 with empty <lyrics/>.
+//  4. getLyrics — missing both query params → 200 empty (Subsonic spec).
+//  5. getLyricsBySongId — D1 miss → external hit → OpenSubsonic lyricsList.
+//  6. getLyricsBySongId — id not found → 404 Subsonic error.
 //
 // Run: npx tsx test/lyrics.test.ts
 

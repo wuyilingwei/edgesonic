@@ -17,12 +17,12 @@
 // Run: npx tsx test/podcasts.test.ts
 // ----------------------------------------------------------------------------
 // Strategy mirrors test/lastfm_proxy.test.ts:
-//   * In-memory node:sqlite DatabaseSync shimmed as D1.
-//   * Hono harness that mounts podcastsRoutes only (auth bypassed for tests).
-//     We pre-`c.set('user', ...)` via a tiny middleware because podcast
-//     handlers grab the user from context.
-//   * Stubbed globalThis.fetch for RSS + R2 download paths.
-//   * In-memory R2 bucket: tracks put / delete keys + payloads.
+//  * In-memory node:sqlite DatabaseSync shimmed as D1.
+//  * Hono harness that mounts podcastsRoutes only (auth bypassed for tests).
+//   We pre-`c.set('user', ...)` via a tiny middleware because podcast
+//   handlers grab the user from context.
+//  * Stubbed globalThis.fetch for RSS + R2 download paths.
+//  * In-memory R2 bucket: tracks put / delete keys + payloads.
 // ============================================================================
 
 import { DatabaseSync } from "node:sqlite";

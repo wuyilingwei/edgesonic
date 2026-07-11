@@ -15,24 +15,24 @@
 
 //
 // Routes:
-//   - GET/POST /rest/getOpenSubsonicExtensions  (no auth — declared in auth.ts NO_AUTH_PATHS)
-//   - GET/POST /rest/tokenInfo                  (any auth → echoes current user)
+//  - GET/POST /rest/getOpenSubsonicExtensions (no auth — declared in auth.ts NO_AUTH_PATHS)
+//   - GET/POST /rest/tokenInfo                (any auth → echoes current user)
 //
 // Each is also exposed at `.view` so native Subsonic clients (Symfonium, DSub,
 // Navidrome web, etc.) hit them. POST registrations satisfy our self-declared
 // `formPost` extension.
 //
 // We ONLY advertise extensions EdgeSonic actually implements:
-//   * apiKeyAuthentication v1 — auth.ts supports `?apiKey=...` lookup via KV
-//   * tokenInfo v1            — this file
-//   * formPost v1             — all mutating Subsonic endpoints accept POST
-//   * songLyrics v1           — 108: getLyricsBySongId emits spec-shaped
-//     structuredLyrics ({start,value} lines); clients only call it when the
-//     extension is advertised, which is why lyrics never showed in players.
+//  * apiKeyAuthentication v1 — auth.ts supports `?apiKey=...` lookup via KV
+//   * tokenInfo v1          — this file
+//   * formPost v1           — all mutating Subsonic endpoints accept POST
+//   * songLyrics v1         — 108: getLyricsBySongId emits spec-shaped
+//   structuredLyrics ({start,value} lines); clients only call it when the
+//   extension is advertised, which is why lyrics never showed in players.
 //
 // NOT advertised (kept honest):
-//   * transcodeOffset  — 036
-//   * indexBasedQueue  — no client implementation yet
+//  * transcodeOffset — 036
+//  * indexBasedQueue — no client implementation yet
 
 import { Hono } from "hono";
 import { subsonicOK } from "../../utils/xml";

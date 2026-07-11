@@ -19,12 +19,12 @@
 // that the `minLevel()` reverse-pattern function was removed from auth.ts.
 //
 // Coverage:
-//   1. hasPermission helper round-trips (enabled row / disabled row / missing)
-//   2. maintenance.* endpoints — L3 with permission → pass, L2 without → 403
-//   3. cf.ts route-level middleware — L3 with manage_cloudflare → pass, L2
-//      without → 403
-//   4. auth.ts no longer exports minLevel — drift guard against accidental
-//      reintroduction (we lint the source text since the function is removed)
+//  1. hasPermission helper round-trips (enabled row / disabled row / missing)
+//  2. maintenance.* endpoints — L3 with permission → pass, L2 without → 403
+//  3. cf.ts route-level middleware — L3 with manage_cloudflare → pass, L2
+//    without → 403
+//  4. auth.ts no longer exports minLevel — drift guard against accidental
+//    reintroduction (we lint the source text since the function is removed)
 //
 // Run: npx tsx test/permission_model_compliance.test.ts
 

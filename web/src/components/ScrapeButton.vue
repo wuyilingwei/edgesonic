@@ -18,10 +18,10 @@
 // result back to the parent. Lives inside TagEditor's `#extras` slot (task 040).
 //
 // Flow:
-//   1. user clicks "Scrape metadata" → searchAll() against enabled sources
-//   2. result panel opens; user picks a row
-//   3. emit('apply', result) → parent (TagEditor host) merges fields into form
-//   4. parent also calls submitResult() to leave an audit row (status='applied')
+//  1. user clicks "Scrape metadata" → searchAll() against enabled sources
+//  2. result panel opens; user picks a row
+//  3. emit('apply', result) → parent (TagEditor host) merges fields into form
+//  4. parent also calls submitResult() to leave an audit row (status='applied')
 //
 // The component is dumb about WHERE the form fields live: it only emits the
 // chosen ScrapeResult. ts/Library.vue + Files.vue own the merge logic.

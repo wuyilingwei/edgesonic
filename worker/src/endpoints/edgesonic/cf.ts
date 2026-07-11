@@ -17,25 +17,25 @@
 // All endpoints live under /edgesonic/cf/* (web-session-only via the
 // /edgesonic prefix in auth.ts). Authorisation:
 //
-//   POST /edgesonic/cf/setToken      — level=3
-//   GET  /edgesonic/cf/getStatus     — level=3
-//   GET  /edgesonic/cf/testConn      — level=3
-//   POST /edgesonic/cf/setCron       — level=3
-//   GET  /edgesonic/cf/getCron       — level=3
-//   GET  /edgesonic/cf/getAnalytics  — level=3
+//   POST /edgesonic/cf/setToken    — level=3
+//   GET  /edgesonic/cf/getStatus   — level=3
+//   GET  /edgesonic/cf/testConn    — level=3
+//   POST /edgesonic/cf/setCron     — level=3
+//   GET  /edgesonic/cf/getCron     — level=3
+//   GET /edgesonic/cf/getAnalytics — level=3
 //
-// Design notes (per Rosmontis 054 brief):
-//   - Token storage is via Workers Secrets, NOT D1/KV encryption. We push the
-//     secret with CF API (PUT /accounts/{id}/workers/scripts/{name}/secrets).
-//   - "Fast update": admin POSTs new token here; the worker uses the *currently
-//     loaded* env.CF_API_TOKEN (the old one) — or the token in the request
-//     body when env is empty (bootstrap path) — to write the new secret. Next
-//     request's env.CF_API_TOKEN reflects the new value, no redeploy needed.
-//   - Cron schedules are managed dynamically too — wrangler.toml's `0 */1 * * *`
-//     is a static fallback. The Settings UI overrides it via setCron.
-//   - getAnalytics uses the Cloudflare GraphQL Analytics API for 24h rollups.
-//     We swallow GraphQL errors into a `{ available: false, error }` shape so
-//     the UI never crashes when the token lacks Account Analytics:Read.
+// Design notes (per 054 brief):
+//  - Token storage is via Workers Secrets, NOT D1/KV encryption. We push the
+//   secret with CF API (PUT /accounts/{id}/workers/scripts/{name}/secrets).
+//  - "Fast update": admin POSTs new token here; the worker uses the *currently
+//   loaded* env.CF_API_TOKEN (the old one) — or the token in the request
+//   body when env is empty (bootstrap path) — to write the new secret. Next
+//   request's env.CF_API_TOKEN reflects the new value, no redeploy needed.
+//  - Cron schedules are managed dynamically too — wrangler.toml's `0 */1 * * *`
+//   is a static fallback. The Settings UI overrides it via setCron.
+//  - getAnalytics uses the Cloudflare GraphQL Analytics API for 24h rollups.
+//   We swallow GraphQL errors into a `{ available: false, error }` shape so
+//   the UI never crashes when the token lacks Account Analytics:Read.
 
 import { Hono } from "hono";
 import type { User } from "../../types/entities";
@@ -304,10 +304,10 @@ cfRoutes.get("/cf/getCron", async (c) => {
 // cadence ("0 */1 * * *") only when the list is empty.
 //
 // Semantics:
-//   - schedules already non-empty → no-op, returns applied=false + the
-//     existing schedules so the UI can render what's live
-//   - schedules empty → PUT [{ cron: "0 */1 * * *" }], returns applied=true
-//     with the CF response (the new schedules list)
+//  - schedules already non-empty → no-op, returns applied=false + the
+//   existing schedules so the UI can render what's live
+//  - schedules empty → PUT [{ cron: "0 */1 * * *" }], returns applied=true
+//   with the CF response (the new schedules list)
 //
 // We never overwrite a user-customised cron. If the admin wants a different
 // frequency, they use the existing /cf/setCron form in Settings — this

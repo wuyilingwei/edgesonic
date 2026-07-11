@@ -20,12 +20,12 @@
 // returned tasks via the Web Worker entry in workers/taskExecutor.ts.
 //
 // Lifecycle:
-//   - login → start()  → set interval + immediately drain once
-//   - visibility hidden → stop() (browsers throttle setInterval anyway, but
-//                                  explicit stop saves us a noisy poll on
-//                                  reactivate when the cached interval is stale)
-//   - visibility visible → start() if enabled
-//   - logout → stop() + reset stats
+//  - login → start() → set interval + immediately drain once
+//  - visibility hidden → stop() (browsers throttle setInterval anyway, but
+//                                explicit stop saves us a noisy poll on
+//                                reactivate when the cached interval is stale)
+//  - visibility visible → start() if enabled
+//  - logout → stop() + reset stats
 //
 // Stats are live for the Settings UI. The current task type is shown so an
 // admin can confirm the pool is actually doing work.
@@ -53,7 +53,7 @@ interface PolledTask {
 }
 
 const STORAGE_KEY = "participate_work";
-// 122 — concurrency is now a *local-only* setting (per-browser). Saving
+// concurrency is now a *local-only* setting (per-browser). Saving
 // writes localStorage instead of POSTing to /features/updateString. When
 // unset, hydrateConfig falls back to the server-side feature_strings default
 // (the seeded `worker_max_concurrent` row preserves a sane global default).
@@ -74,7 +74,7 @@ const ERR_LIMIT = 500;
 /**
  *
  * Prefix carries enough context to grep work_queue.error_message rows:
- *   "[metadata:abcd1234] HTTP 503 from r2-stream"
+ *  "[metadata:abcd1234] HTTP 503 from r2-stream"
  *
  * The raw arg is intentionally `unknown` so callers can pass either Error
  * (from try/catch), ErrorEvent (from worker error listener), or a string
@@ -131,19 +131,19 @@ export const useWorkerPool = defineStore("workerPool", () => {
   const stats = ref({ completed: 0, failed: 0, currentTaskType: "", currentFileName: "" });
   const lastError = ref<string | null>(null);
   const lastPollAt = ref<number>(0);
-  // 089 S, refined 122 — true while the pool is paused because the player is
+  // 089 S, refined true while the pool is paused because the player is
   // actively streaming. watch() on player.playing flips this and calls stop()
   // / start(); the in-poll `effectiveConcurrent = 1` fallback stays as the belt
   // for tasks already in-flight when playback starts.
   const isPlaybackThrottled = ref(false);
 
   // - `recent` is a small FIFO ring (≤ 5) of just-finished tasks so the UI
-  //   can show task chips without re-querying the server.
+  //  can show task chips without re-querying the server.
   // - `completedSamples` powers the speed estimator: we push one entry per
-  //   completed/failed task and compute completions/min over the last 5min.
-  //   Memory cap is the SAMPLE_LIMIT below (older entries get dropped).
+  //  completed/failed task and compute completions/min over the last 5min.
+  //  Memory cap is the SAMPLE_LIMIT below (older entries get dropped).
   // - `isWorking` is true any time the pool is busy (either running a task
-  //   or mid-poll) so the HUD can hide itself when truly idle.
+  //  or mid-poll) so the HUD can hide itself when truly idle.
   interface RecentTask {
     id: string;
     taskType: string;
@@ -245,8 +245,8 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // ---------------------------------------------------------------------------
   // 093g — Self-scheduling timeout replaces fixed setInterval. After each
   // poll, next delay is chosen based on whether the queue had work:
-  //   - got tasks → FAST_POLL_MS (30s) for aggressive drain
-  //   - empty     → pollIntervalMs (configured, default 5min) for idle
+  //  - got tasks → FAST_POLL_MS (30s) for aggressive drain
+  //   - empty   → pollIntervalMs (configured, default 5min) for idle
   // This lets a 1000-task scan backlog drain in ~10 min instead of ~16 h,
   // without changing the idle behaviour that protects D1 from over-polling.
   let timeoutId: number | null = null;
@@ -477,7 +477,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     });
   }
 
-  // 122 — Playback auto-pause. Each metadata worker pulls up to 512KB from
+  // Playback auto-pause. Each metadata worker pulls up to 512KB from
   // /rest/stream; even with concurrency=1 those sub-requests compete with
   // the active player's own stream range requests for the R2 egress budget
   // and can cause audible stalls. Instead of just throttling concurrency,
@@ -549,7 +549,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     pollIntervalMs,
     // alongside pollIntervalMs without a separate fetch.
     maxConcurrent,
-    // 122 — local-only setter (writes localStorage, no server POST).
+    // local-only setter (writes localStorage, no server POST).
     setMaxConcurrent,
     // 089 S — playback-throttle indicator for the Settings UI.
     isPlaybackThrottled,

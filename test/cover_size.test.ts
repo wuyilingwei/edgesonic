@@ -15,18 +15,18 @@
 
 //
 // Strategy:
-//   * In-memory SQLite D1 shim with an `albums` row pre-baked.
-//   * R2 + KV map-backed shims that track every get/put so we can assert
-//     the sized-vs-original cache split.
-//   * Hono harness mounts mediaRoutes directly (no auth wrapper — getCoverArt
-//     is guest-allowed in auth.ts anyway).
+//  * In-memory SQLite D1 shim with an `albums` row pre-baked.
+//  * R2 + KV map-backed shims that track every get/put so we can assert
+//   the sized-vs-original cache split.
+//  * Hono harness mounts mediaRoutes directly (no auth wrapper — getCoverArt
+//   is guest-allowed in auth.ts anyway).
 //
 // Coverage:
-//   1. size=128 + R2 miss → bytes copied to covers/<id>_s128 → 200 with X-EdgeSonic-Cover-Cache: miss
-//   2. size=128 + R2 hit  → original key never touched, header reports hit
-//   3. no size param      → legacy path serves covers/<id>
-//   4. size=999 (not in allowlist) → treated as no size (legacy path)
-//   5. legacy path with no `cover_r2_key` and no on-demand source → 404
+//  1. size=128 + R2 miss → bytes copied to covers/<id>_s128 → 200 with X-EdgeSonic-Cover-Cache: miss
+//  2. size=128 + R2 hit → original key never touched, header reports hit
+//   3. no size param    → legacy path serves covers/<id>
+//  4. size=999 (not in allowlist) → treated as no size (legacy path)
+//  5. legacy path with no `cover_r2_key` and no on-demand source → 404
 //
 // Run: npx tsx test/cover_size.test.ts
 

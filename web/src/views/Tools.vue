@@ -51,10 +51,10 @@ const progressPct = computed(() => totalTasks.value > 0 ? Math.round((workCounts
 // browsers combined), same windowed-rate technique workerPool.ts uses for
 // its own (this-browser-only) speedPerMin. Local speed is exposed directly
 // by the store; this just adds the aggregate view alongside it.
-// 122 — switched from a noisy 5-min real-time window to a 15-min rolling
+// switched from a noisy 5-min real-time window to a 15-min rolling
 // average (SAMPLE_LIMIT 120 ~ 20 min of 10s status polls) so the number
 // stabilises instead of swinging with every batch. ETA uses the same
-// averaged speed but applies a 0.8 conservative coefficient — Rosmontis
+// averaged speed but applies a 0.8 conservative coefficient
 // wanted "拉长估算" rather than the instantaneous rate, so we deliberately
 // over-estimate remaining time by 25%. This accounts for the queue being
 // served in bursts (other browsers may pause, scans can re-queue) and
@@ -108,8 +108,8 @@ async function loadWorkStatus() {
   } catch { /* stay quiet */ }
 }
 
-// Concurrency knob — moved here from Settings (Rosmontis: "并发度等本机设置移动到工具中").
-// 122 — saving writes localStorage via workerPool.setMaxConcurrent (no server
+// Concurrency knob — moved here from Settings .
+// saving writes localStorage via workerPool.setMaxConcurrent (no server
 // POST). Concurrency only affects this browser's poll limit, so persisting
 // it server-side as a shared feature_string was both wasteful and misleading.
 const maxConcurrentInput = ref<number>(workerPool.maxConcurrent);
@@ -203,11 +203,11 @@ const migrateMode = ref<"clone" | "push">("clone");
 // when the upstream library is large.
 //
 // Stages run sequentially:
-//   1. metadata  — getAlbumList2 → getAlbum → upsertMaster per song
-//   2. audio     — (optional) stream → ingestAudio per song
-//   3. playlists — getPlaylists → getPlaylist → upsertPlaylist
-//   4. starred   — getStarred2 → upsertStarred
-//   5. users     — (admin upstream only) getUsers → upsertUser
+//  1. metadata — getAlbumList2 → getAlbum → upsertMaster per song
+//   2. audio   — (optional) stream → ingestAudio per song
+//  3. playlists — getPlaylists → getPlaylist → upsertPlaylist
+//   4. starred — getStarred2 → upsertStarred
+//   5. users   — (admin upstream only) getUsers → upsertUser
 //
 // Each stage exposes a reactive progress object so the UI can render
 // "X / Y" counters and a per-stage status pill.

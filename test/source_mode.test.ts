@@ -16,12 +16,12 @@
 // 089 S2 — Source mode tests.
 //
 // Covers:
-//   • sources/add validates mode (library | sync_only; invalid → 400)
-//   • sources/add default mode is 'library'
-//   • sources/update accepts mode change
-//   • sources/list emits mode attribute
-//   • asyncScanSource with mode='sync_only' skips artist/album/master/instance inserts
-//     but still increments added counter and updates last_sync
+//  • sources/add validates mode (library | sync_only; invalid → 400)
+//  • sources/add default mode is 'library'
+//  • sources/update accepts mode change
+//  • sources/list emits mode attribute
+//  • asyncScanSource with mode='sync_only' skips artist/album/master/instance inserts
+//   but still increments added counter and updates last_sync
 //
 // Run: npx tsx test/source_mode.test.ts
 

@@ -18,20 +18,20 @@
 // Self-contained regex parser (no fast-xml-parser dep) — covers the fields
 // Subsonic needs for getPodcasts / getPodcastEpisode:
 //
-//   channel.title / description / image (RSS or itunes:image) / language
-//   item.guid / title / description / pubDate / enclosure[url|length|type]
-//        / itunes:duration
+// channel.title / description / image (RSS or itunes:image) / language
+//  item.guid / title / description / pubDate / enclosure[url|length|type]
+//      / itunes:duration
 //
 // Strategy:
-//   1. Split the document into <channel>...</channel> and per-<item> blocks
-//      with bounded greedy regex.
-//   2. For each tag, allow:
-//        <tag>plain text</tag>
-//        <tag><![CDATA[ raw html ]]></tag>
-//        <tag attr="x" />          (enclosure / itunes:image)
-//        <ns:tag>value</ns:tag>    (itunes:* / atom:* prefixes)
-//   3. Unknown / malformed input falls back to null fields — never throws —
-//      because partial feeds still produce useful channel rows.
+//  1. Split the document into <channel>...</channel> and per-<item> blocks
+//    with bounded greedy regex.
+//  2. For each tag, allow:
+//      <tag>plain text</tag>
+//      <tag><![CDATA[ raw html ]]></tag>
+//        <tag attr="x" />        (enclosure / itunes:image)
+//        <ns:tag>value</ns:tag>  (itunes:* / atom:* prefixes)
+//  3. Unknown / malformed input falls back to null fields — never throws
+//    because partial feeds still produce useful channel rows.
 // ============================================================================
 
 export interface RssChannel {

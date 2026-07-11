@@ -17,20 +17,20 @@
 // TagEditor — reusable modal for single & batch tag edits (task 039).
 //
 // Slots
-//   #cover  : rendered above the form (task 042 will inject a drop-zone here).
-//   #extras : rendered between the form and the actions row
-//             (task 040 will inject a "scrape metadata" button here).
+//  #cover : rendered above the form (task 042 will inject a drop-zone here).
+//  #extras : rendered between the form and the actions row
+//           (task 040 will inject a "scrape metadata" button here).
 //
 // Caller wires up:
-//   - `mode`        : 'single' | 'batch'
-//   - `songIds`     : 1 id for single, N (<=50) for batch
-//   - `initialTags` : prefill values (only consulted in single mode)
+//   - `mode`      : 'single' | 'batch'
+//   - `songIds`   : 1 id for single, N (<=50) for batch
+//  - `initialTags` : prefill values (only consulted in single mode)
 //
 // Emits:
-//   - submit(patch) : object with only the fields the user wants written.
-//                     In batch mode, fields whose `apply` checkbox is OFF are
-//                     stripped, so the worker leaves them untouched.
-//   - close         : user clicked Cancel / backdrop.
+//  - submit(patch) : object with only the fields the user wants written.
+//                   In batch mode, fields whose `apply` checkbox is OFF are
+//                   stripped, so the worker leaves them untouched.
+//   - close       : user clicked Cancel / backdrop.
 //
 // Future tasks (040 scrape, 042 cover writeback) can extend the patch shape
 // via the same `submit` event — `disc/comment/lyrics` already have inputs but
@@ -355,7 +355,7 @@ function blobToBase64(blob: Blob): Promise<string> {
           @drop.prevent="onCoverDrop"
           @click="triggerCoverPick"
         >
-          <input
+         <input
             ref="coverInputEl"
             type="file"
             accept="image/jpeg,image/png,image/webp"

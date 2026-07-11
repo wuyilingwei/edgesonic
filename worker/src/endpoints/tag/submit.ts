@@ -16,19 +16,19 @@
 // ============================================================================
 // ----------------------------------------------------------------------------
 // 浏览器侧已经用 music-metadata 解析过一个本地音频文件，把解析结果发回来落 D1：
-//   * 用 instanceId 反查 master_id
-//   * 重链 artist/album（与 scanTags 派生方式一致：md5(name) 前 10 位）
-//   * 更新 song_masters 的逻辑字段
-//   * 更新 song_instances 的物理参数（bit_rate/sample_rate/channels/duration）
-//   * 标记 tag_scanned = 1
+//  * 用 instanceId 反查 master_id
+//  * 重链 artist/album（与 scanTags 派生方式一致：md5(name) 前 10 位）
+//  * 更新 song_masters 的逻辑字段
+//  * 更新 song_instances 的物理参数（bit_rate/sample_rate/channels/duration）
+//  * 标记 tag_scanned = 1
 //
 // 这里只做端点壳子：参数校验 → cleanInput → applyMetadataResult → 包成 041 既有响应。
 // 对调用方（Files 浏览器）签名 / 返回字段全部保持兼容。本文件保留两符号的 re-export
 // 给历史路径，避免外部代码迁移负担。
 //
 // 设计原则保持不变：
-//   * 不调用 worker/src/utils/tags.ts → 041 的核心动机就是节约 Workers CPU
-//   * 不复用 tagedit.applyTagsToSong → 那条路径会 rewriteInstance 强写文件，041 只落 D1
+//  * 不调用 worker/src/utils/tags.ts → 041 的核心动机就是节约 Workers CPU
+//  * 不复用 tagedit.applyTagsToSong → 那条路径会 rewriteInstance 强写文件，041 只落 D1
 // ============================================================================
 
 import { Hono } from "hono";

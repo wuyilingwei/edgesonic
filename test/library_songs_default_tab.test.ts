@@ -48,14 +48,14 @@ console.log("Library.vue default tab:");
   );
 
   // 2. No localStorage *reads* of the library_tab key — those are what made
-  //    the default stick to whatever the user last clicked.
+  //  the default stick to whatever the user last clicked.
   assert(
     !/localStorage\.getItem\(\s*["']edgesonic_library_tab["']/.test(SRC),
     "no localStorage.getItem for library_tab",
   );
 
   // 3. No localStorage *writes* of the library_tab key — switchTab must not
-  //    persist the choice. (Session-only switching is fine.)
+  //  persist the choice. (Session-only switching is fine.)
   assert(
     !/localStorage\.setItem\(\s*["']edgesonic_library_tab["']/.test(SRC),
     "no localStorage.setItem for library_tab",

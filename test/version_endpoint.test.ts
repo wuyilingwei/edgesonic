@@ -15,13 +15,13 @@
 
 //
 // Coverage:
-//   1. GET /edgesonic/version → 200 + ok:true + version=WORKER_VERSION value
-//   2. buildTime / startedAt are ISO-8601 strings (parseable Date)
-//   3. WORKER_VERSION unset → version falls back to "0"
-//   4. WORKER_VERSION present → echoed verbatim
-//   5. Two requests within the same isolate share startedAt (module-scope const)
-//   6. NO_AUTH_PATHS contains '/edgesonic/version' so unauthenticated callers
-//      reach the handler (sanity-check the auth allowlist wiring)
+//  1. GET /edgesonic/version → 200 + ok:true + version=WORKER_VERSION value
+//  2. buildTime / startedAt are ISO-8601 strings (parseable Date)
+//  3. WORKER_VERSION unset → version falls back to "0"
+//  4. WORKER_VERSION present → echoed verbatim
+//  5. Two requests within the same isolate share startedAt (module-scope const)
+//  6. NO_AUTH_PATHS contains '/edgesonic/version' so unauthenticated callers
+//    reach the handler (sanity-check the auth allowlist wiring)
 //
 // We mount versionRoutes directly under the same `/edgesonic` prefix the
 // production router uses (worker/src/endpoints/edgesonic/index.ts), no other
@@ -111,8 +111,8 @@ async function run() {
 
   // -------------------------------------------------------------------------
   // 4. NO_AUTH_PATHS contains /edgesonic/version — verify by reading auth.ts
-  //    source. We avoid importing the full auth module (which drags in
-  //    Cloudflare-only types) and just grep its source text instead.
+  //  source. We avoid importing the full auth module (which drags in
+  //  Cloudflare-only types) and just grep its source text instead.
   // -------------------------------------------------------------------------
   console.log("\nauth.ts allowlist:");
   {

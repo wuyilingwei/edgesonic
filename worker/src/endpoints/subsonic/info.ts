@@ -17,10 +17,10 @@
 // Task 043 鈥?Third-party metadata proxy (last.fm).
 //
 // Exposes the four Subsonic "info" endpoint families:
-//   getArtistInfo  / getArtistInfo2
-//   getAlbumInfo   / getAlbumInfo2
-//   getSimilarSongs / getSimilarSongs2
-//   getTopSongs
+//  getArtistInfo / getArtistInfo2
+//   getAlbumInfo / getAlbumInfo2
+//  getSimilarSongs / getSimilarSongs2
+//  getTopSongs
 //
 // All routes funnel through the last.fm client in worker/src/lib/lastfm.ts.
 // When the api_key feature is empty, the client throws LastfmUnconfigured and
@@ -277,15 +277,15 @@ async function similarSongsHandler(
 // getTopSongs (047 鈥?local-first, last.fm fallback)
 //
 // Strategy:
-//   1. D1 first: select up to `count` song_masters for this artist ranked by
-//      aggregated annotations.play_count DESC. This always runs, even when
-//      lastfm_api_key is unset.
-//   2. If we got fewer than `count`, ask last.fm for top tracks and reverse-
-//      lookup each one back to a local song_master. Skip rows already in the
-//      local list (dedupe by master id).
-//   3. last.fm being unconfigured is NOT an error here: we silently keep
-//      whatever the D1 step produced. Other last.fm fetch failures degrade
-//      the same way 鈥?partial result over no result.
+//  1. D1 first: select up to `count` song_masters for this artist ranked by
+//    aggregated annotations.play_count DESC. This always runs, even when
+//    lastfm_api_key is unset.
+//  2. If we got fewer than `count`, ask last.fm for top tracks and reverse-
+//    lookup each one back to a local song_master. Skip rows already in the
+//    local list (dedupe by master id).
+//  3. last.fm being unconfigured is NOT an error here: we silently keep
+//    whatever the D1 step produced. Other last.fm fetch failures degrade
+//    the same way 鈥?partial result over no result.
 // ---------------------------------------------------------------------------
 const getTopSongsHandler = async (c: Context): Promise<Response> => {
   const artist = c.req.query("artist");

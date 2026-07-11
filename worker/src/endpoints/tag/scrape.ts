@@ -22,16 +22,16 @@ import type { User } from "../../types/entities";
 // because they belong to the web-side admin surface — Subsonic clients have
 // no use for them.
 //
-//   POST /rest/scrapeMetadata        — proxy outbound fetch to external API
-//                                      (NetEase / QQ / Kugou) so the browser
-//                                      can bypass CORS + Referer checks.
-//   POST /rest/submitScrapeResult    — record one audit row in scrape_jobs.
-//                                      040 does NOT auto-apply: the result is
-//                                      pushed into TagEditor's form, then the
-//                                      user saves via the 037/039 writeTags
-//                                      chain. We just remember which result
-//                                      was chosen for which song.
-//   GET  /rest/getScrapeHistory      — paginated history for the calling user.
+//   POST /rest/scrapeMetadata      — proxy outbound fetch to external API
+//                                    (NetEase / QQ / Kugou) so the browser
+//                                    can bypass CORS + Referer checks.
+//   POST /rest/submitScrapeResult  — record one audit row in scrape_jobs.
+//                                    040 does NOT auto-apply: the result is
+//                                    pushed into TagEditor's form, then the
+//                                    user saves via the 037/039 writeTags
+//                                    chain. We just remember which result
+//                                    was chosen for which song.
+//   GET  /rest/getScrapeHistory    — paginated history for the calling user.
 // ============================================================================
 
 export const scrapeRoutes = new Hono<{
@@ -61,8 +61,8 @@ const VALID_SOURCES: ReadonlySet<ScrapeSource> = new Set([
 interface ProxyBody {
   source?: ScrapeSource;
   // Two mutually-exclusive shapes:
-  //   { query } → search by free-text title+artist
-  //   { songId } → fetch detail/lyric by upstream ID (returned in a prior search)
+  //  { query } → search by free-text title+artist
+  //  { songId } → fetch detail/lyric by upstream ID (returned in a prior search)
   query?: string;
   songId?: string;
   // optional intent: 'search' (default) | 'lyric' | 'detail'

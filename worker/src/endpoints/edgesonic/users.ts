@@ -18,11 +18,11 @@
 // historical leftover and forced Users.vue / Dashboard.vue to lean on a
 // hand-rolled `parseXmlAttrs` regex that was easy to break.
 // Shapes:
-//   list   → { ok: true, users: [{ username, level, enabled }] }
-//   get    → { ok: true, user: { username, level, enabled } }
-//   create → { ok: true }
-//   update → { ok: true }
-//   delete → { ok: true }
+//   list → { ok: true, users: [{ username, level, enabled }] }
+//   get  → { ok: true, user: { username, level, enabled } }
+//  create → { ok: true }
+//  update → { ok: true }
+//  delete → { ok: true }
 // Errors: `{ ok: false, error }` with the appropriate HTTP status (400 / 403 /
 // 404), matching setAvatar's convention from 064.
 import { Hono } from "hono";
@@ -48,7 +48,7 @@ usersRoutes.get("/users/list", permissionMiddleware("manage_users"), async (c) =
 // Admin (level 2) and super-admin (level 3) accounts can only be created,
 // edited, or removed by a super-admin — manage_users alone (grantable down
 // to level 1) must not be able to touch peer/higher-privilege accounts.
-// Rosmontis: "管理用户权限无权管理管理员，管理员和超管只能由超管控制".
+// .
 const ADMIN_TIER_LEVEL = 2;
 
 usersRoutes.post("/users/create", permissionMiddleware("manage_users"), async (c) => {
@@ -195,20 +195,20 @@ usersRoutes.post("/users/delete", permissionMiddleware("manage_users"), async (c
 // ============================================================================
 // ----------------------------------------------------------------------------
 // Body (JSON): { username, imageBase64, mimeType }
-//     prefix is stripped.
-//   • mimeType    — must be 'image/jpeg' or 'image/png'. Other mimes (webp / gif
-//     / avif) are rejected to keep the getAvatar fallback path simple and to
-//     match what older Subsonic clients can render reliably.
+//   prefix is stripped.
+//   • mimeType  — must be 'image/jpeg' or 'image/png'. Other mimes (webp / gif
+//   / avif) are rejected to keep the getAvatar fallback path simple and to
+//   match what older Subsonic clients can render reliably.
 // Auth: self-edit always allowed; caller.level>=2 may edit anyone (mirrors
-//   changePassword in subsonic/account.ts).
+//  changePassword in subsonic/account.ts).
 // Size: hard cap 500 KB AFTER base64 decode. The frontend already canvas-
-//   compresses to ≤100 KB JPEG at 200×200; this is just a sanity guard so a
-//   malicious client can't slam R2 with multi-MB payloads.
+//  compresses to ≤100 KB JPEG at 200×200; this is just a sanity guard so a
+//  malicious client can't slam R2 with multi-MB payloads.
 // Storage: R2 key `avatars/<username>.<ext>` (overwrite). Reads `users` for
-//   the old key — we keep the same key when ext matches; if the extension
-//   changes (PNG ↔ JPEG) we'd technically leak the old object, but R2 cost is
-//   negligible and getAvatar reads the column-stored key so users always see
-//   the latest upload.
+//  the old key — we keep the same key when ext matches; if the extension
+//  changes (PNG ↔ JPEG) we'd technically leak the old object, but R2 cost is
+//  negligible and getAvatar reads the column-stored key so users always see
+//  the latest upload.
 // Response: JSON `{ ok: true, avatarKey }`. Other users endpoints emit XML for
 // compatibility with the legacy admin.ts shape, but the avatar pair (get/set)
 // already lives outside that XML envelope (getAvatar serves binary) so JSON

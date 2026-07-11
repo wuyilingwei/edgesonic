@@ -16,15 +16,15 @@
 <script setup lang="ts">
 //
 // Backend (034):
-//   GET /rest/getPlaylists                                           list
-//   GET /rest/getPlaylist?id=                                        detail
-//   GET /rest/createPlaylist?name=[&songId=...]                      create new
-//   GET /rest/createPlaylist?playlistId=&songId=...                  overwrite tracks
-//   GET /rest/updatePlaylist?playlistId=
-//                            [&name=&comment=&public=]
-//                            [&songIdToAdd=...]
-//                            [&songIndexToRemove=...]                partial
-//   GET /rest/deletePlaylist?id=                                     remove
+//   GET /rest/getPlaylists                                         list
+//   GET /rest/getPlaylist?id=                                      detail
+//   GET /rest/createPlaylist?name=[&songId=...]                    create new
+//   GET /rest/createPlaylist?playlistId=&songId=...                overwrite tracks
+//  GET /rest/updatePlaylist?playlistId=
+//                          [&name=&comment=&public=]
+//                          [&songIdToAdd=...]
+//                            [&songIndexToRemove=...]              partial
+//   GET /rest/deletePlaylist?id=                                   remove
 //
 // We deliberately keep detail-view inline (no nested route) — playback queue
 // and PlayerBar already live in App.vue; switching routes would force users to
@@ -447,7 +447,7 @@ onMounted(loadPlaylists);
           class="card playlist-card"
           @click="openPlaylist(p)"
         >
-          <div class="playlist-cover">
+         <div class="playlist-cover">
             <img v-if="p.coverArt" :src="coverArtUrl(p.coverArt, 256)" :alt="p.name" loading="lazy" />
             <span v-else class="playlist-cover-placeholder">♫</span>
           </div>
@@ -622,7 +622,7 @@ onMounted(loadPlaylists);
             class="search-result"
             @click="addSong(r.id)"
           >
-            <div class="result-label">{{ r.title }}</div>
+           <div class="result-label">{{ r.title }}</div>
             <div class="result-sub">{{ r.artist }}<template v-if="r.album"> — {{ r.album }}</template></div>
           </div>
         </div>

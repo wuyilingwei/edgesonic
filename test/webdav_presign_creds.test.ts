@@ -15,15 +15,15 @@
 
 //
 // Coverage:
-//   1. presign_username set → presign URL uses presign_username:presign_password (not main creds)
-//   2. presign_username null → presign URL falls back to main username:password
-//   3. presign_username empty string → treated as null, falls back to main creds
-//   4. getWebDAVPresignCredentials: sourceId not found → null
-//   5. getWebDAVPresignCredentials: sourceId found, presign_username empty → returns main creds
-//   6. sources/add with presign creds → D1 row stores presign_username + presign_password
-//   7. sources/update clears presign creds (empty string) → presign_username/password become null
-//   8. sources/list returns presignUsername attr (not password)
-//   9. sources/list: source with no presign creds → presignUsername="" in response
+//  1. presign_username set → presign URL uses presign_username:presign_password (not main creds)
+//  2. presign_username null → presign URL falls back to main username:password
+//  3. presign_username empty string → treated as null, falls back to main creds
+//  4. getWebDAVPresignCredentials: sourceId not found → null
+//  5. getWebDAVPresignCredentials: sourceId found, presign_username empty → returns main creds
+//  6. sources/add with presign creds → D1 row stores presign_username + presign_password
+//  7. sources/update clears presign creds (empty string) → presign_username/password become null
+//  8. sources/list returns presignUsername attr (not password)
+//  9. sources/list: source with no presign creds → presignUsername="" in response
 //
 // Run: npx tsx test/webdav_presign_creds.test.ts
 

@@ -17,14 +17,14 @@
 // `{ ok: true, ... }` / `{ ok: false, error }`).
 //
 // Coverage:
-//   • happy path: caller=self, png/jpg → R2.put called + UPDATE users.avatar_r2_key
-//   • mime guard: rejects image/webp (and anything outside jpeg/png)
-//   • size guard: rejects >500KB after base64 decode
-//   • auth: non-self caller with level<2 → 403
-//   • auth: admin (level=2) editing another user → success
-//   • base64 with data:URL prefix is tolerated
-//   • [072] list returns { ok, users: [...] } JSON
-//   • [072] get returns { ok, user } JSON; missing user → 404 JSON {ok:false,error}
+//  • happy path: caller=self, png/jpg → R2.put called + UPDATE users.avatar_r2_key
+//  • mime guard: rejects image/webp (and anything outside jpeg/png)
+//  • size guard: rejects >500KB after base64 decode
+//  • auth: non-self caller with level<2 → 403
+//  • auth: admin (level=2) editing another user → success
+//  • base64 with data:URL prefix is tolerated
+//  • [072] list returns { ok, users: [...] } JSON
+//  • [072] get returns { ok, user } JSON; missing user → 404 JSON {ok:false,error}
 //
 // Run: npx tsx test/users_set_avatar.test.ts
 

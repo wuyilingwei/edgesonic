@@ -2,12 +2,12 @@
 -- EdgeSonic Unified Schema v3 (consolidated — single source of truth)
 -- ============================================================================
 -- Architecture:
---   Auth:     master_password (web login) → sessions (web+Subsonic dual-use)
---             subsonic_credentials (per-user, max 64, for native clients)
---   Storage:  R2 folder-nested structure with multi-bitrate versions
---             song_instances tracks source origin + transcoded/cached variants
---   Sources:  R2 (primary), WebDAV (external), Subsonic (proxied), URL (direct)
---             R2 acts as transcode cache for WebDAV/Subsonic sources
+--   Auth:   master_password (web login) → sessions (web+Subsonic dual-use)
+--           subsonic_credentials (per-user, max 64, for native clients)
+--  Storage: R2 folder-nested structure with multi-bitrate versions
+--           song_instances tracks source origin + transcoded/cached variants
+--  Sources: R2 (primary), WebDAV (external), Subsonic (proxied), URL (direct)
+--           R2 acts as transcode cache for WebDAV/Subsonic sources
 --
 -- This file is the complete, idempotent schema. All CREATE statements use
 -- IF NOT EXISTS and all seeds use INSERT OR IGNORE / INSERT OR REPLACE so
@@ -20,21 +20,21 @@
 -- R2 Storage Convention
 -- ============================================================================
 -- Primary (owned files):
---   {source_id}/artists/{artist_id}/images/profile.jpg
---   {source_id}/artists/{artist_id}/albums/{album_id}/cover.jpg
---   {source_id}/artists/{artist_id}/albums/{album_id}/songs/{master_id}/original.{suffix}
---   {source_id}/artists/{artist_id}/albums/{album_id}/songs/{master_id}/transcode_{profile}.{suffix}
+--  {source_id}/artists/{artist_id}/images/profile.jpg
+--  {source_id}/artists/{artist_id}/albums/{album_id}/cover.jpg
+--  {source_id}/artists/{artist_id}/albums/{album_id}/songs/{master_id}/original.{suffix}
+--  {source_id}/artists/{artist_id}/albums/{album_id}/songs/{master_id}/transcode_{profile}.{suffix}
 --
 -- WebDAV transcode cache:
---   _cache/webdav/{source_hash}/{remote_path_sanitized}/original.{suffix}
---   _cache/webdav/{source_hash}/{remote_path_sanitized}/transcode_{profile}.{suffix}
+--  _cache/webdav/{source_hash}/{remote_path_sanitized}/original.{suffix}
+--  _cache/webdav/{source_hash}/{remote_path_sanitized}/transcode_{profile}.{suffix}
 --
 -- Subsonic proxied cache:
---   _cache/subsonic/{source_hash}/{remote_id}/original.{suffix}
---   _cache/subsonic/{source_hash}/{remote_id}/transcode_{profile}.{suffix}
+--  _cache/subsonic/{source_hash}/{remote_id}/original.{suffix}
+--  _cache/subsonic/{source_hash}/{remote_id}/transcode_{profile}.{suffix}
 --
 -- Uploads (user-uploaded, pending metadata):
---   _uploads/{username}/{timestamp}_{filename}
+--  _uploads/{username}/{timestamp}_{filename}
 -- ============================================================================
 
 -- ============================================================================
@@ -332,9 +332,9 @@ CREATE INDEX IF NOT EXISTS idx_songmasters_title ON song_masters(title);
 -- ============================================================================
 -- Each song_master can have multiple instances from different sources.
 -- R2 folder: {source_id}/artists/{artist_id}/albums/{album_id}/songs/{master_id}/
---   ├── original.flac          (instance_type='original')
---   ├── transcode_320.mp3      (instance_type='transcoded')
---   └── transcode_128.opus     (instance_type='transcoded')
+--   ├── original.flac        (instance_type='original')
+--   ├── transcode_320.mp3    (instance_type='transcoded')
+--   └── transcode_128.opus   (instance_type='transcoded')
 -- Deduplication: source_dedup_key groups identical audio across sources.
 CREATE TABLE IF NOT EXISTS song_instances (
   id TEXT PRIMARY KEY,
@@ -790,22 +790,22 @@ CREATE INDEX IF NOT EXISTS idx_lastfm_cache_expires ON lastfm_cache(expires_at);
 -- Auth Flow Summary
 -- ============================================================================
 -- Web Login:
---   1. POST /rest/loginWeb { username, master_password }
---   2. Server: SHA-256(input) == users.master_password?
---   3. Create session → store in sessions table + KV cache
---   4. Return { session_token, username, level }
+--  1. POST /rest/loginWeb { username, master_password }
+--  2. Server: SHA-256(input) == users.master_password?
+--  3. Create session → store in sessions table + KV cache
+--  4. Return { session_token, username, level }
 --
 -- Subsonic API Auth (all clients):
---   1. Client sends u, t, s where t = md5(credential + s)
---   2. Server looks up credential matching username:
---      a. Check subsonic_credentials.password (native client passwords)
---      b. Check sessions.token (web session tokens)
---      c. Legacy: check users.master_password (backward compat)
---   3. Compute expected = md5(found_credential + s)
---   4. Compare expected == t
+--  1. Client sends u, t, s where t = md5(credential + s)
+--  2. Server looks up credential matching username:
+--    a. Check subsonic_credentials.password (native client passwords)
+--    b. Check sessions.token (web session tokens)
+--    c. Legacy: check users.master_password (backward compat)
+--  3. Compute expected = md5(found_credential + s)
+--  4. Compare expected == t
 --
 -- Session as Subsonic Password:
---   Web player uses session_token as the Subsonic "password":
---   t = md5(session_token + s)
---   → Server finds session by token → verifies → streams audio in browser
+--  Web player uses session_token as the Subsonic "password":
+--  t = md5(session_token + s)
+--  → Server finds session by token → verifies → streams audio in browser
 -- ============================================================================

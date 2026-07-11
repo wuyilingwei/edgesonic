@@ -13,18 +13,18 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-//   1. "wav不能正确的识别封面" — locateEmbeddedPicture (worker/src/utils/tags.ts)
-//      only recognized ID3/FLAC magic bytes at buffer start; a WAV file
-//      ("RIFF...") matched neither branch, so an embedded id3/APIC picture
-//      was NEVER located regardless of where in the file it sat.
-//   2. "时长错误显示为3秒" — a 33.6MB / 1411kbps WAV showing 0:00:03. Root
-//      cause: music-metadata's WaveParser clamps the "data" chunk length to
-//      whatever fits in a Range-truncated buffer when it doesn't know the
-//      true remote file size, so parseBuffer() without a `size` hint computes
-//      duration from ~512KB of PCM (≈3s at CD quality) instead of the real
-//      35MB+ file. Covered here via the byteRate/clamp arithmetic directly
-//      (taskExecutor.ts's actual parseBuffer call needs a browser + network
-//      fetch, out of reach for a unit test — the math is what we can verify).
+//  1. "wav不能正确的识别封面" — locateEmbeddedPicture (worker/src/utils/tags.ts)
+//    only recognized ID3/FLAC magic bytes at buffer start; a WAV file
+//    ("RIFF...") matched neither branch, so an embedded id3/APIC picture
+//    was NEVER located regardless of where in the file it sat.
+//  2. "时长错误显示为3秒" — a 33.6MB / 1411kbps WAV showing 0:00:03. Root
+//    cause: music-metadata's WaveParser clamps the "data" chunk length to
+//    whatever fits in a Range-truncated buffer when it doesn't know the
+//    true remote file size, so parseBuffer() without a `size` hint computes
+//    duration from ~512KB of PCM (≈3s at CD quality) instead of the real
+//    35MB+ file. Covered here via the byteRate/clamp arithmetic directly
+//    (taskExecutor.ts's actual parseBuffer call needs a browser + network
+//    fetch, out of reach for a unit test — the math is what we can verify).
 //
 // Run: npx tsx test/wav_cover_duration.test.ts
 
@@ -124,7 +124,7 @@ console.log("\nB. WAV embedded cover — tail-positioned id3 chunk (after data):
 
 console.log("\nC. Non-WAV formats unaffected by the WAV branch (regression guard):");
 {
-  // A buffer starting with "RIFF" but not carrying an id3 chunk at all —
+  // A buffer starting with "RIFF" but not carrying an id3 chunk at all
   // must return null, not throw or false-positive.
   const fmtBody = [1, 0, 2, 0, 0x44, 0xac, 0, 0, 0x10, 0xb1, 2, 0, 4, 0, 16, 0];
   const dataBody = new Array(16).fill(0xcc);

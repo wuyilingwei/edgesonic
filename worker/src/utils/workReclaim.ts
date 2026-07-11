@@ -22,10 +22,10 @@
 // 'failed' terminal state with an explanatory error_message.
 //
 // Two thresholds drive the decision:
-//   worker_claim_ttl_seconds — heartbeat age beyond which a claim is "stale"
-//                              short enough that a closed tab unblocks the
-//                              queue within a minute)
-//   max_attempts (per row)   — work_queue.max_attempts (default 3)
+//  worker_claim_ttl_seconds — heartbeat age beyond which a claim is "stale"
+//                            short enough that a closed tab unblocks the
+//                            queue within a minute)
+//   max_attempts (per row) — work_queue.max_attempts (default 3)
 
 import { getFeatureString } from "./features";
 

@@ -16,17 +16,17 @@
 // 044 Sharing — Subsonic share API.
 //
 // Provides:
-//   GET            /rest/getShares           — list caller's shares + entries
-//   GET|POST       /rest/createShare         — new share targeting ≥1 song
-//                                              (album ids are expanded into
-//                                              their constituent song masters)
-//   GET|POST       /rest/updateShare         — patch description / expires
-//   GET|POST       /rest/deleteShare         — owner or admin
-//   GET            /share/:id                — public byte stream of the first
-//                                              entry; bypasses Subsonic auth
-//                                              because it's outside /rest/*
-//                                              (see auth.ts — authMiddleware is
-//                                              bound to /rest/* in index.ts).
+//   GET            /rest/getShares         — list caller's shares + entries
+//   GET|POST       /rest/createShare       — new share targeting ≥1 song
+//                                            (album ids are expanded into
+//                                            their constituent song masters)
+//   GET|POST       /rest/updateShare       — patch description / expires
+//   GET|POST       /rest/deleteShare       — owner or admin
+//   GET            /share/:id              — public byte stream of the first
+//                                            entry; bypasses Subsonic auth
+//                                            because it's outside /rest/*
+//                                            (see auth.ts — authMiddleware is
+//                                            bound to /rest/* in index.ts).
 //
 // `expires` is accepted in **milliseconds** per Subsonic spec, but stored as
 // unix seconds internally to align with every other timestamp in the schema.
@@ -118,14 +118,14 @@ async function expandTargetIds(
 }
 
 // Parse `expires` query param (milliseconds per Subsonic spec).
-//   undefined          → patch absent (caller decides default)
-//   ""                 → explicit clear (return null)
-//   "0"                → also clear (Subsonic clients send "0" to mean
-//                                    "never expires")
-//   <ms>               → unix seconds
+//   undefined        → patch absent (caller decides default)
+//   ""               → explicit clear (return null)
+//   "0"              → also clear (Subsonic clients send "0" to mean
+//                                  "never expires")
+//   <ms>             → unix seconds
 // Returns:
-//   { present: false } when undefined
-//   { present: true, value: number | null } otherwise
+//  { present: false } when undefined
+//  { present: true, value: number | null } otherwise
 function parseExpiresMs(raw: string | undefined): { present: false } | { present: true; value: number | null } {
   if (raw === undefined) return { present: false };
   if (raw === "" || raw === "0") return { present: true, value: null };

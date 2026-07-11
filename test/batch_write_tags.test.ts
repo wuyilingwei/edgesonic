@@ -15,13 +15,13 @@
 
 //
 // Strategy (same shape as test/annotation.test.ts):
-//   * In-memory SQLite shimmed as D1, real createQueries + real handlers.
-//   * Stubbed Env (no R2 / no WebDAV) → every instance write returns
-//     `written:false reason:"format not rewritable"` because the seeded
-//     instances use suffix=mp3 BUT have no real backing storage. We assert
-//     on D1 effects (artist/album relink + song_masters.title) instead.
-//   * Hono harness injects a session-auth user so permissionMiddleware
-//     ("edit_tags") sees the seeded permission row.
+//  * In-memory SQLite shimmed as D1, real createQueries + real handlers.
+//  * Stubbed Env (no R2 / no WebDAV) → every instance write returns
+//   `written:false reason:"format not rewritable"` because the seeded
+//   instances use suffix=mp3 BUT have no real backing storage. We assert
+//   on D1 effects (artist/album relink + song_masters.title) instead.
+//  * Hono harness injects a session-auth user so permissionMiddleware
+//   ("edit_tags") sees the seeded permission row.
 //
 // Run: npx tsx test/batch_write_tags.test.ts
 
@@ -295,7 +295,7 @@ console.log("patch with only artist leaves other fields:");
   // genre starts NULL and COALESCE keeps it NULL when patch omits it
   assert(after.genre === before.genre, "genre preserved");
 
-  // and album row was NOT created with the original 'Old Album' name —
+  // and album row was NOT created with the original 'Old Album' name
   // patch only touched artist, the album row gets re-anchored under the new
   // artist key but album NAME stays as before (queries.ts seeds it from the
   // existing album.name COALESCE branch).

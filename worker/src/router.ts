@@ -13,10 +13,10 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-//   /rest/*       Subsonic 1.16.1 + OpenSubsonic protocol
-//   /tag/*        Tag management   (web-session, edit_tags etc.)
-//   /storage/*    Storage management (web-session, manage_sources/files)
-//   /edgesonic/*  EdgeSonic private (web-session, per-endpoint perms)
+//   /rest/*     Subsonic 1.16.1 + OpenSubsonic protocol
+//   /tag/*        Tag management (web-session, edit_tags etc.)
+//   /storage/*  Storage management (web-session, manage_sources/files)
+//  /edgesonic/* EdgeSonic private (web-session, per-endpoint perms)
 // plus the publicly accessible /share/:id route registered outside the auth
 // middleware (see index.ts).
 import { Hono } from "hono";

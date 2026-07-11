@@ -16,23 +16,23 @@
 //
 // The browser-pool engine kicks off a transcode by writing a work_queue row
 // and handing the browser a URL like:
-//   /edgesonic/work/upload?id=<workQueueId>&token=<token>
+//  /edgesonic/work/upload?id=<workQueueId>&token=<token>
 // The token is a base64url-encoded
-//   <expiresAtUnixSeconds>.<HMAC-SHA-256 of "id:expiresAt">
+//  <expiresAtUnixSeconds>.<HMAC-SHA-256 of "id:expiresAt">
 // so any tampering with id/exp invalidates the signature, and replay past the
 // TTL is rejected outright. The upload endpoint additionally requires
 // `work_queue.claimed_by === session.user.username` so even a leaked token
 // can only be redeemed by the worker that actually claimed the row.
 //
 // HMAC secret derivation (updated 066) — preferred:
-//   env.WORK_UPLOAD_HMAC_KEY  (wrangler secret, ≥32 random bytes)
+//  env.WORK_UPLOAD_HMAC_KEY (wrangler secret, ≥32 random bytes)
 // fallback (compatibility with 053-era deployments that haven't yet pushed
 // the secret):
-//   `${env.INSTANCE_ID}:${STATIC_SALT}`
+//  `${env.INSTANCE_ID}:${STATIC_SALT}`
 //
 // Production setup (one-time per environment):
-//   wrangler secret put WORK_UPLOAD_HMAC_KEY
-//   # paste e.g. `openssl rand -base64 48` on stdin
+//  wrangler secret put WORK_UPLOAD_HMAC_KEY
+//  # paste e.g. `openssl rand -base64 48` on stdin
 //
 // Rotating the secret immediately invalidates all outstanding upload tokens
 // (TTL 5 min) — acceptable because work_queue rows survive and can be

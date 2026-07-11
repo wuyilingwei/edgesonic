@@ -284,7 +284,7 @@ const progressPct = computed(() => player.duration > 0 ? (player.currentTime / p
           :class="{ active: hasSynced && i === activeIdx, clickable: hasSynced }"
           @click="onLyricClick(line)"
         >
-          <div class="np-lyric-original">{{ line.text }}</div>
+         <div class="np-lyric-original">{{ line.text }}</div>
           <div v-if="line.tr" class="np-lyric-translation">{{ line.tr }}</div>
         </div>
         <div class="np-lyrics-spacer"></div>

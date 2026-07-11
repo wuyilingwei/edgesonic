@@ -15,19 +15,19 @@
 
 //
 // GET /rest/getLyrics?artist=<a>&title=<t>
-//   Subsonic v1.2+ classic endpoint. Returns:
-//     <lyrics artist="..." title="...">text</lyrics>
-//   when found; an empty <lyrics/> element when not (still 200 OK).
+//  Subsonic v1.2+ classic endpoint. Returns:
+//   <lyrics artist="..." title="...">text</lyrics>
+//  when found; an empty <lyrics/> element when not (still 200 OK).
 //
 // GET /rest/getLyricsBySongId?id=<songMasterId>
-//   OpenSubsonic extension `songLyrics`. Returns a structuredLyrics list with
-//   exactly one entry (synced=false because we always emit a single LRC blob).
+//  OpenSubsonic extension `songLyrics`. Returns a structuredLyrics list with
+//  exactly one entry (synced=false because we always emit a single LRC blob).
 //
 // Resolution order is identical for both endpoints:
-//   1. Look up song_masters.lyrics (filled by writeTags / prior fetch).
-//   2. If empty, hit the external fetcher (NetEase). On hit, write back to
-//      song_masters.lyrics so the next call is free.
-//   3. Otherwise return the empty shell.
+//  1. Look up song_masters.lyrics (filled by writeTags / prior fetch).
+//  2. If empty, hit the external fetcher (NetEase). On hit, write back to
+//    song_masters.lyrics so the next call is free.
+//  3. Otherwise return the empty shell.
 
 import { Hono } from "hono";
 import type { Context } from "hono";
@@ -42,14 +42,14 @@ export const lyricsRoutes = new Hono();
 // Reused by both endpoints: given a master row, return existing lyrics or
 // fetch externally + persist. Never throws — fetch failures return null.
 //
-//   1. song_masters.lyrics (D1) — populated by writeTags / prior fetch /
-//      scan-time .lrc sidecar import.
-//   2. Sibling .lrc sidecar (R2 / WebDAV only). Local-first beats a round-trip
-//      to NetEase and avoids needing the title/artist match heuristic for
-//      files that already live next to the audio.
-//   3. External fetcher (NetEase). On hit, write back to song_masters.lyrics
-//      so the next call is free.
-//   4. Otherwise return the empty shell.
+// 1. song_masters.lyrics (D1) — populated by writeTags / prior fetch /
+//    scan-time .lrc sidecar import.
+//  2. Sibling .lrc sidecar (R2 / WebDAV only). Local-first beats a round-trip
+//    to NetEase and avoids needing the title/artist match heuristic for
+//    files that already live next to the audio.
+//  3. External fetcher (NetEase). On hit, write back to song_masters.lyrics
+//    so the next call is free.
+//  4. Otherwise return the empty shell.
 async function resolveLyrics(
   env: Env,
   db: D1Database,
@@ -181,7 +181,7 @@ const getLyricsHandler = async (c: Context): Promise<Response> => {
 };
 
 // ---------------------------------------------------------------------------
-// GET /rest/getLyricsBySongId?id=<songMasterId>  (OpenSubsonic songLyrics)
+// GET /rest/getLyricsBySongId?id=<songMasterId> (OpenSubsonic songLyrics)
 // ---------------------------------------------------------------------------
 const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
   const id = c.req.query("id");
@@ -215,11 +215,11 @@ const getLyricsBySongIdHandler = async (c: Context): Promise<Response> => {
   const lyrics = await resolveLyrics(env, env.DB, master.id, artistName, master.title, master.lyrics);
 
   // actually parse):
-  //   <lyricsList>
-  //     <structuredLyrics displayArtist="..." displayTitle="..." lang="xxx" synced="true|false">
-  //       <line start="8120">line text</line>   (start = ms offset, synced only)
-  //     </structuredLyrics>
-  //   </lyricsList>
+  //  <lyricsList>
+  //   <structuredLyrics displayArtist="..." displayTitle="..." lang="xxx" synced="true|false">
+  //       <line start="8120">line text</line> (start = ms offset, synced only)
+  //   </structuredLyrics>
+  //  </lyricsList>
   // JSON: line entries are {"start":8120,"value":"..."} objects. Before 108
   // we emitted the raw LRC blob line-by-line (metadata tags included, no
   // start offsets) with synced="false" — clients showed tag soup or nothing.

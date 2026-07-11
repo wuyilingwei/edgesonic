@@ -24,21 +24,21 @@
 //
 // Implementation strategy:
 //
-//   * Only intercept POST + Content-Type starting with
-//     `application/x-www-form-urlencoded`. JSON bodies (admin endpoints,
-//     tagedit, etc.), raw streams (files/upload), and multipart (file
-//     uploads) are pass-through.
+// * Only intercept POST + Content-Type starting with
+//   `application/x-www-form-urlencoded`. JSON bodies (admin endpoints,
+//   tagedit, etc.), raw streams (files/upload), and multipart (file
+//   uploads) are pass-through.
 //
-//   * Read the body text once, parse with URLSearchParams, merge into the
-//     URL's query string. Existing query params WIN — Subsonic clients that
-//     send `?u=alice` + `id=sg-1` in the body should keep `u=alice` from
-//     the URL.
+// * Read the body text once, parse with URLSearchParams, merge into the
+//   URL's query string. Existing query params WIN — Subsonic clients that
+//   send `?u=alice` + `id=sg-1` in the body should keep `u=alice` from
+//   the URL.
 //
-//   * Replace the underlying Request on c.req so all subsequent handlers
-//     see the merged URL via c.req.query(). The body is also replaced with
-//     an empty string so downstream handlers that *do* call parseBody()
-//     (playlists.ts, bookmarks.ts) still work — they fall back to the now-
-//     visible query params via their `readField` helpers.
+// * Replace the underlying Request on c.req so all subsequent handlers
+//   see the merged URL via c.req.query(). The body is also replaced with
+//   an empty string so downstream handlers that *do* call parseBody()
+//   (playlists.ts, bookmarks.ts) still work — they fall back to the now-
+//   visible query params via their `readField` helpers.
 //
 // We deliberately do NOT consume the body for any other content-type — JSON
 // endpoints still read the raw body via c.req.json().

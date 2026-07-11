@@ -214,7 +214,7 @@ async function saveEdit() {
   if (editForm.value.enabled !== s.enabled) body.enabled = editForm.value.enabled ? 1 : 0;
   if (editForm.value.mode !== s.mode) body.mode = editForm.value.mode;
   if (editForm.value.region !== s.region) body.region = editForm.value.region;
-  //        send presign_password only when non-empty (like main password)
+  //      send presign_password only when non-empty (like main password)
   if (s.type === "webdav") {
     body.presign_username = editForm.value.presignUsername; // "" → null in backend
     if (editForm.value.presignPassword) body.presign_password = editForm.value.presignPassword;
@@ -321,7 +321,7 @@ async function startMirror(s: Source) {
           // where relPath already excludes root_path (the scan walks
           // root_path + relPath). So we strip the `webdav://{sourceId}/`
           // prefix and place the rest under music/ on R2.
-          //   webdav://6debd0f2/Album/song.flac → r2://music/Album/song.flac
+          //  webdav://6debd0f2/Album/song.flac → r2://music/Album/song.flac
           // This keeps the original tree shape from the remote without
           // inventing artist/album dirs that may not exist on the source.
           const relPath = item.storageUri.replace(/^webdav:\/\/[^/]+\//, "");
@@ -458,9 +458,9 @@ function statusLabel(s: Source): string {
 // Super-admin only. The button is hidden for plain admins so the one-way
 // nature of the action stays out of the regular admin's foot-gun surface.
 // We don't pre-check STORAGE_KEY availability on the client because:
-//   1. The endpoint already returns ok:false + error when the secret is unset.
-//   2. Probing would leak whether a secret is configured to anyone who can
-//      reach the page.
+//  1. The endpoint already returns ok:false + error when the secret is unset.
+//  2. Probing would leak whether a secret is configured to anyone who can
+//    reach the page.
 const migrating = ref(false);
 async function migratePasswords() {
   if (migrating.value) return;
@@ -644,7 +644,7 @@ onUnmounted(() => {
               :class="s.scanStatus === 'idle' ? 'btn-primary' : 'btn-secondary'"
               @click="scanSource(s, $event.shiftKey)"
             >
-              {{ s.scanStatus === 'completed' ? t('sources.scanStatus.rescan') : s.scanStatus === 'failed' ? t('sources.scanStatus.retry') : t('sources.scanStatus.idle') }}
+             {{ s.scanStatus === 'completed' ? t('sources.scanStatus.rescan') : s.scanStatus === 'failed' ? t('sources.scanStatus.retry') : t('sources.scanStatus.idle') }}
             </button>
             <!-- This used to be a Shift+click gesture on the button above
                  with zero UI discoverability (the forceHint locale string
@@ -688,7 +688,7 @@ onUnmounted(() => {
         <div class="modal-title">{{ t("sources.editSource") }}</div>
         <div class="form-grid-2">
           <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="editForm.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
-          <!-- R2 is accessed via the native MUSIC_BUCKET binding, never HTTP —
+          <!-- R2 is accessed via the native MUSIC_BUCKET binding, never HTTP
                base_url/username/password are meaningless for it and only
                confused the editing experience. Only show them for the
                storage types that actually use them. -->
@@ -935,7 +935,7 @@ onUnmounted(() => {
 /* P5: remove inline style="margin-bottom:0" from label inside enabled-row */
 .enabled-label { margin-bottom: 0; }
 
-/* 060 — scan status pill (running/completed/failed) */
+/* scan status pill (running/completed/failed) */
 .scan-pill {
   display: inline-flex;
   align-items: center;
@@ -983,7 +983,7 @@ onUnmounted(() => {
   to { transform: rotate(360deg); }
 }
 
-/* 060 — history toggle + table */
+/* history toggle + table */
 .scan-history-toggle {
   display: flex;
   align-items: center;
@@ -1048,14 +1048,14 @@ onUnmounted(() => {
   color: var(--color-text-primary);
 }
 
-/* 097 — presign read-only account badge (teal/cyan variant) */
+/* presign read-only account badge (teal/cyan variant) */
 .status-badge.presign-set {
   background: rgba(6, 182, 212, 0.12);
   color: #22d3ee;
   border-color: rgba(6, 182, 212, 0.35);
 }
 
-/* 097 — presign section inside edit modal (always visible) */
+/* presign section inside edit modal (always visible) */
 .presign-always-section {
   display: flex;
   flex-direction: column;

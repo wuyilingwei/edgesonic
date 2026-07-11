@@ -15,15 +15,15 @@
 
 //
 // Coverage:
-//   1. WebDAV presign URL shape (UserInfo embedded, path encoded)
-//   2. WebDAV presign returns null when source has no credentials
-//   3. stream: webdav + flag on + strategy=always/webdav_only → 302
-//   4. stream: webdav + flag on + strategy=never/r2_only → 200 proxy
-//   5. stream: webdav + flag off → 200 proxy
-//   6. stream: r2 + strategy=never → 200 proxy (even with secrets)
-//   7. stream: r2 + strategy=r2_only → 302 (r2 allowed)
-//   8. stream: r2 + strategy=webdav_only → 200 proxy (r2 not allowed)
-//   9. credentials/create accepts streamProxyStrategy
+//  1. WebDAV presign URL shape (UserInfo embedded, path encoded)
+//  2. WebDAV presign returns null when source has no credentials
+//  3. stream: webdav + flag on + strategy=always/webdav_only → 302
+//  4. stream: webdav + flag on + strategy=never/r2_only → 200 proxy
+//  5. stream: webdav + flag off → 200 proxy
+//  6. stream: r2 + strategy=never → 200 proxy (even with secrets)
+//  7. stream: r2 + strategy=r2_only → 302 (r2 allowed)
+//  8. stream: r2 + strategy=webdav_only → 200 proxy (r2 not allowed)
+//  9. credentials/create accepts streamProxyStrategy
 //  10. credentials/update changes streamProxyStrategy
 //  11. credentials/list returns streamProxyStrategy
 //  12. validator: enable_webdav_presign accepts 0/1
@@ -266,7 +266,7 @@ async function main() {
     setFeature(sqlite, "enable_webdav_presign", "1");
     sqlite.prepare("DELETE FROM song_instances WHERE id = 'si-r2'").run();
     // Override makeApp's default subsonic_cred with session (browser SPA case).
-    // Browsers block cross-origin redirects with embedded user:password —
+    // Browsers block cross-origin redirects with embedded user:password
     // webdav presign must fall back to in-Worker stream for sessions.
     const app = new Hono<{ Bindings: any; Variables: any }>();
     app.use("*", async (c, next) => {

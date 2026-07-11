@@ -15,12 +15,12 @@
 
 //
 // Coverage:
-//   1. ID3v2.3 mp3: USLT frame present with correct encoding/lang/lyrics bytes
-//   2. ID3v2.4 mp3: USLT frame in UTF-8 encoding
-//   3. USLT frame replaces an existing USLT (no duplicate)
-//   4. FLAC: LYRICS= comment written into VORBIS_COMMENT block
-//   5. FLAC: existing LYRICS= comment is replaced, not duplicated
-//   6. When lyrics not provided, no USLT/LYRICS frame added
+//  1. ID3v2.3 mp3: USLT frame present with correct encoding/lang/lyrics bytes
+//  2. ID3v2.4 mp3: USLT frame in UTF-8 encoding
+//  3. USLT frame replaces an existing USLT (no duplicate)
+//  4. FLAC: LYRICS= comment written into VORBIS_COMMENT block
+//  5. FLAC: existing LYRICS= comment is replaced, not duplicated
+//  6. When lyrics not provided, no USLT/LYRICS frame added
 //
 // Run: npx tsx test/lyrics_file_writeback.test.ts
 

@@ -15,10 +15,10 @@
 
 //
 // Strategy:
-//   * In-memory SQLite shimmed as D1 (same shape as annotation.test.ts).
-//   * Hono harness that injects user/authMethod so we skip real auth.
-//   * Drive annotationRoutes (scrobble) → assert D1 now_playing row, then
-//     nowPlayingRoutes → assert response XML, visibility filter, minutesAgo.
+//  * In-memory SQLite shimmed as D1 (same shape as annotation.test.ts).
+//  * Hono harness that injects user/authMethod so we skip real auth.
+//  * Drive annotationRoutes (scrobble) → assert D1 now_playing row, then
+//   nowPlayingRoutes → assert response XML, visibility filter, minutesAgo.
 //
 // Run: npx tsx test/now_playing.test.ts
 

@@ -194,7 +194,7 @@ function removeFromQueue(i: number) {
             :class="{ playing: i === player.index }"
             @click="playFromQueue(i)"
           >
-            <span class="pb-queue-idx">{{ String(i + 1).padStart(2, "0") }}</span>
+           <span class="pb-queue-idx">{{ String(i + 1).padStart(2, "0") }}</span>
             <div class="pb-queue-meta">
               <div class="pb-queue-title">{{ tr.title }}</div>
               <div class="pb-queue-artist">{{ tr.artist }}</div>

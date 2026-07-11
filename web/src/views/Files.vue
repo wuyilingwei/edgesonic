@@ -531,7 +531,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Work-queue HUD lived here until task 122 — moved entirely to Tools.vue's
+    <!-- Work-queue HUD lived here until task moved entirely to Tools.vue's
          「WORKER 预解析」panel. The /files page no longer manages or surfaces
          work_queue state, only the existing 「待解析」badge above (pendingCount)
          so the user still knows when files are awaiting parse. -->
@@ -698,7 +698,7 @@ onMounted(async () => {
       @submit="onTagEditorSubmit"
       @close="closeTagEditor"
     >
-      <!-- 040 scrape button in extras slot -->
+     <!-- 040 scrape button in extras slot -->
       <template #extras="{ form, apply }">
         <ScrapeButton
           :initial-query="scrapeQueryFromForm(form)"
@@ -959,7 +959,7 @@ onMounted(async () => {
 }
 .te-msg.error { color: var(--color-status-error); }
 
-/* 122 — the Files-page work-queue HUD (`.work-queue-card` + `.wq-*` rules)
+/* the Files-page work-queue HUD (`.work-queue-card` + `.wq-*` rules)
    has been removed entirely. The canonical "Worker 预解析" panel now lives
    in Tools.vue. Keeping this comment so a future grep for "wq-" doesn't
    waste time re-discovering the deletion. */

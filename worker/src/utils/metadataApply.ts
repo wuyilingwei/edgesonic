@@ -15,12 +15,12 @@
 
 // ----------------------------------------------------------------------------
 // Three call sites funnel through here:
-//   1. 041 POST /tag/submit — the legacy "Files browser parsed locally" path.
-//   2. 052a POST /edgesonic/work/submit (success branch) — the worker-pool path
-//      that previously only marked work_queue rows 'completed' and forgot to
-//      cascade onto song_masters / song_instances (the bug 077 fixes).
-//   3. /edgesonic/work/backfillCompleted — replays old completed rows whose
-//      apply step was skipped before the fix landed.
+//  1. 041 POST /tag/submit — the legacy "Files browser parsed locally" path.
+//  2. 052a POST /edgesonic/work/submit (success branch) — the worker-pool path
+//    that previously only marked work_queue rows 'completed' and forgot to
+//    cascade onto song_masters / song_instances (the bug 077 fixes).
+//  3. /edgesonic/work/backfillCompleted — replays old completed rows whose
+//    apply step was skipped before the fix landed.
 //
 // We pulled SubmittedMetadata + relinkArtistAlbum out of endpoints/tag/submit.ts
 // to here so that file (which imports this one for applyMetadataResult) doesn't
@@ -28,14 +28,14 @@
 // that historically pulled them from the old location.
 //
 // Design rules:
-//   * Never throw on partial data — the caller usually can't recover and the
-//     enclosing flow (work/submit, backfill) must keep going.
-//   * Inputs are scrubbed to ints/floats before SQL binds — taskExecutor sends
-//     year/track/disc as strings, the legacy /tag/submit cleanInput does the
-//     same coercion; we replicate that here so neither caller has to know.
-//   * tag_scanned ALWAYS flips to 1 after a successful UPDATE — that's the
-//     bug we're fixing. A row that produced no useful tags still counts as
-//     "seen" so a future scan does not re-queue the work forever.
+//  * Never throw on partial data — the caller usually can't recover and the
+//   enclosing flow (work/submit, backfill) must keep going.
+//  * Inputs are scrubbed to ints/floats before SQL binds — taskExecutor sends
+//   year/track/disc as strings, the legacy /tag/submit cleanInput does the
+//   same coercion; we replicate that here so neither caller has to know.
+//  * tag_scanned ALWAYS flips to 1 after a successful UPDATE — that's the
+//   bug we're fixing. A row that produced no useful tags still counts as
+//   "seen" so a future scan does not re-queue the work forever.
 
 import { md5 } from "./md5";
 
@@ -178,7 +178,7 @@ export async function applyMetadataResult(
 
   // Update physical params on the instance row (only fields the payload had).
   // tag_scanned is always set to 1 — this is the part the old /work/submit
-  // forgot, and the symptom Rosmontis observed (82 completed but only 1 row
+  // forgot, and the symptom observed (82 completed but only 1 row
   // with tag_scanned=1).
   const sets: string[] = [];
   const binds: unknown[] = [];
@@ -200,11 +200,11 @@ export async function applyMetadataResult(
 // relinkArtistAlbum — pulled in from endpoints/tag/submit.ts in 077 so the
 // helper can call it directly. Behaviour is byte-for-byte identical to the
 // 041 implementation:
-//   * md5(linkArtistName)[:10] -> artist id
-//   * md5(linkArtistName + " " + albumName)[:10] -> album id
-//   * INSERT OR IGNORE both, UPDATE song_masters with the new fk's
-//   * Refresh album song_count/size aggregates for old + new ids
-//   * Sweep empty artist/album rows
+//  * md5(linkArtistName)[:10] -> artist id
+//  * md5(linkArtistName + " " + albumName)[:10] -> album id
+//  * INSERT OR IGNORE both, UPDATE song_masters with the new fk's
+//  * Refresh album song_count/size aggregates for old + new ids
+//  * Sweep empty artist/album rows
 // ---------------------------------------------------------------------------
 export async function relinkArtistAlbum(
   db: D1Database,

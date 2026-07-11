@@ -17,8 +17,8 @@
 //
 // Both modes use the same canonical-request / string-to-sign format;
 // they differ only in how the signature is delivered:
-//   • Presign: signature in query string (X-Amz-Signature=…)
-//   • Auth header: signature in Authorization: AWS4-HMAC-SHA256 header
+//  • Presign: signature in query string (X-Amz-Signature=…)
+//  • Auth header: signature in Authorization: AWS4-HMAC-SHA256 header
 
 // ---------------------------------------------------------------------------
 // Low-level crypto helpers
@@ -106,9 +106,9 @@ export interface AuthHeaderResult {
  * Build a SigV4 Authorization header for an outbound request.
  *
  * Returns the three headers callers must include:
- *   Authorization: AWS4-HMAC-SHA256 Credential=…, SignedHeaders=…, Signature=…
- *   x-amz-date: <ISO 8601 compact>
- *   x-amz-content-sha256: UNSIGNED-PAYLOAD (or real hash)
+ *  Authorization: AWS4-HMAC-SHA256 Credential=…, SignedHeaders=…, Signature=…
+ *  x-amz-date: <ISO 8601 compact>
+ *  x-amz-content-sha256: UNSIGNED-PAYLOAD (or real hash)
  *
  * extraHeaders — additional request headers to include in the signature
  * (their values must be present on the actual request). The headers

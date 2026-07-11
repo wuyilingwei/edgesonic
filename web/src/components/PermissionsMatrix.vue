@@ -56,7 +56,7 @@ async function load() {
 // the server until Save is clicked. Replaces the old per-toggle real-time
 // POST (each checkbox used to fire its own /permissions/update request).
 //
-// Cascade rule (Rosmontis): granting a permission to a lower level should
+// Cascade rule granting a permission to a lower level should
 // default it on for every higher level too — a level-1 user getting
 // `download` implies level-2/3 should have it as well unless an admin
 // explicitly turns it back off for that level. This only cascades upward

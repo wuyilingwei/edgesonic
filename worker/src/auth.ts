@@ -27,10 +27,10 @@ export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 // Path Classification
 // ============================================================================
 
-//   /rest/*      Subsonic protocol  → existing token+salt / apikey / guestToken
-//   /tag/*       Tag management     → web session ONLY
-//   /storage/*   Storage management → web session ONLY
-//   /edgesonic/* EdgeSonic private  → web session ONLY (login path skips auth)
+//   /rest/*     Subsonic protocol → existing token+salt / apikey / guestToken
+//   /tag/*       Tag management   → web session ONLY
+//   /storage/* Storage management → web session ONLY
+//  /edgesonic/* EdgeSonic private → web session ONLY (login path skips auth)
 // The non-rest buckets uniformly require authMethod === "session" so a leaked
 // subsonic_credentials / apiKey cannot reach management surfaces.
 
@@ -380,11 +380,11 @@ export const authMiddleware = createMiddleware<{
 // Permission Middleware
 // ============================================================================
 // The per-permission RPH sliding-window rate limit that used to live
-// here was removed (Rosmontis: authorisation should just be "does this level
+// here was removed (: authorisation should just be "does this level
 // have this permission", no per-permission hourly throttling). The enabled check
 // now goes through the shared hasPermission() helper (utils/permissions.ts)
 // so both this middleware and in-handler degradation checks (shares.ts /
-// playlists.ts / now_playing.ts / users.ts) read from the same source —
+// playlists.ts / now_playing.ts / users.ts) read from the same source
 // PERMISSIONS_OVERRIDE env var first, D1 user_permissions as fallback.
 export const permissionMiddleware = (requiredPermission: string) =>
   createMiddleware<{

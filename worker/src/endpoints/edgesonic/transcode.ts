@@ -15,13 +15,13 @@
 
 //
 // POST /rest/transcodeFile?id=<song>&profile=<id>
-//   Manually trigger a transcode. Writes a transcode_jobs row, asks the
-//   currently-selected engine to do the work, and streams the encoded
-//   audio back. JobId returned via X-EdgeSonic-Job-Id header so the
-//   caller can poll getTranscodeStatus afterwards.
+//  Manually trigger a transcode. Writes a transcode_jobs row, asks the
+//  currently-selected engine to do the work, and streams the encoded
+//  audio back. JobId returned via X-EdgeSonic-Job-Id header so the
+//  caller can poll getTranscodeStatus afterwards.
 //
 // GET /rest/getTranscodeStatus?jobId=<id>
-//   Returns the transcode_jobs row plus the engine name.
+//  Returns the transcode_jobs row plus the engine name.
 //
 // The /stream endpoint integration (on-demand transcoding triggered by
 // stream's format/maxBitRate parameters) is owned by task 036 and lives
@@ -131,9 +131,9 @@ transcodeRoutes.post("/transcode/start", permissionMiddleware("manage_sources"),
     // for the queue id first, then patch a freshly-signed token onto a
     // second-step PATCH UPDATE — but D1 latency is cheap, do it in two
     // steps for simplicity:
-    //   step 1: enqueue with a placeholder uploadUrl pointing to a token
-    //           we will sign for the returned queue id
-    //   step 2: re-write payload.uploadUrl now that we know the id.
+    //  step 1: enqueue with a placeholder uploadUrl pointing to a token
+    //         we will sign for the returned queue id
+    //  step 2: re-write payload.uploadUrl now that we know the id.
     // We avoid step 2 by signing AFTER we know the id: we enqueue an empty
     // string, then UPDATE payload.uploadUrl with the signed token. That
     // keeps dispatchWork API unchanged.

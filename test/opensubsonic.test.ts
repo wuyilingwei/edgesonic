@@ -15,10 +15,10 @@
 
 //
 // Coverage:
-//   * getOpenSubsonicExtensions returns the three advertised extensions
-//   * tokenInfo echoes the authenticated user + level + permissions
-//   * changePassword: self → 200, non-admin → 403, admin → 200, missing user → 404
-//   * mapAlbum / mapArtist / mapSong field back-fill is opt-in (annotation arg)
+//  * getOpenSubsonicExtensions returns the three advertised extensions
+//  * tokenInfo echoes the authenticated user + level + permissions
+//  * changePassword: self → 200, non-admin → 403, admin → 200, missing user → 404
+//  * mapAlbum / mapArtist / mapSong field back-fill is opt-in (annotation arg)
 //
 // Same harness style as test/annotation.test.ts: an in-memory SQLite wrapped
 // in a tiny D1Database shim, the production handlers driven via Hono.fetch.

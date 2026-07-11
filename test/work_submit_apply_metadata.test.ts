@@ -17,16 +17,16 @@
 // older completed rows that were finished before the fix landed.
 //
 // Coverage:
-//   1. submit metadata task → song_instances.tag_scanned=1 + physical params updated
-//   2. song_masters relink artist_id/album_id (incl. brand-new artist/album)
-//   3. format.bitrate / sampleRate / channels / duration land on song_instances
-//   4. partial result (only some tag fields) — still flips tag_scanned, never throws
-//   5. unknown instanceId in result → completed but applied.ok=false (no crash)
-//   6. error path still works (no apply attempted)
-//   7. /work/backfillCompleted: replays N pre-existing completed rows, returns
-//      processed/applied/failed
-//   8. helper directly: applyMetadataResult on an empty payload only flips
-//      tag_scanned (no relink, no artist clobber)
+//  1. submit metadata task → song_instances.tag_scanned=1 + physical params updated
+//  2. song_masters relink artist_id/album_id (incl. brand-new artist/album)
+//  3. format.bitrate / sampleRate / channels / duration land on song_instances
+//  4. partial result (only some tag fields) — still flips tag_scanned, never throws
+//  5. unknown instanceId in result → completed but applied.ok=false (no crash)
+//  6. error path still works (no apply attempted)
+//  7. /work/backfillCompleted: replays N pre-existing completed rows, returns
+//    processed/applied/failed
+//  8. helper directly: applyMetadataResult on an empty payload only flips
+//    tag_scanned (no relink, no artist clobber)
 //
 // Run: npx tsx test/work_submit_apply_metadata.test.ts
 

@@ -19,12 +19,12 @@
 // stub) so the suite stays self-contained and runs under plain `npx tsx`.
 //
 // Coverage:
-//   1. Mixed status batch — failed rows flipped to queued; other statuses left
-//      alone. attempts=0, error_message=NULL, claimed_*=NULL on the reset rows.
-//   2. task_type=metadata filter — only failed-metadata rows are touched;
-//      failed-scan rows in the same batch stay failed.
-//   3. No failed rows → ok:true, reset:0 (idempotent).
-//   4. Non-admin (level=2) → 403, nothing mutated.
+//  1. Mixed status batch — failed rows flipped to queued; other statuses left
+//    alone. attempts=0, error_message=NULL, claimed_*=NULL on the reset rows.
+//  2. task_type=metadata filter — only failed-metadata rows are touched;
+//    failed-scan rows in the same batch stay failed.
+//  3. No failed rows → ok:true, reset:0 (idempotent).
+//  4. Non-admin (level=2) → 403, nothing mutated.
 //
 // Run: npx tsx test/reset_failed_work.test.ts
 
@@ -252,7 +252,7 @@ async function main() {
     assert(body.ok === true && body.reset === 0, `reset=0 (got ${body.reset})`);
   }
 
-  console.log("\nNon-admin (level=2) → 403, no mutation (087 — permissionMiddleware XML):");
+  console.log("\nNon-admin (level=2) → 403, no mutation (permissionMiddleware XML):");
   {
     const sqlite = buildDb();
     seedRow(sqlite, { id: "f-x", status: "failed" });

@@ -18,9 +18,9 @@
 // the browser work pool) we have to flip `crossOriginIsolated = true` in every
 // EdgeSonic origin tab. That demands three headers on the document and every
 // resource the page loads from the same origin:
-//   Cross-Origin-Opener-Policy:   same-origin       (isolates the BrowsingContext)
-//   Cross-Origin-Embedder-Policy: require-corp      (every subresource needs a CORP grant)
-//   Cross-Origin-Resource-Policy: same-origin       (default grant: only embeddable by same-origin pages)
+//   Cross-Origin-Opener-Policy:   same-origin     (isolates the BrowsingContext)
+//   Cross-Origin-Embedder-Policy: require-corp    (every subresource needs a CORP grant)
+//   Cross-Origin-Resource-Policy: same-origin     (default grant: only embeddable by same-origin pages)
 //
 // All EdgeSonic traffic is same-origin to the SPA, so a same-origin CORP keeps
 // covers / streams / shares working without exposing them to cross-origin

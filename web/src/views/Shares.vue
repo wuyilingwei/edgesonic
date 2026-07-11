@@ -14,10 +14,10 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-//   GET      /rest/getShares
-//   GET|POST /rest/createShare
-//   GET|POST /rest/updateShare
-//   GET|POST /rest/deleteShare
+//   GET    /rest/getShares
+//  GET|POST /rest/createShare
+//  GET|POST /rest/updateShare
+//  GET|POST /rest/deleteShare
 // Plus the public byte stream at /share/:id which we never call from JS — the
 // URL comes back inside the <share url=".."> attribute and we hand it to the
 // clipboard so users can paste it anywhere.
@@ -382,7 +382,7 @@ onMounted(load);
         :class="showForm ? 'btn-secondary' : 'btn-primary'"
         @click="showForm = !showForm; if (!showForm) resetForm();"
       >
-        {{ showForm ? t("shares.cancel") : t("shares.create") }}
+       {{ showForm ? t("shares.cancel") : t("shares.create") }}
       </button>
     </div>
 
@@ -429,7 +429,7 @@ onMounted(load);
               :class="{ selected: form.targetId === r.id }"
               @click="pickTarget(r)"
             >
-              <div class="result-label">{{ r.label }}</div>
+             <div class="result-label">{{ r.label }}</div>
               <div v-if="r.sub" class="result-sub">{{ r.sub }}</div>
             </div>
           </div>

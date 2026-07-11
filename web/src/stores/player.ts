@@ -111,7 +111,7 @@ export const usePlayerStore = defineStore("player", () => {
     el.addEventListener("ended", () => { if (el === active) next(); });
     el.addEventListener("error", () => { if (el === active) playing.value = false; });
     el.addEventListener("progress", () => syncBuffered(el));
-    // Start prebuffering the next track only once the current one can play —
+    // Start prebuffering the next track only once the current one can play
     // a slow upstream shouldn't have to feed two streams during startup.
     el.addEventListener("canplay", () => { if (el === active) preloadNext(); });
     return el;

@@ -15,14 +15,14 @@
 
 // ============================================================================
 // ----------------------------------------------------------------------------
-//   GET           /rest/getPodcasts(.view)            [id?, includeEpisodes?]
-//   GET           /rest/getNewestPodcasts(.view)      [count?]
-//   GET           /rest/getPodcastEpisode(.view)      [id]
-//   GET           /rest/refreshPodcasts(.view)        (admin)
-//   GET/POST      /rest/createPodcastChannel(.view)   [url]                (admin)
-//   GET/POST      /rest/deletePodcastChannel(.view)   [id]                 (admin)
-//   GET/POST      /rest/deletePodcastEpisode(.view)   [id]                 (admin)
-//   GET/POST      /rest/downloadPodcastEpisode(.view) [id]                 (admin)
+//   GET           /rest/getPodcasts(.view)          [id?, includeEpisodes?]
+//   GET           /rest/getNewestPodcasts(.view)    [count?]
+//   GET           /rest/getPodcastEpisode(.view)    [id]
+//   GET           /rest/refreshPodcasts(.view)      (admin)
+//   GET/POST      /rest/createPodcastChannel(.view)   [url]              (admin)
+//   GET/POST      /rest/deletePodcastChannel(.view)   [id]               (admin)
+//   GET/POST      /rest/deletePodcastEpisode(.view)   [id]               (admin)
+//   GET/POST      /rest/downloadPodcastEpisode(.view) [id]               (admin)
 //
 // Admin endpoints additionally require the `manage_podcasts` permission and
 // pass through the auth middleware's SESSION_ONLY guard (see auth.ts).
@@ -144,7 +144,7 @@ function episodeNode(
 
 // ============================================================================
 // /rest/getPodcasts
-//   Params: id? (channel id), includeEpisodes? (boolean, default true)
+//  Params: id? (channel id), includeEpisodes? (boolean, default true)
 // ============================================================================
 const getPodcastsHandler = async (
   c: Context<{ Bindings: Env; Variables: { user: User } }>,
@@ -181,7 +181,7 @@ const getPodcastsHandler = async (
 
 // ============================================================================
 // /rest/getNewestPodcasts
-//   Params: count? (default 20)
+//  Params: count? (default 20)
 // ============================================================================
 const getNewestPodcastsHandler = async (
   c: Context<{ Bindings: Env; Variables: { user: User } }>,
@@ -211,7 +211,7 @@ const getNewestPodcastsHandler = async (
 
 // ============================================================================
 // /rest/getPodcastEpisode (OpenSubsonic extension)
-//   Params: id (episode id)
+//  Params: id (episode id)
 // ============================================================================
 const getPodcastEpisodeHandler = async (
   c: Context<{ Bindings: Env; Variables: { user: User } }>,
@@ -251,9 +251,9 @@ const refreshPodcastsHandler = async (
 
 // ============================================================================
 // /rest/createPodcastChannel
-//   Params: url (required)
-//   Behaviour: create the row (status=new) and kick off a refresh in the
-//   background; client polls getPodcasts for the populated meta + episodes.
+//  Params: url (required)
+//  Behaviour: create the row (status=new) and kick off a refresh in the
+//  background; client polls getPodcasts for the populated meta + episodes.
 // ============================================================================
 const createPodcastChannelHandler = async (
   c: Context<{ Bindings: Env; Variables: { user: User } }>,
@@ -284,7 +284,7 @@ const createPodcastChannelHandler = async (
 
 // ============================================================================
 // /rest/deletePodcastChannel
-//   Params: id
+//  Params: id
 // ============================================================================
 const deletePodcastChannelHandler = async (
   c: Context<{ Bindings: Env; Variables: { user: User } }>,
@@ -303,7 +303,7 @@ const deletePodcastChannelHandler = async (
 
 // ============================================================================
 // /rest/deletePodcastEpisode
-//   Params: id
+//  Params: id
 // ============================================================================
 const deletePodcastEpisodeHandler = async (
   c: Context<{ Bindings: Env; Variables: { user: User } }>,
@@ -328,9 +328,9 @@ const deletePodcastEpisodeHandler = async (
 
 // ============================================================================
 // /rest/downloadPodcastEpisode
-//   Params: id
-//   Non-blocking: status flips new → downloading immediately, R2 write runs in
-//   ctx.waitUntil and finalises status → completed | error.
+//  Params: id
+//  Non-blocking: status flips new → downloading immediately, R2 write runs in
+//  ctx.waitUntil and finalises status → completed | error.
 // ============================================================================
 const downloadPodcastEpisodeHandler = async (
   c: Context<{ Bindings: Env; Variables: { user: User } }>,

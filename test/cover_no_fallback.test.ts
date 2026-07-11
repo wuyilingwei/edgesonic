@@ -23,9 +23,9 @@
 // keys exist in D1.
 //
 // Contract under test:
-//   1. cover_r2_key NULL → 404 (no R2 puts, no body)
-//   2. albums.cover_r2_key is NEVER updated by the request (fallback path off)
-//   3. when cover_r2_key is set, the legacy 200 path still works
+//  1. cover_r2_key NULL → 404 (no R2 puts, no body)
+//  2. albums.cover_r2_key is NEVER updated by the request (fallback path off)
+//  3. when cover_r2_key is set, the legacy 200 path still works
 //
 // Run: npx tsx test/cover_no_fallback.test.ts
 
