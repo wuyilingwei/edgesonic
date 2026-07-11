@@ -519,6 +519,24 @@ workRoutes.post("/work/recheckMetadataNow",
   },
 );
 
+// ---------------------------------------------------------------------------
+// POST /edgesonic/work/backfillLrcNow
+// ---------------------------------------------------------------------------
+// 113 — Manual trigger for the same selection+fill runLrcBackfill runs on its
+// own cadence (utils/lrcBackfill.ts), bypassing lrc_backfill_interval_hours so
+// an admin can kick off a sweep immediately. Same permission gate as the
+// other work-queue admin endpoints. Unlike recheckMetadataNow this does not
+// touch work_queue at all — the sidecar read happens synchronously here.
+workRoutes.post("/work/backfillLrcNow",
+  permissionMiddleware("dispatch_work"),
+  async (c) => {
+    const env = c.env as Env;
+    const { runLrcBackfill } = await import("../../utils/lrcBackfill");
+    const result = await runLrcBackfill(env.DB, env);
+    return c.json({ ok: true, ...result });
+  },
+);
+
 // ===========================================================================
 // dispatchWork helper — shared with scan.ts (background batch dispatch).
 // ===========================================================================
