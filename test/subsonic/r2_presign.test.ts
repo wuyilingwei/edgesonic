@@ -8,14 +8,16 @@
 //   and the fallback (200 in-Worker stream) when presign is off / misconfig.
 //
 // Coverage:
-//  1. feature on + secrets set + raw r2 instance → 302 with SigV4 Location
-//   2. feature off                               → 200 in-Worker stream (fallback)
-//   3. secrets missing                           → 200 fallback (no 302)
-//   4. needsTranscode (format=mp3 mismatch)      → 200 (transcode/raw fallback, no 302)
-//   5. non-r2 scheme (webdav)                    → 200 (no 302; webdav adapter 404 body)
-//   6. Range header signed into the URL         → Location contains X-Amz-SignedHeaders=host;range
-//  7. presignR2Get unit: URL shape, host, query params, signature presence
-//  8. validator: enable_r2_presign accepts 0/1, rejects other
+//  1. subsonic credential + feature on + raw r2 instance → 302 with SigV4 Location
+//   2. browser session + feature on                      → 200 in-Worker stream (fallback)
+//   3. feature off                                       → 200 in-Worker stream (fallback)
+//   4. secrets missing                                   → 200 fallback (no 302)
+//   5. needsTranscode (format=mp3 mismatch)              → 200 (transcode/raw fallback, no 302)
+//   6. non-r2 scheme (webdav)                            → 200 (no 302; webdav adapter 404 body)
+//   7. Range header signed into the URL                  → Location contains X-Amz-SignedHeaders=host;range
+//   8. presignR2Get unit: URL shape, host, query params, signature presence
+//   9. validator: enable_r2_presign accepts 0/1, rejects other
+//  10. octet-stream R2 object + .flac suffix           → stream returns audio/flac
 //
 // Run: npx tsx test/subsonic/r2_presign.test.ts
 
@@ -108,11 +110,11 @@ function buildDb() {
 // ---------------------------------------------------------------------------
 // R2 shim (only used for the fallback path)
 // ---------------------------------------------------------------------------
-function makeR2() {
+function makeR2(contentType = "audio/flac") {
   const map = new Map<string, { data: Uint8Array; contentType: string }>();
   map.set("music/album/track.flac", {
     data: new TextEncoder().encode("FLAC_AUDIO_BYTES"),
-    contentType: "audio/flac",
+    contentType,
   });
   return {
     async get(key: string, _opts?: any) {
@@ -136,11 +138,12 @@ function makeR2() {
 }
 
 // ---------------------------------------------------------------------------
-function makeApp(sqlite: DatabaseSync, envOverrides: Partial<Env> = {}) {
+function makeApp(sqlite: DatabaseSync, envOverrides: Partial<Env> = {}, authMethod = "subsonic_cred") {
   const app = new Hono<{ Bindings: any; Variables: any }>();
   app.use("*", async (c, next) => {
     c.set("user", { username: "alice", level: 2, enabled: 1, password: "x" });
-    c.set("authMethod", "session");
+    c.set("authMethod", authMethod);
+    c.set("streamProxyStrategy", "always");
     return next();
   });
   app.route("/rest", mediaRoutes);
@@ -212,7 +215,7 @@ async function main() {
     assert(url.includes("X-Amz-Expires=604800"), "TTL clamped to 7 days max");
   }
 
-  console.log("\nstream: feature on + secrets set + raw r2 → 302 with Location");
+  console.log("\nstream: subsonic credential + feature on + secrets set + raw r2 → 302 with Location");
   {
     const sqlite = buildDb();
     setFeature(sqlite, "enable_r2_presign", "1");
@@ -229,6 +232,21 @@ async function main() {
     assert(loc.includes("/music/album/track.flac"), "Location path has key");
   }
 
+  console.log("\nstream: browser session + feature on + secrets set + raw r2 → 200 same-origin proxy");
+  {
+    const sqlite = buildDb();
+    setFeature(sqlite, "enable_r2_presign", "1");
+    const { get } = makeApp(sqlite, {
+      R2_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE",
+      R2_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      CF_ACCOUNT_ID: "df4481f3ce1fa0394b4617442a97d147",
+    }, "session");
+    const r = await get("/rest/stream?id=sm-1&format=raw");
+    assert(r.status === 200, `200 fallback (got ${r.status})`);
+    assert(r.headers.get("Location") === null, "no cross-origin R2 redirect for browser sessions");
+    assert(r.headers.get("Accept-Ranges") === "bytes", "same-origin proxy still supports byte ranges");
+  }
+
   console.log("\nstream: feature off → 200 in-Worker stream (fallback)");
   {
     const sqlite = buildDb();
@@ -241,6 +259,16 @@ async function main() {
     const r = await get("/rest/stream?id=sm-1&format=raw");
     assert(r.status === 200, `200 (got ${r.status})`);
     assert(r.headers.get("Location") === null, "no Location header on fallback");
+  }
+
+  console.log("\nstream: octet-stream R2 metadata + flac suffix → audio/flac Content-Type");
+  {
+    const sqlite = buildDb();
+    setFeature(sqlite, "enable_r2_presign", "0");
+    const { get } = makeApp(sqlite, { MUSIC_BUCKET: makeR2("application/octet-stream") as any });
+    const r = await get("/rest/stream?id=sm-1&format=raw");
+    assert(r.status === 200, `200 (got ${r.status})`);
+    assert(r.headers.get("Content-Type") === "audio/flac", "flac suffix normalizes octet-stream to audio/flac");
   }
 
   console.log("\nstream: secrets missing → 200 fallback (no 302)");
