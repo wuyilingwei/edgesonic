@@ -1,5 +1,7 @@
 # EdgeSonic
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 Serverless Subsonic-compatible music streaming server running entirely on **Cloudflare Workers**. No dedicated host, no always-on process — deploy once, stream anywhere.
 
 ## What it does
@@ -16,6 +18,7 @@ EdgeSonic serves two roles simultaneously:
 - **Browser worker pool** — distributed metadata parsing and transcoding via Web Workers; concurrency is tunable and pauses automatically during playback
 - **Server-side transcoding** — Sandbox DO container (ffmpeg) with on-demand or pre-bake strategy; browser pool engine for zero-backend-CPU transcoding
 - **Full Subsonic API** — playlists, bookmarks, play queue, annotations (star/rating/scrobble), sharing, internet radio, podcasts, Last.fm integration, now playing, cover art, lyrics
+- **Migrate from / push to another Subsonic server** — browser-driven clone pulls metadata, audio bytes, user accounts (with each user's own starred items and playlists), playlists, and stars from an upstream Subsonic-compatible server; resumable via a local browser cache so a cancelled or interrupted run picks up where it left off instead of starting over. The reverse direction pushes local stars/playlists back upstream.
 - **Tag editor** — read/write ID3v2 (MP3), VORBIS_COMMENT (FLAC/OGG), batch operations, keyword semantics (`{null}` / `{write}` / `{export}`)
 - **Metadata scraping** — NetEase / QQ Music / Kugou public APIs, frontend-driven, results submitted back to the server
 - **Incremental WebDAV scanning** — ETag + Last-Modified diff; unchanged files skipped; deduplication key prevents double-dispatch
@@ -55,7 +58,7 @@ edgesonic/
 │       ├── components/   # PlayerBar, UpdateBanner, …
 │       └── locales/      # zh-CN / en i18n strings
 │
-├── test/                 # Vitest unit + integration tests (worker)
+├── test/                 # Plain tsx test scripts (worker) — each file is self-contained, run individually
 ├── docs/                 # DESIGN.md, cf-integration.md, external-transcoder.md
 ├── deploy.sh             # Manual deploy script (wrangler CLI, no CF Git integration)
 └── package.json          # npm workspaces root (worker + web)
@@ -194,8 +197,12 @@ npm run dev:web
 # Type-check worker
 npm run typecheck
 
-# Run worker tests
-cd worker && npm test
+# Run a single worker test (each file under test/ is self-contained, no
+# aggregate runner — see the "Run:" comment at the top of each *.test.ts)
+npx tsx test/subsonic/annotation.test.ts
+
+# Run every test file
+find test -name '*.test.ts' -exec npx tsx {} \;
 
 # Type-check frontend
 cd web && npx vue-tsc --noEmit

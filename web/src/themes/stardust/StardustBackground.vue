@@ -24,7 +24,7 @@ import { startMetatron } from "../../lib/metatron3d";
 // visual safety margin, it re-rolls, optionally
 // retrying a bounded number of times before accepting anyway so a slot is
 // never starved indefinitely (visible count never collapses).
-const METATRON_SLOTS = 6;
+const METATRON_SLOTS = 4;
 const HEIGHT_MIN_VH = 4;
 const HEIGHT_MAX_VH = 88;
 const WOBBLE_MAX_VH = 18; // vertical drift over one crossing, off a straight line
@@ -165,7 +165,9 @@ let fallingMetatronSeq = 0;
 const fallingMetatrons = ref<FallingMetatron[]>([]);
 const fallingMetatronStops = new Map<number, () => void>();
 function spawnFallingMetatrons(x: number, y: number) {
-  const count = 1 + Math.floor(Math.random() * 3);
+  // 165: was a flat 1/2/3 (1-in-3 each); Rosmontis wants a 1-heavy split —
+  // 75% of clicks drop a single form, 25% drop a pair.
+  const count = Math.random() < 0.75 ? 1 : 2;
   for (let n = 0; n < count; n++) {
     const id = ++fallingMetatronSeq;
     const durationS = 1.1 + Math.random() * 0.6;
