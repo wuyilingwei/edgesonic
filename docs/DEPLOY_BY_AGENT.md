@@ -9,6 +9,11 @@
 > This is the **agent-run, local `wrangler`** deployment path. It downloads a precompiled package
 > from GitHub Releases so you never need to run `npm ci` / `npm run build:web` yourself. If you
 > want the alternative human/CI-driven path instead, see [`DEPLOYMENT.md`](DEPLOYMENT.md).
+>
+> This document itself is written in English, but every step where you talk to the operator —
+> clarifying questions in step 2, the completion report in step 5, any error you surface — should
+> be in whatever language the operator has been using in your conversation. Don't default to
+> English just because this file is in English.
 
 ## 0. What you'll produce
 
@@ -109,12 +114,44 @@ Replace these placeholders in `wrangler.toml` with the values gathered above:
 wrangler d1 execute <project-name>-db --remote --config wrangler.toml --file migrations/Schema.sql
 
 openssl rand -base64 48 | wrangler secret put WORK_UPLOAD_HMAC_KEY --config wrangler.toml
+printf '%s' "<account-id-from-step-2>" | wrangler secret put CF_ACCOUNT_ID --config wrangler.toml
 ```
 
-`WORK_UPLOAD_HMAC_KEY` is the one secret this runbook can safely generate itself (no operator
-input needed) — see `SECRETS.md` for what it's for. Leave the rest (`CF_API_TOKEN`,
-`CF_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`) for the operator; they each require a
-credential only the operator can create (see step 5).
+`WORK_UPLOAD_HMAC_KEY` is the HMAC-SHA-256 signing key for browser-pool transcode upload tokens
+(`SECRETS.md` §1) — one of two secrets this runbook can push without any operator action.
+`CF_ACCOUNT_ID` is the other: it's the exact same account id already confirmed in step 2, so just
+reuse it — don't ask the operator for it again.
+
+`CF_API_TOKEN` and the R2 S3 key pair (`R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`) are different —
+they require a credential only the operator can mint in the dashboard. See step 3.6.
+
+### 3.6 Optional: `CF_API_TOKEN` + R2 presign keys
+
+These three secrets all come from **one** combined API token, created in the dashboard. Give the
+operator this exact walkthrough (you cannot do the clicking yourself):
+
+1. Open `https://dash.cloudflare.com/<account-id>/api-tokens/create` (use the account id from
+   step 2).
+2. In the permissions search box, type **worker** and select every permission group that appears
+   **except R2** (these cover Workers Scripts edit + analytics read, needed for the app's cron
+   management and analytics integration).
+3. Add a second permission row and switch its resource scope from **all accounts** to
+   **R2 bucket**, then pick the bucket created in step 3.2. Cloudflare treats any token that
+   includes an R2 permission as R2-S3-compatible: on creation it shows you **both** the normal
+   Bearer token string **and** a separate Access Key ID / Secret Access Key pair for that bucket.
+4. Continue to summary → **Create Token**. Copy all three values shown (Bearer token, Access Key
+   ID, Secret Access Key) — the secret values are shown once.
+
+Once the operator pastes those three values back to you, push them:
+
+```bash
+wrangler secret put CF_API_TOKEN --config wrangler.toml
+wrangler secret put R2_ACCESS_KEY_ID --config wrangler.toml
+wrangler secret put R2_SECRET_ACCESS_KEY --config wrangler.toml
+```
+
+After `CF_API_TOKEN` is set, also flip `enable_r2_presign` on (see `SECRETS.md` §3) and restore the
+cron schedule the deploy in step 3.5 cleared — see step 5.
 
 ### 3.5 Deploy
 
@@ -151,15 +188,18 @@ committed file, a log an operator didn't ask for, or anywhere else it could pers
 
 ## 5. Report completion to the operator
 
-Tell the operator, in English:
+Tell the operator, in the language they've been using in this conversation (default to English
+if unclear):
 
 - The Worker is live at `https://<name>.<account>.workers.dev` (or their custom domain).
 - Superadmin login: username `admin`, password `<the generated 10-character password>` — shown
   once, save it now.
-- Deployment used the minimum secret set (`WORK_UPLOAD_HMAC_KEY` only). To finish setup, they
-  should configure the remaining optional keys themselves, per `worker/SECRETS.md`:
-  - `CF_API_TOKEN` + `CF_ACCOUNT_ID` — enables the in-app Cloudflare integration (cron management,
-    analytics) via Settings UI. Also needed to restore the cron schedule that this deploy cleared
-    — after setting it, visit **Settings → Cloudflare → "Ensure default cron"**.
-  - `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` — optional, enables R2 presigned direct streaming
-    (bypasses Worker bandwidth limits).
+- This runbook already pushed `WORK_UPLOAD_HMAC_KEY` and `CF_ACCOUNT_ID` automatically — nothing
+  to do there.
+- One optional step remains, covered in 3.6: create a single Cloudflare API token (dashboard link
+  + exact click-through given there) to get `CF_API_TOKEN` + `R2_ACCESS_KEY_ID` +
+  `R2_SECRET_ACCESS_KEY`. This enables the in-app Cloudflare integration (cron management,
+  analytics) and R2 presigned direct streaming (bypasses Worker bandwidth limits). If they want
+  this, walk them through 3.6 now and push the three secrets once they hand you the values.
+- Once `CF_API_TOKEN` is set, the cron schedule this deploy cleared needs restoring — visit
+  **Settings → Cloudflare → "Ensure default cron"** in the app.
