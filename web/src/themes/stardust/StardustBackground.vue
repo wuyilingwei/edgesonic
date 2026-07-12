@@ -35,11 +35,11 @@ import { startMetatron } from "../../lib/metatron3d";
 // path isn't a straight horizontal line. Before a slot starts a new
 // crossing it samples the candidate's full (x, y) path against every other
 // currently-active slot's path at the same instants; if any pair of
-// samples lands within the sum of the two forms' half-sizes (i.e. the two
-// solids would actually overlap on screen), it re-rolls, optionally
+// samples lands within the sum of the two forms' half-sizes plus a small
+// visual safety margin, it re-rolls, optionally
 // retrying a bounded number of times before accepting anyway so a slot is
 // never starved indefinitely (visible count never collapses).
-const METATRON_SLOTS = 12;
+const METATRON_SLOTS = 8;
 const HEIGHT_MIN_VH = 4;
 const HEIGHT_MAX_VH = 88;
 const WOBBLE_MAX_VH = 18; // vertical drift over one crossing, off a straight line
@@ -48,7 +48,8 @@ const SIZE_MAX = 224;
 const DURATION_MIN_S = 30;
 const DURATION_MAX_S = 64;
 const COLLISION_SAMPLES = 12; // samples across the time-overlap segment
-const COLLISION_RETRY_CAP = 3; // 3 refused re-rolls → accept anyway (avoid starvation)
+const COLLISION_PADDING_PX = 48; // extra breathing room beyond actual overlap
+const COLLISION_RETRY_CAP = 6; // more re-rolls now that fewer slots compete
 const COLLISION_RETRY_DELAY_MS = 220; // small backoff so re-rolls spread across frames
 
 interface DriftMetatron {
@@ -98,7 +99,8 @@ function driftPathAt(m: Pick<DriftCandidate, "top" | "midOffset" | "endOffset" |
 
 // True iff the candidate would actually overlap another active slot on
 // screen: samples both paths at COLLISION_SAMPLES+1 instants across their
-// shared time-overlap window and checks pixel distance < sum of half-sizes.
+// shared time-overlap window and checks pixel distance < sum of half-sizes
+// plus COLLISION_PADDING_PX.
 // Compared to the old full-wobble band×time test this only rejects true
 // visual overlaps — wobble sweeps can cross as long as they're not at the
 // same x at the same time.
@@ -119,7 +121,7 @@ function driftCollides(candidate: DriftCandidate, candidateStart: number, slots:
       const p2 = driftPathAt(o, tMs - o.startedAt);
       const dx = p1.x - p2.x;
       const dy = p1.y - p2.y;
-      const minDist = p1.half + p2.half;
+      const minDist = p1.half + p2.half + COLLISION_PADDING_PX;
       if (dx * dx + dy * dy < minDist * minDist) return true;
     }
   }
@@ -164,46 +166,47 @@ function mountMetatron(el: unknown, key: number) {
   }
 }
 
-// Clicking anywhere on the page drops a small burst of falling pieces from
-// the click point. Each piece is a pair of plain CSS
-// transform-style:preserve-3d cubes (literal cubes, distinct from the
-// octahedral Metatron solid) rather than another canvas render: they're
-// single-use and gone within ~1.5s, so a GPU-composited CSS animation is
-// simpler and cheaper than spinning up a render loop per particle. The fade
-// (opacity) lives on the outer wrapper, one level above the preserve-3d
-// elements — putting opacity/filter directly on a preserve-3d element is
-// exactly what flattened the CSS Metatron attempts earlier, so the two
-// cubes stay untouched by those properties. Face colours are gold shades
-// only (no blue/violet): each face is a fixed brightness/saturation of
-// gold approximating a fixed light striking that face's fixed direction,
-// same "vividness by angle, not hue" rule as metatron3d.ts's shadeFace.
-interface FallingCube { id: number; x: number; y: number; size: number; duration: string; delay: string; drift: string; spin: string; spin2: string; }
-let fallingCubeSeq = 0;
-const fallingCubes = ref<FallingCube[]>([]);
-function spawnFallingCubes(x: number, y: number) {
-  const count = 4 + Math.floor(Math.random() * 4);
+// Clicking anywhere on the page drops a tiny burst of falling Metatron
+// solids from the click point. They use the same real-3D canvas renderer as
+// the drifting background forms, only smaller and short-lived.
+interface FallingMetatron { id: number; x: number; y: number; size: number; duration: string; delay: string; drift: string; spinSeconds: number; phase: number; }
+let fallingMetatronSeq = 0;
+const fallingMetatrons = ref<FallingMetatron[]>([]);
+const fallingMetatronStops = new Map<number, () => void>();
+function spawnFallingMetatrons(x: number, y: number) {
+  const count = 1 + Math.floor(Math.random() * 3);
   for (let n = 0; n < count; n++) {
-    const id = ++fallingCubeSeq;
+    const id = ++fallingMetatronSeq;
     const durationS = 1.1 + Math.random() * 0.6;
     const delayS = Math.random() * 0.14;
-    fallingCubes.value.push({
+    fallingMetatrons.value.push({
       id,
       x: x + (Math.random() - 0.5) * 36,
       y,
-      size: Math.round(15 + Math.random() * 10),
+      size: Math.round(24 + Math.random() * 14),
       duration: `${durationS.toFixed(2)}s`,
       delay: `${delayS.toFixed(2)}s`,
       drift: `${Math.round((Math.random() - 0.5) * 90)}px`,
-      spin: `${(0.9 + Math.random() * 0.8).toFixed(2)}s`,
-      spin2: `${(0.9 + Math.random() * 0.8).toFixed(2)}s`,
+      spinSeconds: 0.9 + Math.random() * 0.8,
+      phase: Math.random(),
     });
     window.setTimeout(() => {
-      fallingCubes.value = fallingCubes.value.filter((c) => c.id !== id);
+      fallingMetatronStops.get(id)?.();
+      fallingMetatronStops.delete(id);
+      fallingMetatrons.value = fallingMetatrons.value.filter((m) => m.id !== id);
     }, (durationS + delayS + 0.2) * 1000);
   }
 }
+function mountFallingMetatron(el: unknown, id: number) {
+  fallingMetatronStops.get(id)?.();
+  fallingMetatronStops.delete(id);
+  if (el instanceof HTMLCanvasElement) {
+    const m = fallingMetatrons.value.find((d) => d.id === id);
+    if (m) fallingMetatronStops.set(id, startMetatron(el, { size: m.size, spinSeconds: m.spinSeconds, phase: m.phase }));
+  }
+}
 function onPageClick(e: MouseEvent) {
-  spawnFallingCubes(e.clientX, e.clientY);
+  spawnFallingMetatrons(e.clientX, e.clientY);
 }
 
 onMounted(() => {
@@ -214,6 +217,8 @@ onBeforeUnmount(() => {
   stopDriftSystem();
   metatronStops.forEach((stop) => stop());
   metatronStops.clear();
+  fallingMetatronStops.forEach((stop) => stop());
+  fallingMetatronStops.clear();
   window.removeEventListener("click", onPageClick);
 });
 </script>
@@ -241,41 +246,23 @@ onBeforeUnmount(() => {
     </template>
   </div>
 
-  <!-- Click anywhere on the page to drop a burst of small cube pairs from
-       the click point; see spawnFallingCubes/onPageClick above. -->
-  <div class="cube-fall-layer" aria-hidden="true">
+  <!-- Click anywhere on the page to drop a burst of small Metatron solids. -->
+  <div class="metatron-fall-layer" aria-hidden="true">
     <div
-      v-for="c in fallingCubes"
-      :key="c.id"
-      class="falling-cube"
+      v-for="m in fallingMetatrons"
+      :key="m.id"
+      class="falling-metatron"
       :style="{
-        left: `${c.x}px`,
-        top: `${c.y}px`,
-        width: `${c.size}px`,
-        height: `${c.size}px`,
-        animationDuration: c.duration,
-        animationDelay: c.delay,
-        '--fall-drift': c.drift,
+        left: `${m.x}px`,
+        top: `${m.y}px`,
+        width: `${m.size}px`,
+        height: `${m.size}px`,
+        animationDuration: m.duration,
+        animationDelay: m.delay,
+        '--fall-drift': m.drift,
       }"
     >
-      <div class="cube-pair">
-        <div class="cube-3d cube-a" :style="{ animationDuration: c.spin, '--cube-half': `${c.size * 0.34}px` }">
-          <span class="cube-face front"></span>
-          <span class="cube-face back"></span>
-          <span class="cube-face right"></span>
-          <span class="cube-face left"></span>
-          <span class="cube-face top"></span>
-          <span class="cube-face bottom"></span>
-        </div>
-        <div class="cube-3d cube-b" :style="{ animationDuration: c.spin2, '--cube-half': `${c.size * 0.34}px` }">
-          <span class="cube-face front"></span>
-          <span class="cube-face back"></span>
-          <span class="cube-face right"></span>
-          <span class="cube-face left"></span>
-          <span class="cube-face top"></span>
-          <span class="cube-face bottom"></span>
-        </div>
-      </div>
+      <canvas class="falling-metatron-solid" :ref="(el) => mountFallingMetatron(el, m.id)"></canvas>
     </div>
   </div>
 </template>
@@ -327,65 +314,36 @@ onBeforeUnmount(() => {
   .stardust-bg { display: none; }
 }
 
-/* --- Click-anywhere cube burst ---
- * Page-level fixed overlay, above navbar/sidebar, so cubes are visible
+/* --- Click-anywhere Metatron burst ---
+ * Page-level fixed overlay, above navbar/sidebar, so pieces are visible
  * falling from a click no matter where on the page it lands. Each piece is
- * a pair of plain CSS transform-style:preserve-3d cubes — literal cubes,
- * distinct from the octahedral Metatron solid — positioned in raw viewport
- * pixels from the click event. Every face is the same gold hue; only its
- * lightness/saturation changes per face (matching the fixed key light's
- * angle to that face), same vividness-by-angle rule as
- * metatron3d.ts's shadeFace — no blue/violet.
+ * the same canvas-rendered Metatron solid used by the background, positioned
+ * in raw viewport pixels from the click event.
  */
-.cube-fall-layer {
+.metatron-fall-layer {
   position: fixed;
   inset: 0;
   z-index: 250;
   overflow: visible;
   pointer-events: none;
 }
-.falling-cube {
+.falling-metatron {
   position: absolute;
-  perspective: 240px;
-  animation: cubeFall linear forwards;
+  animation: metatronFall linear forwards;
   animation-duration: inherit;
 }
-.cube-pair {
-  position: relative;
+.falling-metatron-solid {
+  display: block;
   width: 100%;
   height: 100%;
-  transform-style: preserve-3d;
+  filter: drop-shadow(0 0 8px rgba(255, 214, 74, 0.62));
 }
-.cube-3d {
-  position: absolute;
-  width: 66%;
-  height: 66%;
-  transform-style: preserve-3d;
-  animation: cubeSpin linear infinite;
-}
-.cube-3d.cube-a { top: 2%; left: 2%; }
-.cube-3d.cube-b { top: 32%; left: 32%; animation-direction: reverse; }
-.cube-face {
-  position: absolute;
-  inset: 0;
-  border: 1px solid rgba(255,255,255,0.4);
-}
-.cube-face.top    { background: linear-gradient(135deg, #fff8d6, #ffe27a); transform: rotateX(90deg) translateZ(var(--cube-half)); }
-.cube-face.front  { background: linear-gradient(135deg, #fff3b0, var(--color-stardust-gold)); transform: translateZ(var(--cube-half)); }
-.cube-face.left   { background: linear-gradient(135deg, #ffe27a, var(--color-stardust-gold)); transform: rotateY(-90deg) translateZ(var(--cube-half)); }
-.cube-face.right  { background: linear-gradient(135deg, var(--color-stardust-gold), #d9a520); transform: rotateY(90deg) translateZ(var(--cube-half)); }
-.cube-face.back   { background: linear-gradient(135deg, #b8860a, #8a6608); transform: rotateY(180deg) translateZ(var(--cube-half)); }
-.cube-face.bottom { background: linear-gradient(135deg, #7a5c08, #4d3a05); transform: rotateX(-90deg) translateZ(var(--cube-half)); }
-@keyframes cubeSpin {
-  from { transform: rotateX(0deg) rotateY(0deg); }
-  to   { transform: rotateX(360deg) rotateY(360deg); }
-}
-@keyframes cubeFall {
+@keyframes metatronFall {
   0%   { transform: translate(0, 0); opacity: 1; }
   80%  { opacity: 1; }
   100% { transform: translate(var(--fall-drift), 190px); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .cube-3d, .falling-cube { animation: none; }
+  .falling-metatron { animation: none; }
 }
 </style>

@@ -292,7 +292,7 @@ function rebuildFLAC(buf: Uint8Array, tags: SongTags, cover?: TagWriteCover): Pr
     else if (type === 6 && cover && isFrontCoverFLAC(body)) {
       // skip — replaced by the new front cover below
     } else {
-      blocks.push({ type, body });
+      blocks.push({ type, body: type === 6 ? repairFlacPictureBody(body) : body });
     }
     pos += 4 + size;
     if (isLast) break;
@@ -335,6 +335,36 @@ function rebuildFLAC(buf: Uint8Array, tags: SongTags, cover?: TagWriteCover): Pr
     w += 4 + b.body.length;
   });
   return { oldPrefixLen, newPrefix: out };
+}
+
+// Some encoder pipelines (seen: Lavf-muxed release FLACs) emit PICTURE blocks
+// whose MIME string is empty. Desktop ffmpeg only warns, but Chrome's demuxer
+// runs with AV_EF_EXPLODE and hard-fails the whole file open
+// (DEMUXER_ERROR_COULD_NOT_OPEN), so every prefix rewrite heals the block by
+// sniffing the MIME from the image magic. Unknown magics are left untouched.
+function repairFlacPictureBody(body: Uint8Array): Uint8Array {
+  if (body.length < 8 || be32(body, 4) !== 0) return body; // mime present — nothing to heal
+  let p = 8;
+  if (p + 4 > body.length) return body;
+  const descLen = be32(body, p) >>> 0;
+  p += 4 + descLen + 16; // desc + width/height/depth/colours
+  if (p + 4 > body.length) return body;
+  p += 4; // data_len
+  const mime = sniffImageMime(body.subarray(p));
+  if (!mime) return body;
+  const mimeBytes = new TextEncoder().encode(mime);
+  const out = new Uint8Array(body.length + mimeBytes.length);
+  out.set(body.subarray(0, 4), 0); // picture type
+  out[4] = 0; out[5] = 0; out[6] = 0; out[7] = mimeBytes.length;
+  out.set(mimeBytes, 8);
+  out.set(body.subarray(8), 8 + mimeBytes.length);
+  return out;
+}
+
+function sniffImageMime(data: Uint8Array): string | null {
+  if (data.length >= 2 && data[0] === 0xff && data[1] === 0xd8) return "image/jpeg";
+  if (data.length >= 4 && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47) return "image/png";
+  return null;
 }
 
 // PICTURE body: type(4 BE) + mime_len(4) + mime + desc_len(4) + desc + w(4) + h(4) + depth(4) + colors(4) + data_len(4) + data
