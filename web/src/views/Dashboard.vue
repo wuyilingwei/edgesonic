@@ -5,7 +5,7 @@ import { useAuth, parseXmlAttrs } from "../api";
 import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
-const { isLoggedIn, username, isAdmin, isSuperAdmin, level, authFetch, storageFetch, edgesonicFetch, edgesonicPost, handleAuthError } = useAuth();
+const { isLoggedIn, username, isAdmin, isSuperAdmin, level, storageFetch, edgesonicFetch, edgesonicPost, handleAuthError } = useAuth();
 const workerPool = useWorkerPool();
 const loading = ref(true);
 const stats = ref({ artists: 0, albums: 0, songs: 0, sources: 0, users: 0 });
@@ -318,16 +318,25 @@ async function onReclaimStaleWork() {
 onMounted(async () => {
   if (!isLoggedIn.value) return;
   try {
-    const [artistXml, searchXml, sourceXml, userXml] = await Promise.all([
-      authFetch("getArtists"),
-      authFetch("search3", { query: "", songCount: "500", albumCount: "0", artistCount: "0" }),
+    const [libraryJson, sourceXml, userXml] = await Promise.all([
+      edgesonicFetch("stats/library"),
       isAdmin.value ? storageFetch("sources/list") : Promise.resolve(""),
       isAdmin.value ? edgesonicFetch("users/list") : Promise.resolve(""),
     ]);
 
-    stats.value.artists = artistXml.match(/<artist\s/g)?.length || 0;
-    stats.value.songs = searchXml.match(/<song\s/g)?.length || 0;
-    stats.value.albums = 0; // home no longer probes album detail endpoints
+    // 164: was getArtists (row-count, actually accurate) + search3 with
+    // songCount/albumCount:"500" (155's fix for the album stat, but capped —
+    // any library past 500 albums or songs silently plateaued at exactly
+    // 500 instead of showing the true total, per Rosmontis's report). One
+    // real COUNT(*) endpoint replaces both, and is exact regardless of size.
+    try {
+      const parsed = JSON.parse(libraryJson) as { ok?: boolean; artists?: number; albums?: number; songs?: number };
+      if (parsed.ok) {
+        stats.value.artists = parsed.artists ?? 0;
+        stats.value.albums = parsed.albums ?? 0;
+        stats.value.songs = parsed.songs ?? 0;
+      }
+    } catch { /* leave stats at 0 on parse failure */ }
 
     if (sourceXml) {
       stats.value.sources = parseXmlAttrs(sourceXml, "source").length;

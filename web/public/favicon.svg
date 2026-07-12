@@ -7,6 +7,10 @@
     </radialGradient>
   </defs>
 
+  <!-- 161: kept in sync with logo.svg — see that file for why the mark is
+       wrapped in a scale transform instead of recomputed coordinates. -->
+  <g transform="translate(128 128) scale(1.3) translate(-128 -128)">
+
   <!-- 主碟片(vinyl/CD) -->
   <circle cx="128" cy="128" r="90" fill="url(#discGrad)" stroke="#0C1E3E" stroke-width="3"/>
 
@@ -42,4 +46,6 @@
 
   <!-- 焦点:加粗中心点 -->
   <circle cx="128" cy="128" r="4" fill="#FFFFFF" stroke="#F38020" stroke-width="2.5"/>
+
+  </g>
 </svg>

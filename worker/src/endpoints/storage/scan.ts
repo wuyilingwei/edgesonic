@@ -212,10 +212,13 @@ scanRoutes.get("/scan/pending", permissionMiddleware("edit_tags"), async (c) => 
   if (!source) {
     return c.json({ ok: false, error: "Missing source parameter" }, 400);
   }
-  // Cap at 500 so a malicious client can't tank D1; default 50 matches the
-  // BROWSER READ batch size that runBrowserRead drives in Files.vue.
+  // 157: dropped the 500 ceiling — this route is already gated by
+  // permissionMiddleware("edit_tags"), so the "malicious client" the old
+  // comment worried about would need to be an authenticated tag-editor
+  // already; default 50 matches the BROWSER READ batch size that
+  // runBrowserRead drives in Files.vue.
   const rawLimit = parseInt(c.req.query("limit") || "50", 10);
-  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 50;
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : 50;
 
   // Items not yet tag-scanned for this source. The partial index
   // idx_si_pending_scan keeps this O(matches).
@@ -265,8 +268,9 @@ scanRoutes.get("/scan/listForMirror", permissionMiddleware("manage_sources"), as
   const db = env.DB;
   const source = c.req.query("source") || "";
   if (!source) return c.json({ ok: false, error: "Missing source parameter" }, 400);
+  // 157: dropped the 500 ceiling — already gated by manage_sources.
   const rawLimit = parseInt(c.req.query("limit") || "100", 10);
-  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(500, rawLimit)) : 100;
+  const limit = Number.isFinite(rawLimit) ? Math.max(1, rawLimit) : 100;
   const rawOffset = parseInt(c.req.query("offset") || "0", 10);
   const offset = Number.isFinite(rawOffset) ? Math.max(0, rawOffset) : 0;
 

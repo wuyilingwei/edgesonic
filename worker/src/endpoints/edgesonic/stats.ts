@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { getFeatureString } from "../../utils/features";
+import { createQueries } from "../../db/queries";
+import { permissionMiddleware } from "../../auth";
 import type { AuthMethod } from "../../auth";
 import type { User } from "../../types/entities";
 
@@ -7,6 +9,17 @@ export const statsRoutes = new Hono<{
   Bindings: Env;
   Variables: { user: User; authMethod: AuthMethod };
 }>();
+
+// GET /edgesonic/stats/library
+// 164: real COUNT(*) totals (artists/albums/songs) for the Dashboard stat
+// tiles — same "browse" permission as the /rest/* Subsonic reads it's
+// replacing (getArtists / the old capped search3 call), so any logged-in
+// user who can see the library sees an accurate count of it, not just admins.
+statsRoutes.get("/stats/library", permissionMiddleware("browse"), async (c) => {
+  const queries = createQueries(c.env.DB);
+  const counts = await queries.getLibraryCounts();
+  return c.json({ ok: true, ...counts });
+});
 
 // GET /edgesonic/stats/storage
 // Returns a storage breakdown (song count + bytes) grouped by storage type,

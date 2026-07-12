@@ -2,12 +2,14 @@
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatSize } from "../api";
+import { mapConcurrent } from "../lib/concurrency";
+import { normalizeForMatch } from "../lib/trackMatch";
 import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
 import type { ScrapeResult } from "../lib/scrape";
 
 const { t } = useI18n();
-const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, tidyFolder, restUrl, level } = useAuth();
+const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, batchWriteTags, tidyFolder, restUrl, level, coverArtUrl } = useAuth();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
 interface DirEntry { name: string; }
@@ -34,11 +36,19 @@ const uploadBusy = ref(false);
 const uploadMsg = ref("");
 const uploadErr = ref(false);
 
-// Cross-source copy state — 089/S4
-const crossCopyModal = ref<{ file: FileEntry } | null>(null);
+// Cross-source copy state — 089/S4, batched + concurrent as of 144.
+// `crossCopyDestPath` is now a destination *directory*; each queued file's
+// actual destPath is `${crossCopyDestPath}/${file.name}` (see joinPath below).
+// This also fixes a pre-existing rough edge in the single-file flow, which
+// used to require the user to type the filename themselves.
+interface CrossCopyItem { file: FileEntry; status: "pending" | "copying" | "done" | "failed"; error?: string; }
+const crossCopyModal = ref<{ files: FileEntry[] } | null>(null);
 const crossCopyDestSource = ref("r2");
 const crossCopyDestPath = ref("");
 const crossCopyBusy = ref(false);
+const crossCopyQueue = ref<CrossCopyItem[]>([]);
+const selectedFiles = ref<Set<string>>(new Set()); // keyed by FileEntry.uri
+const CROSS_COPY_CONCURRENCY = 3;
 
 // Tag scan state
 const scanning = ref(false);
@@ -54,9 +64,22 @@ const pendingCount = ref(0);
 // R2 file operations state
 const renamingFile = ref<string | null>(null); // file name currently being renamed
 const renameInput = ref("");
-const opModal = ref<{ file: FileEntry; mode: "move" | "copy" } | null>(null);
+// 150 — generalized to N files so the same modal drives both the per-row
+// move/copy button (files: [f]) and the batch-move action.
+const opModal = ref<{ files: FileEntry[]; mode: "move" | "copy" } | null>(null);
 const opDestInput = ref("");
 const opBusy = ref(false);
+const opQueue = ref<Array<{ file: FileEntry; status: "pending" | "running" | "done" | "failed"; error?: string }>>([]);
+const OP_CONCURRENCY = 3;
+// 150 — replaces window.confirm() for delete (single + batch), same reasoning
+// as the mirror-copy confirm modal in Sources.vue: a native confirm() can't
+// be styled and blocks the whole page's event loop until answered.
+const deleteConfirmModal = ref<{ files: FileEntry[] } | null>(null);
+
+// New folder state — works on r2 (marker object) and webdav (MKCOL) alike
+const newFolderModal = ref(false);
+const newFolderName = ref("");
+const newFolderBusy = ref(false);
 
 // Toast
 const toast = ref({ show: false, msg: "", type: "success" });
@@ -207,24 +230,60 @@ async function doUpload() {
   }
 }
 
-// 089/S4 — Cross-source copy helpers
+// 089/S4, batched in 144 — Cross-source copy helpers
 function openCrossModal(f: FileEntry) {
-  crossCopyModal.value = { file: f };
+  crossCopyModal.value = { files: [f] };
   crossCopyDestSource.value = "r2";
   crossCopyDestPath.value = path.value;
+  crossCopyQueue.value = [];
 }
-function closeCrossModal() { crossCopyModal.value = null; }
+function openCrossModalBatch() {
+  const targets = files.value.filter((f) => selectedFiles.value.has(f.uri));
+  if (targets.length === 0) return;
+  crossCopyModal.value = { files: targets };
+  crossCopyDestSource.value = "r2";
+  crossCopyDestPath.value = path.value;
+  crossCopyQueue.value = [];
+}
+function closeCrossModal() {
+  if (crossCopyBusy.value) return; // don't yank the modal away mid-batch
+  crossCopyModal.value = null;
+  crossCopyQueue.value = [];
+}
+function toggleCrossSelect(f: FileEntry) {
+  if (selectedFiles.value.has(f.uri)) selectedFiles.value.delete(f.uri);
+  else selectedFiles.value.add(f.uri);
+}
+function joinPath(dir: string, name: string): string {
+  const d = dir.replace(/\/+$/, "");
+  return d ? `${d}/${name}` : name;
+}
 
 async function confirmCrossOp() {
   if (!crossCopyModal.value) return;
-  const { file } = crossCopyModal.value;
+  const targets = crossCopyModal.value.files;
   crossCopyBusy.value = true;
+  crossCopyQueue.value = targets.map((file) => ({ file, status: "pending" }));
   try {
-    await crossCopy(file.uri, crossCopyDestSource.value, crossCopyDestPath.value);
-    showToast(t("files.crossCopied"));
-    closeCrossModal();
-  } catch (e) {
-    showToast(e instanceof Error ? e.message : t("files.crossCopyFailed"), "error");
+    await mapConcurrent(crossCopyQueue.value, CROSS_COPY_CONCURRENCY, async (item) => {
+      item.status = "copying";
+      try {
+        await crossCopy(item.file.uri, crossCopyDestSource.value, joinPath(crossCopyDestPath.value, item.file.name));
+        item.status = "done";
+      } catch (e) {
+        item.status = "failed";
+        item.error = e instanceof Error ? e.message : String(e);
+      }
+    });
+    const failed = crossCopyQueue.value.filter((i) => i.status === "failed").length;
+    if (failed === 0) {
+      showToast(targets.length > 1 ? t("files.crossCopiedBatch", { n: targets.length }) : t("files.crossCopied"));
+      selectedFiles.value.clear();
+      closeCrossModal();
+    } else {
+      showToast(t("files.crossCopyPartialFail", { done: targets.length - failed, failed }), "error");
+    }
+    loadDir();
   } finally {
     crossCopyBusy.value = false;
   }
@@ -284,68 +343,173 @@ async function confirmRename(f: FileEntry) {
 }
 
 function openMoveModal(f: FileEntry, mode: "move" | "copy") {
-  opModal.value = { file: f, mode };
+  opModal.value = { files: [f], mode };
   opDestInput.value = path.value;
+  opQueue.value = [];
 }
 
-function closeOpModal() { opModal.value = null; opDestInput.value = ""; }
+// 150 — batch move: same modal, N files. Copy has no batch entry point in
+// the UI (not requested), but the underlying code handles N files either way.
+function openBatchMoveModal() {
+  const targets = files.value.filter((f) => selectedFiles.value.has(f.uri));
+  if (!targets.length) return;
+  opModal.value = { files: targets, mode: "move" };
+  opDestInput.value = path.value;
+  opQueue.value = [];
+}
+
+function closeOpModal() {
+  if (opBusy.value) return;
+  opModal.value = null;
+  opDestInput.value = "";
+  opQueue.value = [];
+}
 
 async function confirmOp() {
   if (!opModal.value) return;
-  const { file, mode } = opModal.value;
+  const { files: targets, mode } = opModal.value;
   const destDir = opDestInput.value.replace(/\/$/, "");
-  const fromKey = r2Key(file);
-  const toKey = (destDir ? destDir + "/" : "") + file.name;
   opBusy.value = true;
+  opQueue.value = targets.map((file) => ({ file, status: "pending" }));
   try {
     const endpoint = mode === "move" ? "files/move" : "files/copy";
-    const res = await storagePost(endpoint, { key: fromKey, dest: toKey });
-    if (!JSON.parse(res).ok) throw new Error();
-    showToast(mode === "move" ? t("files.moved") : t("files.copied"));
-    closeOpModal();
+    await mapConcurrent(opQueue.value, OP_CONCURRENCY, async (item) => {
+      item.status = "running";
+      try {
+        const fromKey = r2Key(item.file);
+        const toKey = (destDir ? destDir + "/" : "") + item.file.name;
+        const res = await storagePost(endpoint, { key: fromKey, dest: toKey });
+        if (!JSON.parse(res).ok) throw new Error();
+        item.status = "done";
+      } catch (e) {
+        item.status = "failed";
+        item.error = e instanceof Error ? e.message : String(e);
+      }
+    });
+    const failed = opQueue.value.filter((i) => i.status === "failed").length;
+    const verb = mode === "move" ? t("files.moved") : t("files.copied");
+    if (failed === 0) {
+      showToast(targets.length > 1 ? t("files.batchOpDone", { n: targets.length, verb }) : verb);
+      selectedFiles.value.clear();
+      closeOpModal();
+    } else {
+      showToast(t("files.batchOpPartialFail", { done: targets.length - failed, failed }), "error");
+    }
     loadDir();
-  } catch { showToast(t("files.opFailed"), "error"); }
-  finally { opBusy.value = false; }
+  } finally {
+    opBusy.value = false;
+  }
 }
 
-async function deleteFile(f: FileEntry) {
-  if (!confirm(t("files.deleteConfirm", { name: f.name }))) return;
-  const key = r2Key(f);
+function openDeleteConfirm(f: FileEntry) {
+  deleteConfirmModal.value = { files: [f] };
+}
+function openBatchDeleteConfirm() {
+  const targets = files.value.filter((f) => selectedFiles.value.has(f.uri));
+  if (!targets.length) return;
+  deleteConfirmModal.value = { files: targets };
+}
+function cancelDeleteConfirm() {
+  if (opBusy.value) return;
+  deleteConfirmModal.value = null;
+}
+
+async function confirmDelete() {
+  if (!deleteConfirmModal.value) return;
+  const targets = deleteConfirmModal.value.files;
+  deleteConfirmModal.value = null;
   opBusy.value = true;
+  const queue = targets.map((file) => ({ file, status: "pending" as const, error: undefined as string | undefined }));
   try {
-    const res = await storagePost("files/delete", { key });
-    if (!JSON.parse(res).ok) throw new Error();
-    showToast(t("files.deleted"));
+    await mapConcurrent(queue, OP_CONCURRENCY, async (item) => {
+      try {
+        const res = await storagePost("files/delete", { key: r2Key(item.file) });
+        if (!JSON.parse(res).ok) throw new Error();
+      } catch (e) {
+        item.error = e instanceof Error ? e.message : String(e);
+      }
+    });
+    const failed = queue.filter((i) => i.error).length;
+    if (failed === 0) {
+      showToast(targets.length > 1 ? t("files.batchOpDone", { n: targets.length, verb: t("files.deleted") }) : t("files.deleted"));
+      selectedFiles.value.clear();
+    } else {
+      showToast(t("files.batchOpPartialFail", { done: targets.length - failed, failed }), "error");
+    }
     loadDir();
-  } catch { showToast(t("files.opFailed"), "error"); }
-  finally { opBusy.value = false; }
+  } finally {
+    opBusy.value = false;
+  }
 }
 
-// ── Tag editor (single mode only — batch lives in Library) ─────────────────
+// ── New folder (r2 + webdav) ────────────────────────────────────────────────
+function openNewFolderModal() {
+  newFolderName.value = "";
+  newFolderModal.value = true;
+}
+
+function closeNewFolderModal() {
+  if (newFolderBusy.value) return;
+  newFolderModal.value = false;
+  newFolderName.value = "";
+}
+
+async function confirmNewFolder() {
+  const name = newFolderName.value.trim();
+  if (!name || /[\\/]/.test(name)) { showToast(t("files.folderNameInvalid"), "error"); return; }
+  newFolderBusy.value = true;
+  try {
+    const res = await storagePost("files/mkdir", { source: currentSource.value, path: joinPath(path.value, name) });
+    if (!JSON.parse(res).ok) throw new Error();
+    showToast(t("files.folderCreated"));
+    closeNewFolderModal();
+    loadDir();
+  } catch { showToast(t("files.folderCreateFailed"), "error"); }
+  finally { newFolderBusy.value = false; }
+}
+
+// ── Tag editor (single + batch, 150) ────────────────────────────────────────
 const editorOpen = ref(false);
-const editTargetId = ref<string | null>(null);
+const editorMode = ref<"single" | "batch">("single");
+const editTargetId = ref<string | null>(null); // single mode
+const editTargetIds = ref<string[]>([]); // batch mode
 const editInitial = ref<Record<string, string | number>>({});
+const editCoverArt = ref<string>("");
 const editBusy = ref(false);
 const editMsg = ref("");
 const editErr = ref(false);
+// 149: preload the matched song's current cover into TagEditor.
+const editExistingCoverUrl = computed(() => editCoverArt.value ? coverArtUrl(editCoverArt.value, 200) : undefined);
 
 const canEditTags = computed(() => level.value >= 2);
 const isAudio = (name: string) => /\.(mp3|flac|wav|ogg|opus|m4a|aac)$/i.test(name);
 
-async function openTagEditor(f: FileEntry) {
-  // Worker writeTags wants a song master_id; resolve it via search3 on the
-  // filename stem. If unique → open editor; if 0 hits → toast asks user to scan.
+// Worker writeTags/batchWriteTags want song master_ids; resolve them via
+// search3 on the filename stem. search3 does `title LIKE '%query%'` —
+// WebDAV filenames almost always carry a leading track number
+// ("11 (Bonus Track)...") that the stored title doesn't, so searching on the
+// raw stem reliably found nothing ("no match"). normalizeForMatch strips
+// that prefix (same helper the migration tool's push-match already uses) so
+// the LIKE has a real substring to find. Shared by the single editor, the
+// batch editor, and tidy-folder — three call sites used to each carry their
+// own copy of this lookup.
+async function lookupSongByFilename(f: FileEntry, songCount = 5): Promise<Record<string, string> | null> {
   const stem = f.name.replace(/\.[^.]+$/, "");
+  const searchStem = normalizeForMatch(stem);
+  const xml = await authFetch("search3", { query: searchStem, songCount: String(songCount), artistCount: "0", albumCount: "0" });
+  const songs = parseXmlAttrs(xml, "song");
+  if (!songs.length) return null;
+  return songs.find((s) => normalizeForMatch(s.title) === searchStem) || songs[0];
+}
+
+async function openTagEditor(f: FileEntry) {
   try {
-    const xml = await authFetch("search3", { query: stem, songCount: "20", artistCount: "0", albumCount: "0" });
-    const songs = parseXmlAttrs(xml, "song");
-    if (!songs.length) {
+    const hit = await lookupSongByFilename(f, 20);
+    if (!hit) {
       showToast(t("files.editLookupFailed"), "error");
       return;
     }
-    // Best-effort match: prefer the entry whose title equals the stem.
-    const hit = songs.find((s) => (s.title || "").toLowerCase() === stem.toLowerCase()) || songs[0];
-    if (songs.length > 1) showToast(t("files.editLookupAmbiguous", { n: songs.length }), "success");
+    editorMode.value = "single";
     editTargetId.value = hit.id || null;
     editInitial.value = {
       title: hit.title || "",
@@ -357,11 +521,40 @@ async function openTagEditor(f: FileEntry) {
       track: hit.track || "",
       disc: hit.discNumber || "",
     };
+    editCoverArt.value = hit.coverArt || "";
     editMsg.value = ""; editErr.value = false;
     editorOpen.value = true;
   } catch {
     showToast(t("files.editLookupFailed"), "error");
   }
+}
+
+// 150 — batch counterpart: resolve every selected file to a master_id (best
+// effort, same as tidy-folder) and open TagEditor in batch mode. Unresolved
+// files are silently dropped, matching tidy-folder's existing convention.
+async function openBatchTagEditor() {
+  const targets = files.value.filter((f) => selectedFiles.value.has(f.uri));
+  const ids: string[] = [];
+  for (const f of targets) {
+    try {
+      const hit = await lookupSongByFilename(f);
+      if (hit?.id) ids.push(hit.id);
+    } catch {
+      // skip — partial coverage is still useful
+    }
+  }
+  if (!ids.length) {
+    showToast(t("files.editLookupFailed"), "error");
+    return;
+  }
+  if (ids.length < targets.length) {
+    showToast(t("files.editBatchPartial", { n: targets.length - ids.length }), "success");
+  }
+  editorMode.value = "batch";
+  editTargetIds.value = ids;
+  editInitial.value = {};
+  editMsg.value = ""; editErr.value = false;
+  editorOpen.value = true;
 }
 
 function closeTagEditor() { editorOpen.value = false; }
@@ -414,11 +607,8 @@ async function openTidyFolder() {
   const ids: string[] = [];
   for (const f of files.value) {
     if (!isAudio(f.name)) continue;
-    const stem = f.name.replace(/\.[^.]+$/, "");
     try {
-      const xml = await authFetch("search3", { query: stem, songCount: "5", artistCount: "0", albumCount: "0" });
-      const songs = parseXmlAttrs(xml, "song");
-      const hit = songs.find((s) => (s.title || "").toLowerCase() === stem.toLowerCase()) || songs[0];
+      const hit = await lookupSongByFilename(f);
       if (hit?.id) ids.push(hit.id);
     } catch {
       // skip — partial coverage is still useful
@@ -469,23 +659,36 @@ async function runTidyFolder() {
 function closeTidyFolder() { tidyOpen.value = false; }
 
 async function onTagEditorSubmit(patch: Record<string, string | number>, cover?: { data: string; mime: string }) {
-  if (!editTargetId.value || (!Object.keys(patch).length && !cover)) return;
+  if (!Object.keys(patch).length && !cover) return;
   editBusy.value = true; editMsg.value = ""; editErr.value = false;
   try {
-    const res = await writeTags(editTargetId.value, patch, cover);
-    if (!res.ok) {
-      editErr.value = true;
-      editMsg.value = res.error || t("library.editFailed");
+    if (editorMode.value === "batch") {
+      if (!editTargetIds.value.length) return;
+      const res = await batchWriteTags(editTargetIds.value, patch, cover);
+      if (!res.ok) {
+        editErr.value = true;
+        editMsg.value = res.error || t("tagEditor.batchFailed");
+      } else {
+        editMsg.value = t("tagEditor.batchSaved", { succeeded: res.succeeded ?? 0, failed: res.failed ?? 0 });
+        selectedFiles.value.clear();
+        setTimeout(() => { editorOpen.value = false; }, 1500);
+      }
     } else {
-      const files = res.files || [];
-      const written = files.filter((x) => x.written).length;
-      editMsg.value = t("library.editSaved", { written, total: files.length });
-      // brief delay so the user reads it, then close
-      setTimeout(() => { editorOpen.value = false; }, 1200);
+      if (!editTargetId.value) return;
+      const res = await writeTags(editTargetId.value, patch, cover);
+      if (!res.ok) {
+        editErr.value = true;
+        editMsg.value = res.error || t("library.editFailed");
+      } else {
+        const written = (res.files || []).filter((x) => x.written).length;
+        editMsg.value = t("library.editSaved", { written, total: (res.files || []).length });
+        // brief delay so the user reads it, then close
+        setTimeout(() => { editorOpen.value = false; }, 1200);
+      }
     }
   } catch {
     editErr.value = true;
-    editMsg.value = t("library.editFailed");
+    editMsg.value = editorMode.value === "batch" ? t("tagEditor.batchFailed") : t("library.editFailed");
   }
   editBusy.value = false;
 }
@@ -573,6 +776,22 @@ onMounted(async () => {
           <button class="crumb" :disabled="i === crumbs.length - 1" @click="goCrumb(i)">{{ seg }}</button>
         </template>
         <span class="browser-stats">{{ t("files.stats", { dirs: dirs.length, files: files.length }) }}</span>
+        <button v-if="canUpload" class="btn-secondary btn-new-folder" @click="openNewFolderModal">
+          {{ t("files.newFolder") }}
+        </button>
+      </div>
+
+      <!-- 150 — batch action bar for the checkbox selection. Move/Delete stay
+           R2-only (mirrors the existing per-row move/copy/delete buttons,
+           which only ever supported R2); tag-edit and cross-copy work across
+           every source, matching their existing per-row buttons. -->
+      <div v-if="canUpload && selectedFiles.size > 0" class="batch-actions-bar">
+        <span class="batch-actions-count">{{ t("files.selectedCount", { n: selectedFiles.size }) }}</span>
+        <button class="btn-secondary" @click="openBatchTagEditor">{{ t("files.batchEditTags") }}</button>
+        <button v-if="isR2" class="btn-secondary" @click="openBatchMoveModal">{{ t("files.batchMove") }}</button>
+        <button v-if="isR2" class="btn-danger" @click="openBatchDeleteConfirm">{{ t("files.batchDelete") }}</button>
+        <button class="btn-secondary" @click="openCrossModalBatch">{{ t("files.crossCopyBtn") }}</button>
+        <button class="btn-secondary batch-actions-clear" @click="selectedFiles.clear()">{{ t("files.clearSelection") }}</button>
       </div>
 
       <div class="entry-list">
@@ -583,6 +802,14 @@ onMounted(async () => {
             <span class="entry-name">{{ d.name }}</span>
           </div>
           <div v-for="f in files" :key="`f-${f.name}`" class="entry-row file-row" :class="{ 'row-renaming': renamingFile === f.name }">
+            <input
+              v-if="canUpload"
+              type="checkbox"
+              class="cross-select-box"
+              :checked="selectedFiles.has(f.uri)"
+              :title="t('files.crossCopySelectHint')"
+              @click.stop="toggleCrossSelect(f)"
+            />
             <span class="entry-icon file-icon">▪</span>
             <!-- Rename: inline input -->
             <template v-if="renamingFile === f.name">
@@ -606,7 +833,7 @@ onMounted(async () => {
                 :title="t('files.editTags')"
                 @click.stop="openTagEditor(f)"
               >♪</button>
-              <!-- Cross-source copy (all sources, canUpload) — 089/S4b -->
+              <!-- Cross-source copy (all sources, canUpload) — 089/S4b, batched in 144 -->
               <button
                 v-if="canUpload"
                 class="op-btn op-cross"
@@ -618,7 +845,7 @@ onMounted(async () => {
                 <button class="op-btn op-rename" :title="t('files.rename')" @click.stop="startRename(f)">✎</button>
                 <button class="op-btn op-move" :title="t('files.moveTo')" @click.stop="openMoveModal(f, 'move')">→</button>
                 <button class="op-btn op-copy" :title="t('files.copyTo')" @click.stop="openMoveModal(f, 'copy')">⊕</button>
-                <button class="op-btn op-delete" :title="t('files.deleteFile')" :disabled="opBusy" @click.stop="deleteFile(f)">✕</button>
+                <button class="op-btn op-delete" :title="t('files.deleteFile')" :disabled="opBusy" @click.stop="openDeleteConfirm(f)">✕</button>
               </template>
             </template>
           </div>
@@ -629,17 +856,34 @@ onMounted(async () => {
       <div class="corner corner-bl"></div>
     </div>
 
-    <!-- Move / Copy modal -->
+    <!-- Move / Copy modal — 150: generalized to N files (batch move) -->
     <div v-if="opModal" class="modal-backdrop" @click.self="closeOpModal">
       <div class="modal">
-        <div class="modal-title">{{ opModal.mode === "move" ? t("files.moveTo") : t("files.copyTo") }}: {{ opModal.file.name }}</div>
+        <div class="modal-title">
+          {{ opModal.mode === "move" ? t("files.moveTo") : t("files.copyTo") }}:
+          {{ opModal.files.length === 1 ? opModal.files[0].name : t("files.crossCopyNFiles", { n: opModal.files.length }) }}
+        </div>
         <div class="form-group" style="margin-top:0.75rem">
           <label class="form-label">{{ t("files.destPath") }}</label>
-          <input v-model="opDestInput" class="form-input" placeholder="music/subfolder" @keydown.enter="confirmOp" @keydown.escape="closeOpModal" />
+          <input v-model="opDestInput" class="form-input" :disabled="opBusy" placeholder="music/subfolder" @keydown.enter="confirmOp" @keydown.escape="closeOpModal" />
           <span class="field-hint">{{ t("files.destPathHint") }}</span>
         </div>
+        <div v-if="opQueue.length > 1" class="cross-queue">
+          <div class="cross-queue-bar">
+            <div class="cross-queue-fill" :style="{ width: (opQueue.filter(i => i.status === 'done' || i.status === 'failed').length / opQueue.length * 100) + '%' }"></div>
+          </div>
+          <div class="cross-queue-list">
+            <div v-for="item in opQueue" :key="item.file.uri" class="cross-queue-item">
+              <span class="cross-queue-status" :class="`status-${item.status}`">
+                {{ item.status === "done" ? "✓" : item.status === "failed" ? "✕" : item.status === "running" ? "…" : "·" }}
+              </span>
+              <span class="cross-queue-name">{{ item.file.name }}</span>
+              <span v-if="item.error" class="cross-queue-error">{{ item.error }}</span>
+            </div>
+          </div>
+        </div>
         <div class="modal-actions">
-          <button class="btn-secondary" @click="closeOpModal">{{ t("common.cancel") }}</button>
+          <button class="btn-secondary" :disabled="opBusy" @click="closeOpModal">{{ t("common.cancel") }}</button>
           <button class="btn-primary" :disabled="opBusy" @click="confirmOp">{{ opModal.mode === "move" ? t("files.move") : t("files.copy") }}</button>
         </div>
         <div class="corner corner-tl"></div>
@@ -647,23 +891,108 @@ onMounted(async () => {
       </div>
     </div>
 
-    <!-- Cross-source copy modal — 089/S4b -->
+    <!-- New folder modal -->
+    <div v-if="newFolderModal" class="modal-backdrop" @click.self="closeNewFolderModal">
+      <div class="modal">
+        <div class="modal-title">{{ t("files.newFolderTitle") }}: /{{ path }}</div>
+        <div class="form-group" style="margin-top:0.75rem">
+          <label class="form-label">{{ t("files.folderName") }}</label>
+          <input
+            v-model="newFolderName"
+            class="form-input"
+            :placeholder="t('files.folderNamePlaceholder')"
+            autofocus
+            @keydown.enter="confirmNewFolder"
+            @keydown.escape="closeNewFolderModal"
+          />
+        </div>
+        <div class="modal-actions">
+          <button class="btn-secondary" :disabled="newFolderBusy" @click="closeNewFolderModal">{{ t("common.cancel") }}</button>
+          <button class="btn-primary" :disabled="newFolderBusy || !newFolderName.trim()" @click="confirmNewFolder">
+            {{ t("files.newFolderTitle") }}
+          </button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
+      </div>
+    </div>
+
+    <!-- 150 — delete confirm modal (single + batch), replacing window.confirm().
+         Same reasoning as Sources.vue's mirror-copy confirm: a native
+         confirm() can't be styled and blocks the whole page's event loop
+         until a human answers it. -->
+    <div v-if="deleteConfirmModal" class="modal-backdrop" @click.self="cancelDeleteConfirm">
+      <div class="modal">
+        <div class="modal-title">{{ t("files.deleteConfirmTitle") }}</div>
+        <p class="modal-confirm-text">
+          {{ deleteConfirmModal.files.length === 1
+            ? t("files.deleteConfirm", { name: deleteConfirmModal.files[0].name })
+            : t("files.deleteConfirmBatch", { n: deleteConfirmModal.files.length }) }}
+        </p>
+        <div class="modal-actions">
+          <button class="btn-secondary" :disabled="opBusy" @click="cancelDeleteConfirm">{{ t("common.cancel") }}</button>
+          <button class="btn-danger" :disabled="opBusy" @click="confirmDelete">{{ t("files.deleteFile") }}</button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
+      </div>
+    </div>
+
+    <!-- Cross-source copy modal — 089/S4b, batched + concurrent as of 144 -->
     <div v-if="crossCopyModal" class="modal-backdrop" @click.self="closeCrossModal">
       <div class="modal">
-        <div class="modal-title">{{ t("files.crossCopyTitle") }}: {{ crossCopyModal.file.name }}</div>
+        <div class="modal-title">
+          {{ t("files.crossCopyTitle") }}:
+          {{ crossCopyModal.files.length === 1 ? crossCopyModal.files[0].name : t("files.crossCopyNFiles", { n: crossCopyModal.files.length }) }}
+        </div>
         <div class="form-group" style="margin-top:0.75rem">
           <label class="form-label">{{ t("files.source") }}</label>
-          <select v-model="crossCopyDestSource" class="form-input">
+          <select v-model="crossCopyDestSource" class="form-input" :disabled="crossCopyBusy">
             <option value="r2">{{ t("files.localR2") }}</option>
             <option v-for="s in sources" :key="s.id" :value="s.id">{{ s.name || s.id }}</option>
           </select>
         </div>
         <div class="form-group" style="margin-top:0.75rem">
-          <label class="form-label">{{ t("files.crossCopyPath") }}</label>
-          <input v-model="crossCopyDestPath" class="form-input" :placeholder="path" @keydown.enter="confirmCrossOp" @keydown.escape="closeCrossModal" />
+          <label class="form-label">{{ t("files.crossCopyDestDir") }}</label>
+          <input
+            v-model="crossCopyDestPath"
+            class="form-input"
+            :placeholder="path"
+            :disabled="crossCopyBusy"
+            @keydown.enter="confirmCrossOp"
+            @keydown.escape="closeCrossModal"
+          />
+          <span class="field-hint">{{ t("files.crossCopyDestDirHint") }}</span>
         </div>
+
+        <!-- Per-file queue + overall progress bar — bytes are copied server-side
+             (source adapter → dest adapter, never through this browser), so
+             there's no per-file byte percentage to show; each item's real
+             granularity is pending → copying → done/failed. -->
+        <div v-if="crossCopyQueue.length" class="cross-queue">
+          <div class="cross-queue-bar">
+            <div class="cross-queue-fill" :style="{ width: (crossCopyQueue.filter(i => i.status === 'done' || i.status === 'failed').length / crossCopyQueue.length * 100) + '%' }"></div>
+          </div>
+          <div class="cross-queue-overall">
+            {{ t("files.crossCopyProgress", {
+              done: crossCopyQueue.filter(i => i.status === 'done').length,
+              failed: crossCopyQueue.filter(i => i.status === 'failed').length,
+              total: crossCopyQueue.length,
+            }) }}
+          </div>
+          <div class="cross-queue-list">
+            <div v-for="item in crossCopyQueue" :key="item.file.uri" class="cross-queue-item">
+              <span class="cross-queue-status" :class="`status-${item.status}`">
+                {{ item.status === "done" ? "✓" : item.status === "failed" ? "✕" : item.status === "copying" ? "…" : "·" }}
+              </span>
+              <span class="cross-queue-name">{{ item.file.name }}</span>
+              <span v-if="item.error" class="cross-queue-error">{{ item.error }}</span>
+            </div>
+          </div>
+        </div>
+
         <div class="modal-actions">
-          <button class="btn-secondary" @click="closeCrossModal">{{ t("common.cancel") }}</button>
+          <button class="btn-secondary" :disabled="crossCopyBusy" @click="closeCrossModal">{{ t("common.cancel") }}</button>
           <button class="btn-primary" :disabled="crossCopyBusy" @click="confirmCrossOp">{{ t("files.crossCopyBtn") }}</button>
         </div>
         <div class="corner corner-tl"></div>
@@ -674,17 +1003,19 @@ onMounted(async () => {
     <!-- Tag editor (single mode — batch lives in Library) -->
     <TagEditor
       :open="editorOpen"
-      mode="single"
-      :song-ids="editTargetId ? [editTargetId] : []"
+      :mode="editorMode"
+      :song-ids="editorMode === 'single' ? (editTargetId ? [editTargetId] : []) : editTargetIds"
       :initial-tags="editInitial"
+      :existing-cover-url="editExistingCoverUrl"
       :busy="editBusy"
       :message="editMsg"
       :error="editErr"
       @submit="onTagEditorSubmit"
       @close="closeTagEditor"
     >
-     <!-- 040 scrape button in extras slot -->
-      <template #extras="{ form, apply }">
+     <!-- 040 scrape button — single mode only, batch has no one obvious
+          "which song" query to scrape against (same reasoning as Library.vue) -->
+      <template v-if="editorMode === 'single'" #extras="{ form, apply }">
         <ScrapeButton
           :initial-query="scrapeQueryFromForm(form)"
           :song-master-id="editTargetId || ''"
@@ -803,6 +1134,55 @@ onMounted(async () => {
 }
 .upload-msg { font-family: var(--font-mono); font-size: var(--fs-sm); margin-top: 0.5rem; color: var(--color-status-success); }
 .upload-msg.error { color: var(--color-status-error); }
+
+/* 089/S4 upload queue — these classes existed in the template since task 089
+   but were never given rules, so the per-file progress bars rendered as
+   invisible/unstyled divs. Fixed here alongside the analogous cross-copy
+   queue below. */
+.upload-queue { margin-top: 0.75rem; padding-top: 0.6rem; border-top: 1px solid var(--color-border-subtle); }
+.upload-queue-header { font-size: var(--fs-xs); color: var(--color-text-muted); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.4rem; }
+.upload-queue-item { display: flex; align-items: center; gap: 0.6rem; padding: 0.2rem 0; font-family: var(--font-mono); font-size: var(--fs-sm); }
+.upload-queue-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); }
+.upload-queue-bar { width: 120px; height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden; flex-shrink: 0; }
+.upload-queue-fill { height: 100%; background: var(--color-accent-primary); transition: width 0.2s; }
+.upload-queue-fill.fill-error { background: var(--color-status-error); }
+.upload-queue-pct { width: 3em; text-align: right; flex-shrink: 0; color: var(--color-text-muted); font-size: var(--fs-xs); }
+.upload-queue-overall { margin-top: 0.4rem; font-size: var(--fs-sm); color: var(--color-text-muted); }
+
+/* Cross-source copy batch selection + queue (144) */
+.cross-select-box { flex-shrink: 0; margin-right: 0.4rem; cursor: pointer; }
+.btn-new-folder { margin-left: 0.6rem; font-size: var(--fs-xs); padding: 0.25rem 0.6rem; }
+
+/* 150 — batch action bar (tag-edit / move / delete / cross-copy) shown under
+   the breadcrumb whenever at least one file is checked. */
+.batch-actions-bar {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-secondary);
+}
+.batch-actions-bar > button { font-size: var(--fs-xs); padding: 0.25rem 0.6rem; }
+.batch-actions-count {
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--color-text-muted); letter-spacing: 0.05em;
+  margin-right: 0.3rem;
+}
+.batch-actions-clear { margin-left: auto; }
+.modal-confirm-text { margin: 0.5rem 0 0; font-size: var(--fs-sm); color: var(--color-text-secondary); line-height: 1.5; }
+
+.cross-queue { margin-top: 0.9rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border-subtle); }
+.cross-queue-bar { height: 4px; background: var(--color-border); border-radius: 2px; overflow: hidden; margin-bottom: 0.5rem; }
+.cross-queue-fill { height: 100%; background: var(--color-accent-primary); transition: width 0.2s; }
+.cross-queue-overall { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); margin-bottom: 0.5rem; }
+.cross-queue-list { max-height: 220px; overflow-y: auto; }
+.cross-queue-item { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.15rem 0; font-family: var(--font-mono); font-size: var(--fs-sm); }
+.cross-queue-status { flex-shrink: 0; width: 1.2em; text-align: center; color: var(--color-text-muted); }
+.cross-queue-status.status-done { color: var(--color-status-success); }
+.cross-queue-status.status-failed { color: var(--color-status-error); }
+.cross-queue-status.status-copying,
+.cross-queue-status.status-running { color: var(--color-accent-primary); }
+.cross-queue-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text-secondary); }
+.cross-queue-error { color: var(--color-status-error); font-size: var(--fs-xs); }
 
 .browser-card { padding: 0; overflow: hidden; }
 .breadcrumb {

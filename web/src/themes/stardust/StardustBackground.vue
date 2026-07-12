@@ -24,7 +24,7 @@ import { startMetatron } from "../../lib/metatron3d";
 // visual safety margin, it re-rolls, optionally
 // retrying a bounded number of times before accepting anyway so a slot is
 // never starved indefinitely (visible count never collapses).
-const METATRON_SLOTS = 8;
+const METATRON_SLOTS = 6;
 const HEIGHT_MIN_VH = 4;
 const HEIGHT_MAX_VH = 88;
 const WOBBLE_MAX_VH = 18; // vertical drift over one crossing, off a straight line
@@ -33,9 +33,15 @@ const SIZE_MAX = 224;
 const DURATION_MIN_S = 30;
 const DURATION_MAX_S = 64;
 const COLLISION_SAMPLES = 12; // samples across the time-overlap segment
-const COLLISION_PADDING_PX = 48; // extra breathing room beyond actual overlap
-const COLLISION_RETRY_CAP = 6; // more re-rolls now that fewer slots compete
+// The rendered solid tumbles in 3D, so its on-screen silhouette can reach a
+// corner-first diagonal (~size/2 * 1.4) well past the size/2 circle used by
+// driftPathAt, plus drop-shadow blur beyond that — padding has to cover the
+// gap or a fresh crossing can visibly clip an existing one at close range.
+const COLLISION_PADDING_PX = 96;
+const COLLISION_RETRY_CAP = 8; // fewer slots + bigger padding makes a free slot harder to find
 const COLLISION_RETRY_DELAY_MS = 220; // small backoff so re-rolls spread across frames
+const INITIAL_STAGGER_BASE_MS = 900; // base delay between each slot's first-ever crossing
+const INITIAL_STAGGER_JITTER_MS = 600; // random extra so the staggered starts aren't metronomic
 
 interface DriftMetatron {
   key: number;
@@ -195,7 +201,13 @@ function onPageClick(e: MouseEvent) {
 }
 
 onMounted(() => {
-  for (let slot = 0; slot < METATRON_SLOTS; slot++) scheduleDriftSlot(slot);
+  // Stagger each slot's very first crossing instead of firing all
+  // scheduleDriftSlot calls in the same tick, so the theme doesn't dump
+  // every drifting form on screen at once when the page loads.
+  for (let slot = 0; slot < METATRON_SLOTS; slot++) {
+    const initialDelay = slot * INITIAL_STAGGER_BASE_MS + Math.random() * INITIAL_STAGGER_JITTER_MS;
+    driftTimers.set(slot, window.setTimeout(() => scheduleDriftSlot(slot), initialDelay));
+  }
   window.addEventListener("click", onPageClick);
 });
 onBeforeUnmount(() => {

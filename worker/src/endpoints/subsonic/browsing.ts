@@ -172,7 +172,12 @@ const getMusicFoldersHandler = async (c: Context) => {
 
 const albumList2Handler = async (c: Context, tag: "albumList" | "albumList2") => {
   const type = c.req.query("type") || "newest";
-  const size = Math.min(parseInt(c.req.query("size") || "10", 10) || 10, 500);
+  // 157: was capped at 500 for no documented reason — inconsistent with
+  // search2/3 (never capped) and low enough that a real library's alphabetical
+  // album grid legitimately needs 3+ requests just to page through once.
+  // D1's LIMIT itself has no such ceiling; only IN(?,?,...) bind-parameter
+  // counts do (batched separately, see queries.ts BATCH=80). No cap here.
+  const size = parseInt(c.req.query("size") || "10", 10) || 10;
   const offset = parseInt(c.req.query("offset") || "0", 10) || 0;
   const fromYearRaw = c.req.query("fromYear");
   const toYearRaw = c.req.query("toYear");
@@ -225,7 +230,8 @@ const getGenresHandler = async (c: Context) => {
 const getSongsByGenreHandler = async (c: Context) => {
   const genre = c.req.query("genre");
   if (!genre) return c.text(subsonicOK({ songsByGenre: {} }), 200, XML);
-  const count = Math.min(parseInt(c.req.query("count") || "10", 10) || 10, 500);
+  // 157: same arbitrary-500-cap removal as getAlbumList2 above.
+  const count = parseInt(c.req.query("count") || "10", 10) || 10;
   const offset = parseInt(c.req.query("offset") || "0", 10) || 0;
 
   const queries = createQueries((c.env as Env).DB);

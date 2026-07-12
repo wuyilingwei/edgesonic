@@ -430,44 +430,50 @@ cloneRoutes.post("/clone/upsertUser", permissionMiddleware("manage_users"), asyn
 // the auth surface.
 const MAX_INGEST_BYTES = 256 * 1024 * 1024;
 
-cloneRoutes.post("/clone/ingestAudio", permissionMiddleware("manage_users"), async (c) => {
-  const env = c.env as Env;
-  const db = env.DB;
-  const masterId = c.req.query("masterId") || "";
-  const suffix = (c.req.query("suffix") || "").toLowerCase();
-  const contentType = c.req.query("contentType") || "application/octet-stream";
-  const artistDir = (c.req.query("artist") || "Unknown Artist").replace(/[\/]+/g, "_").trim() || "Unknown Artist";
-  const albumDir = (c.req.query("album") || "Unknown Album").replace(/[\/]+/g, "_").trim() || "Unknown Album";
-  const filename = (c.req.query("filename") || "").replace(/[\/]+/g, "_").trim();
-  const declaredSize = parseInt(c.req.query("size") || "0", 10);
+// Shared by ingestAudio (bytes come from the browser's POST body, already
+// fully buffered by the time Hono hands it to us) and fetchAudioToR2 (bytes
+// come from a server-side fetch of the upstream /rest/stream — streamed
+// straight through to R2 rather than buffered, see 159) — both just need
+// "verify master exists, R2 put, idempotent song_instances insert".
+async function registerAudioInstance(
+  env: Env,
+  db: D1Database,
+  params: {
+    masterId: string; suffix: string; contentType: string;
+    artistDir: string; albumDir: string; filename: string;
+    declaredSize: number; body: ArrayBuffer | ReadableStream<Uint8Array>;
+  },
+): Promise<
+  | { ok: true; r2Key: string; size: number; instanceId?: string; registered: boolean }
+  | { ok: false; error: string; status: 400 | 404 | 413 }
+> {
+  const { masterId, suffix, contentType, artistDir, albumDir, filename, declaredSize, body } = params;
 
-  if (!masterId || !filename) {
-    return c.json({ ok: false, error: "Missing masterId or filename" }, 400);
+  const isBuffer = body instanceof ArrayBuffer;
+  if (isBuffer) {
+    if (body.byteLength === 0) return { ok: false, error: "Empty body", status: 400 };
+    if (body.byteLength > MAX_INGEST_BYTES) return { ok: false, error: "Payload too large", status: 413 };
   }
+  // Streamed bodies can't be length-checked up front — fetchAudioToR2 checks
+  // the upstream Content-Length header before ever calling in here, and the
+  // post-put size==0 check below catches a genuinely empty stream.
 
   // Verify the master exists so we don't write orphan bytes to R2.
   const master = await db.prepare("SELECT id FROM song_masters WHERE id = ?")
     .bind(masterId).first<{ id: string }>();
   if (!master) {
-    return c.json({ ok: false, error: "song_master not found — upsertMaster first" }, 404);
-  }
-
-  const contentLength = parseInt(c.req.header("Content-Length") || "0", 10);
-  if (contentLength && contentLength > MAX_INGEST_BYTES) {
-    return c.json({ ok: false, error: "Payload too large" }, 413);
-  }
-  const buf = await c.req.arrayBuffer();
-  if (buf.byteLength === 0) {
-    return c.json({ ok: false, error: "Empty body" }, 400);
-  }
-  if (buf.byteLength > MAX_INGEST_BYTES) {
-    return c.json({ ok: false, error: "Payload too large" }, 413);
+    return { ok: false, error: "song_master not found — upsertMaster first", status: 404 };
   }
 
   const r2Key = `music/${artistDir}/${albumDir}/${filename}`;
-  await env.MUSIC_BUCKET.put(r2Key, buf, {
+  const r2Object = await env.MUSIC_BUCKET.put(r2Key, body, {
     httpMetadata: { contentType },
   });
+  const size = r2Object?.size ?? (isBuffer ? body.byteLength : declaredSize);
+  if (size === 0) {
+    await env.MUSIC_BUCKET.delete(r2Key);
+    return { ok: false, error: "Empty body", status: 400 };
+  }
   const storageUri = `r2://${r2Key}`;
 
   // Idempotent instance row: skip if one already points at this uri.
@@ -475,7 +481,7 @@ cloneRoutes.post("/clone/ingestAudio", permissionMiddleware("manage_users"), asy
     "SELECT id FROM song_instances WHERE storage_uri = ? AND master_id = ?",
   ).bind(storageUri, masterId).first<{ id: string }>();
   if (existing) {
-    return c.json({ ok: true, r2Key, size: buf.byteLength, instanceId: existing.id, registered: false });
+    return { ok: true, r2Key, size, instanceId: existing.id, registered: false };
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -493,17 +499,112 @@ cloneRoutes.post("/clone/ingestAudio", permissionMiddleware("manage_users"), asy
       storageUri,
       suffix || extToSuffix(filename),
       contentType,
-      declaredSize || buf.byteLength,
+      declaredSize || size,
       now,
       now,
     ).run();
   } catch (e) {
     // FK / PK failure shouldn't fail the whole clone — R2 bytes are valid.
-    console.error(`[clone/ingestAudio] instance registration failed:`, e);
-    return c.json({ ok: true, r2Key, size: buf.byteLength, registered: false });
+    console.error(`[clone] instance registration failed:`, e);
+    return { ok: true, r2Key, size, registered: false };
   }
 
-  return c.json({ ok: true, r2Key, size: buf.byteLength, instanceId, registered: true });
+  return { ok: true, r2Key, size, instanceId, registered: true };
+}
+
+cloneRoutes.post("/clone/ingestAudio", permissionMiddleware("manage_users"), async (c) => {
+  const env = c.env as Env;
+  const db = env.DB;
+  const masterId = c.req.query("masterId") || "";
+  const suffix = (c.req.query("suffix") || "").toLowerCase();
+  const contentType = c.req.query("contentType") || "application/octet-stream";
+  const artistDir = (c.req.query("artist") || "Unknown Artist").replace(/[\/]+/g, "_").trim() || "Unknown Artist";
+  const albumDir = (c.req.query("album") || "Unknown Album").replace(/[\/]+/g, "_").trim() || "Unknown Album";
+  const filename = (c.req.query("filename") || "").replace(/[\/]+/g, "_").trim();
+  const declaredSize = parseInt(c.req.query("size") || "0", 10);
+
+  if (!masterId || !filename) {
+    return c.json({ ok: false, error: "Missing masterId or filename" }, 400);
+  }
+
+  const contentLength = parseInt(c.req.header("Content-Length") || "0", 10);
+  if (contentLength && contentLength > MAX_INGEST_BYTES) {
+    return c.json({ ok: false, error: "Payload too large" }, 413);
+  }
+  const buf = await c.req.arrayBuffer();
+
+  const result = await registerAudioInstance(env, db, {
+    masterId, suffix, contentType, artistDir, albumDir, filename, declaredSize, body: buf,
+  });
+  if (!result.ok) return c.json({ ok: false, error: result.error }, result.status);
+  return c.json(result);
+});
+
+// ---------------------------------------------------------------------------
+// POST /edgesonic/clone/fetchAudioToR2
+// ---------------------------------------------------------------------------
+// Server-side counterpart to ingestAudio: the Worker itself fetches the
+// upstream /rest/stream bytes and writes them straight to R2, so the
+// browser never downloads-then-reuploads the audio — this is the
+// "省流量" (bandwidth-saving) clone-audio mode selectable in Tools.vue.
+// Trade-off: the fetch now runs on the Worker's own outbound connection
+// (subject to CF subrequest/CPU limits and no per-file retry UI), which is
+// why the browser download+reupload path stays available as the "stable"
+// fallback for flaky/slow upstreams.
+//
+// Body: { upstreamUrl, username, password, songId, masterId, suffix,
+//         contentType, artist, album, filename, size }
+cloneRoutes.post("/clone/fetchAudioToR2", permissionMiddleware("manage_users"), async (c) => {
+  const env = c.env as Env;
+  const db = env.DB;
+  const body = await c.req.json<{
+    upstreamUrl?: string; username?: string; password?: string; songId?: string;
+    masterId?: string; suffix?: string; contentType?: string;
+    artist?: string; album?: string; filename?: string; size?: number;
+  }>().catch(() => ({} as Record<string, never>));
+
+  const { upstreamUrl, username, password, songId, masterId, filename } = body;
+  if (!upstreamUrl || !username || !password || !songId || !masterId || !filename) {
+    return c.json({ ok: false, error: "Missing upstreamUrl / username / password / songId / masterId / filename" }, 400);
+  }
+
+  const artistDir = (body.artist || "Unknown Artist").replace(/[\/]+/g, "_").trim() || "Unknown Artist";
+  const albumDir = (body.album || "Unknown Album").replace(/[\/]+/g, "_").trim() || "Unknown Album";
+  const cleanFilename = filename.replace(/[\/]+/g, "_").trim();
+  const suffix = (body.suffix || extToSuffix(cleanFilename)).toLowerCase();
+  const contentType = body.contentType || "application/octet-stream";
+
+  const url = signedUpstreamUrl(upstreamUrl, username, password, "stream", { id: songId });
+  let resp: Response;
+  try {
+    resp = await fetch(url);
+  } catch (e) {
+    return c.json({ ok: false, error: `upstream fetch failed: ${e instanceof Error ? e.message : String(e)}` }, 502);
+  }
+  if (!resp.ok) {
+    return c.json({ ok: false, error: `upstream stream returned HTTP ${resp.status}` }, 502);
+  }
+  // 159: was `await resp.arrayBuffer()` — buffering the whole file into
+  // Worker memory before handing it to R2. Lossless files easily run
+  // 30-80MB+; a few of those in flight at once (CLONE_AUDIO_CONCURRENCY=3
+  // in Tools.vue) was blowing past the isolate's memory budget, surfacing
+  // to the browser as an opaque "Worker exceeded resource limits" 503.
+  // Stream resp.body straight into R2.put() instead — this is R2's
+  // documented pattern for proxying a fetch response without buffering.
+  if (!resp.body) {
+    return c.json({ ok: false, error: "upstream stream had no body" }, 502);
+  }
+  const upstreamLength = parseInt(resp.headers.get("Content-Length") || "0", 10);
+  if (upstreamLength && upstreamLength > MAX_INGEST_BYTES) {
+    return c.json({ ok: false, error: "Payload too large" }, 413);
+  }
+
+  const result = await registerAudioInstance(env, db, {
+    masterId, suffix, contentType, artistDir, albumDir, filename: cleanFilename,
+    declaredSize: body.size || upstreamLength || 0, body: resp.body,
+  });
+  if (!result.ok) return c.json({ ok: false, error: result.error }, result.status);
+  return c.json(result);
 });
 
 function extToSuffix(filename: string): string {
