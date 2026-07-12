@@ -63,6 +63,11 @@ const crossCopyDestPath = ref("");
 const crossCopyBusy = ref(false);
 const crossCopyQueue = ref<CrossCopyItem[]>([]);
 const selectedFiles = ref<Set<string>>(new Set()); // keyed by FileEntry.uri
+// Folder selection — keyed by DirEntry.name, unique within the directory
+// being shown. Both sets are cleared on navigation, and every consumer
+// filters against the *current* listing (selectedDirEntries /
+// selectedFileEntries below) so a stale key can never inflate the count.
+const selectedDirs = ref<Set<string>>(new Set());
 const CROSS_COPY_CONCURRENCY = 3;
 
 // Tag scan state
@@ -80,16 +85,25 @@ const pendingCount = ref(0);
 const renamingFile = ref<string | null>(null); // file name currently being renamed
 const renameInput = ref("");
 // 150 — generalized to N files so the same modal drives both the per-row
-// move/copy button (files: [f]) and the batch-move action.
-const opModal = ref<{ files: FileEntry[]; mode: "move" | "copy" } | null>(null);
-const opDestInput = ref("");
+// move/copy button (files: [f]) and the batch-move action. Selected folders
+// ride along as bare names (`dirs`) resolved against `base`, the browse path
+// captured when the modal opened (so a background reload can't reroot them).
+const opModal = ref<{ files: FileEntry[]; dirs: string[]; mode: "move" | "copy"; base: string } | null>(null);
 const opBusy = ref(false);
-const opQueue = ref<Array<{ file: FileEntry; status: "pending" | "running" | "done" | "failed"; error?: string }>>([]);
+const opQueue = ref<Array<{ kind: "file" | "dir"; name: string; key: string; status: "pending" | "running" | "done" | "failed"; error?: string }>>([]);
 const OP_CONCURRENCY = 3;
+// Destination folder tree for the move/copy modal — replaces the old
+// free-text path input. Children are lazy-loaded from files/list on first
+// expand; `path` is the full source-relative directory path ("" = root).
+interface DestNode { name: string; path: string; children: DestNode[] | null; expanded: boolean; loading: boolean }
+const destTreeRoot = ref<DestNode | null>(null);
+const opDestSelected = ref("");
+const treeNewFolderName = ref("");
+const treeNewFolderBusy = ref(false);
 // 150 — replaces window.confirm() for delete (single + batch), same reasoning
 // as the mirror-copy confirm modal in Sources.vue: a native confirm() can't
 // be styled and blocks the whole page's event loop until answered.
-const deleteConfirmModal = ref<{ files: FileEntry[] } | null>(null);
+const deleteConfirmModal = ref<{ files: FileEntry[]; dirs: string[]; base: string } | null>(null);
 
 // New folder state — works on r2 (marker object) and webdav (MKCOL) alike
 const newFolderModal = ref(false);
@@ -108,6 +122,33 @@ const canScan = computed(() => level.value >= 2);
 const isR2 = computed(() => currentSource.value === "r2");
 const crumbs = computed(() => (path.value ? path.value.split("/") : []));
 const uploadTarget = computed(() => (currentSource.value === "r2" ? "r2" : "webdav"));
+
+// ── Multi-select (files + folders) ──────────────────────────────────────────
+// Selections filtered against the current listing — stale keys left behind by
+// a rename or a partially-failed batch never count.
+const selectedDirEntries = computed(() => dirs.value.filter((d) => selectedDirs.value.has(d.name)));
+const selectedFileEntries = computed(() => files.value.filter((f) => selectedFiles.value.has(f.uri)));
+const selectedTotal = computed(() => selectedDirEntries.value.length + selectedFileEntries.value.length);
+// Batch tag-edit and cross-copy operate on library entries / single objects —
+// neither has a folder semantic, so they grey out while a folder is selected.
+const hasDirSelection = computed(() => selectedDirEntries.value.length > 0);
+const allSelected = computed(() => selectedTotal.value > 0 && selectedTotal.value === dirs.value.length + files.value.length);
+
+function clearSelection() {
+  selectedFiles.value.clear();
+  selectedDirs.value.clear();
+}
+
+function toggleDirSelect(d: DirEntry) {
+  if (selectedDirs.value.has(d.name)) selectedDirs.value.delete(d.name);
+  else selectedDirs.value.add(d.name);
+}
+
+function toggleSelectAll() {
+  if (allSelected.value) { clearSelection(); return; }
+  selectedDirs.value = new Set(dirs.value.map((d) => d.name));
+  selectedFiles.value = new Set(files.value.map((f) => f.uri));
+}
 
 function shortUrl(u: string): string {
   try { return new URL(u).host; } catch { return u; }
@@ -161,6 +202,7 @@ async function loadDir() {
 function selectSource(id: string) {
   currentSource.value = id;
   path.value = id === "r2" ? "music" : "";
+  clearSelection();
   loadDir();
   // the count tracks the active source.
   loadPending();
@@ -187,11 +229,13 @@ async function loadPending() {
 
 function enterDir(name: string) {
   path.value = path.value ? `${path.value}/${name}` : name;
+  clearSelection();
   loadDir();
 }
 
 function goCrumb(index: number) {
   path.value = index < 0 ? "" : crumbs.value.slice(0, index + 1).join("/");
+  clearSelection();
   loadDir();
 }
 
@@ -253,7 +297,8 @@ function openCrossModal(f: FileEntry) {
   crossCopyQueue.value = [];
 }
 function openCrossModalBatch() {
-  const targets = files.value.filter((f) => selectedFiles.value.has(f.uri));
+  if (hasDirSelection.value) return; // cross-copy is file-only — button is disabled too
+  const targets = selectedFileEntries.value;
   if (targets.length === 0) return;
   crossCopyModal.value = { files: targets };
   crossCopyDestSource.value = "r2";
@@ -293,7 +338,7 @@ async function confirmCrossOp() {
     const failed = crossCopyQueue.value.filter((i) => i.status === "failed").length;
     if (failed === 0) {
       showToast(targets.length > 1 ? t("files.crossCopiedBatch", { n: targets.length }) : t("files.crossCopied"));
-      selectedFiles.value.clear();
+      clearSelection();
       closeCrossModal();
     } else {
       showToast(t("files.crossCopyPartialFail", { done: targets.length - failed, failed }), "error");
@@ -358,42 +403,156 @@ async function confirmRename(f: FileEntry) {
 }
 
 function openMoveModal(f: FileEntry, mode: "move" | "copy") {
-  opModal.value = { files: [f], mode };
-  opDestInput.value = path.value;
+  opModal.value = { files: [f], dirs: [], mode, base: path.value };
   opQueue.value = [];
+  initDestTree();
 }
 
 // 150 — batch move: same modal, N files. Copy has no batch entry point in
 // the UI (not requested), but the underlying code handles N files either way.
+// Folders are included: they go through files/moveFolder (recursive).
 function openBatchMoveModal() {
-  const targets = files.value.filter((f) => selectedFiles.value.has(f.uri));
-  if (!targets.length) return;
-  opModal.value = { files: targets, mode: "move" };
-  opDestInput.value = path.value;
+  const fileTargets = selectedFileEntries.value;
+  const dirTargets = selectedDirEntries.value.map((d) => d.name);
+  if (!fileTargets.length && !dirTargets.length) return;
+  opModal.value = { files: fileTargets, dirs: dirTargets, mode: "move", base: path.value };
   opQueue.value = [];
+  initDestTree();
 }
 
 function closeOpModal() {
   if (opBusy.value) return;
   opModal.value = null;
-  opDestInput.value = "";
   opQueue.value = [];
+  destTreeRoot.value = null;
+  treeNewFolderName.value = "";
 }
 
+// ── Destination folder tree (lazy-loaded from files/list) ──────────────────
+async function loadDestChildren(node: DestNode) {
+  node.loading = true;
+  try {
+    const text = await storageFetch("files/list", { source: currentSource.value, path: node.path });
+    const data = JSON.parse(text);
+    if (data.ok !== true) throw new Error(data.error || "list failed");
+    node.children = (data.dirs || [])
+      .slice()
+      .sort((a: DirEntry, b: DirEntry) => a.name.localeCompare(b.name))
+      .map((d: DirEntry): DestNode => ({ name: d.name, path: joinPath(node.path, d.name), children: null, expanded: false, loading: false }));
+  } catch {
+    node.children = node.children || [];
+    showToast(t("files.treeLoadFailed"), "error");
+  } finally {
+    node.loading = false;
+  }
+}
+
+async function toggleDestNode(node: DestNode) {
+  if (!node.expanded && node.children === null) await loadDestChildren(node);
+  node.expanded = !node.expanded;
+}
+
+// Build the tree root and pre-expand down to the current directory so the
+// default selection (= where the user already is) is visible on open.
+async function initDestTree() {
+  const root: DestNode = { name: "", path: "", children: null, expanded: true, loading: false };
+  destTreeRoot.value = root;
+  opDestSelected.value = path.value;
+  treeNewFolderName.value = "";
+  await loadDestChildren(root);
+  let node = root;
+  for (const seg of path.value ? path.value.split("/") : []) {
+    const child = node.children?.find((c) => c.name === seg);
+    if (!child) break;
+    if (child.children === null) await loadDestChildren(child);
+    child.expanded = true;
+    node = child;
+  }
+}
+
+// Flattened render list — DFS over expanded nodes, avoids a recursive
+// component for what is a simple indented list.
+const destTreeRows = computed(() => {
+  const rows: Array<{ node: DestNode; depth: number }> = [];
+  const walk = (node: DestNode, depth: number) => {
+    rows.push({ node, depth });
+    if (node.expanded && node.children) for (const child of node.children) walk(child, depth + 1);
+  };
+  if (destTreeRoot.value) walk(destTreeRoot.value, 0);
+  return rows;
+});
+
+function findDestNode(node: DestNode | null, p: string): DestNode | null {
+  if (!node) return null;
+  if (node.path === p) return node;
+  for (const child of node.children || []) {
+    if (p === child.path || p.startsWith(`${child.path}/`)) return findDestNode(child, p);
+  }
+  return null;
+}
+
+// "New folder here" — mkdir under the selected tree node, then reload that
+// node's children and select the fresh folder as the destination.
+async function createFolderInTree() {
+  const name = treeNewFolderName.value.trim();
+  if (!name || /[\\/]/.test(name)) { showToast(t("files.folderNameInvalid"), "error"); return; }
+  treeNewFolderBusy.value = true;
+  try {
+    const parentPath = opDestSelected.value;
+    const res = await storagePost("files/mkdir", { source: currentSource.value, path: joinPath(parentPath, name) });
+    if (!JSON.parse(res).ok) throw new Error();
+    treeNewFolderName.value = "";
+    const parent = findDestNode(destTreeRoot.value, parentPath);
+    if (parent) {
+      await loadDestChildren(parent);
+      parent.expanded = true;
+    }
+    opDestSelected.value = joinPath(parentPath, name);
+  } catch {
+    showToast(t("files.folderCreateFailed"), "error");
+  } finally {
+    treeNewFolderBusy.value = false;
+  }
+}
+
+// True when the picked destination sits at/inside one of the folders being
+// moved — the server rejects that too, but disabling the confirm button with
+// a visible reason beats a per-item failure row.
+const destInsideSelectedDir = computed(() => {
+  if (!opModal.value) return false;
+  const { dirs: dirNames, base } = opModal.value;
+  const dest = opDestSelected.value;
+  return dirNames.some((name) => {
+    const src = joinPath(base, name);
+    return dest === src || dest.startsWith(`${src}/`);
+  });
+});
+
+const opTargetCount = computed(() => (opModal.value ? opModal.value.files.length + opModal.value.dirs.length : 0));
+const opTitleName = computed(() => {
+  if (!opModal.value || opTargetCount.value !== 1) return "";
+  return opModal.value.dirs[0] ?? opModal.value.files[0]?.name ?? "";
+});
+
 async function confirmOp() {
-  if (!opModal.value) return;
-  const { files: targets, mode } = opModal.value;
-  const destDir = opDestInput.value.replace(/\/$/, "");
+  if (!opModal.value || destInsideSelectedDir.value) return;
+  const { files: fileTargets, dirs: dirTargets, mode, base } = opModal.value;
+  const destDir = opDestSelected.value.replace(/\/$/, "");
   opBusy.value = true;
-  opQueue.value = targets.map((file) => ({ file, status: "pending" }));
+  opQueue.value = [
+    ...dirTargets.map((name) => ({ kind: "dir" as const, name, key: joinPath(base, name), status: "pending" as const })),
+    ...fileTargets.map((file) => ({ kind: "file" as const, name: file.name, key: r2Key(file), status: "pending" as const })),
+  ];
   try {
     const endpoint = mode === "move" ? "files/move" : "files/copy";
     await mapConcurrent(opQueue.value, OP_CONCURRENCY, async (item) => {
       item.status = "running";
       try {
-        const fromKey = r2Key(item.file);
-        const toKey = (destDir ? destDir + "/" : "") + item.file.name;
-        const res = await storagePost(endpoint, { key: fromKey, dest: toKey });
+        const dest = joinPath(destDir, item.name);
+        // Folders only ever reach here in move mode (no batch copy UI).
+        const res = item.kind === "dir"
+          ? await storagePost("files/moveFolder", { path: item.key, dest })
+          : await storagePost(endpoint, { key: item.key, dest });
         if (!JSON.parse(res).ok) throw new Error();
         item.status = "done";
       } catch (e) {
@@ -402,13 +561,14 @@ async function confirmOp() {
       }
     });
     const failed = opQueue.value.filter((i) => i.status === "failed").length;
+    const total = opQueue.value.length;
     const verb = mode === "move" ? t("files.moved") : t("files.copied");
     if (failed === 0) {
-      showToast(targets.length > 1 ? t("files.batchOpDone", { n: targets.length, verb }) : verb);
-      selectedFiles.value.clear();
+      showToast(total > 1 ? t("files.batchOpDone", { n: total, verb }) : verb);
+      clearSelection();
       closeOpModal();
     } else {
-      showToast(t("files.batchOpPartialFail", { done: targets.length - failed, failed }), "error");
+      showToast(t("files.batchOpPartialFail", { done: total - failed, failed }), "error");
     }
     loadDir();
   } finally {
@@ -417,28 +577,47 @@ async function confirmOp() {
 }
 
 function openDeleteConfirm(f: FileEntry) {
-  deleteConfirmModal.value = { files: [f] };
+  deleteConfirmModal.value = { files: [f], dirs: [], base: path.value };
 }
 function openBatchDeleteConfirm() {
-  const targets = files.value.filter((f) => selectedFiles.value.has(f.uri));
-  if (!targets.length) return;
-  deleteConfirmModal.value = { files: targets };
+  const fileTargets = selectedFileEntries.value;
+  const dirTargets = selectedDirEntries.value.map((d) => d.name);
+  if (!fileTargets.length && !dirTargets.length) return;
+  deleteConfirmModal.value = { files: fileTargets, dirs: dirTargets, base: path.value };
 }
 function cancelDeleteConfirm() {
   if (opBusy.value) return;
   deleteConfirmModal.value = null;
 }
 
+const deleteConfirmText = computed(() => {
+  if (!deleteConfirmModal.value) return "";
+  const { files: f, dirs: d } = deleteConfirmModal.value;
+  if (!d.length) {
+    return f.length === 1
+      ? t("files.deleteConfirm", { name: f[0].name })
+      : t("files.deleteConfirmBatch", { n: f.length });
+  }
+  if (!f.length && d.length === 1) return t("files.deleteConfirmFolder", { name: d[0] });
+  return t("files.deleteConfirmMixed", { files: f.length, dirs: d.length });
+});
+
 async function confirmDelete() {
   if (!deleteConfirmModal.value) return;
-  const targets = deleteConfirmModal.value.files;
+  const { files: fileTargets, dirs: dirTargets, base } = deleteConfirmModal.value;
   deleteConfirmModal.value = null;
   opBusy.value = true;
-  const queue = targets.map((file) => ({ file, status: "pending" as const, error: undefined as string | undefined }));
+  const queue = [
+    ...dirTargets.map((name) => ({ kind: "dir" as const, key: joinPath(base, name), error: undefined as string | undefined })),
+    ...fileTargets.map((file) => ({ kind: "file" as const, key: r2Key(file), error: undefined as string | undefined })),
+  ];
   try {
     await mapConcurrent(queue, OP_CONCURRENCY, async (item) => {
       try {
-        const res = await storagePost("files/delete", { key: r2Key(item.file) });
+        // Folder deletes are recursive server-side (files/deleteFolder).
+        const res = item.kind === "dir"
+          ? await storagePost("files/deleteFolder", { path: item.key })
+          : await storagePost("files/delete", { key: item.key });
         if (!JSON.parse(res).ok) throw new Error();
       } catch (e) {
         item.error = e instanceof Error ? e.message : String(e);
@@ -446,10 +625,10 @@ async function confirmDelete() {
     });
     const failed = queue.filter((i) => i.error).length;
     if (failed === 0) {
-      showToast(targets.length > 1 ? t("files.batchOpDone", { n: targets.length, verb: t("files.deleted") }) : t("files.deleted"));
-      selectedFiles.value.clear();
+      showToast(queue.length > 1 ? t("files.batchOpDone", { n: queue.length, verb: t("files.deleted") }) : t("files.deleted"));
+      clearSelection();
     } else {
-      showToast(t("files.batchOpPartialFail", { done: targets.length - failed, failed }), "error");
+      showToast(t("files.batchOpPartialFail", { done: queue.length - failed, failed }), "error");
     }
     loadDir();
   } finally {
@@ -548,7 +727,8 @@ async function openTagEditor(f: FileEntry) {
 // effort, same as tidy-folder) and open TagEditor in batch mode. Unresolved
 // files are silently dropped, matching tidy-folder's existing convention.
 async function openBatchTagEditor() {
-  const targets = files.value.filter((f) => selectedFiles.value.has(f.uri));
+  if (hasDirSelection.value) return; // tag-edit is file-only — button is disabled too
+  const targets = selectedFileEntries.value;
   const ids: string[] = [];
   for (const f of targets) {
     try {
@@ -685,7 +865,7 @@ async function onTagEditorSubmit(patch: Record<string, string | number>, cover?:
         editMsg.value = res.error || t("tagEditor.batchFailed");
       } else {
         editMsg.value = t("tagEditor.batchSaved", { succeeded: res.succeeded ?? 0, failed: res.failed ?? 0 });
-        selectedFiles.value.clear();
+        clearSelection();
         setTimeout(() => { editorOpen.value = false; }, 1500);
       }
     } else {
@@ -799,20 +979,52 @@ onMounted(async () => {
       <!-- 150 — batch action bar for the checkbox selection. Move/Delete stay
            R2-only (mirrors the existing per-row move/copy/delete buttons,
            which only ever supported R2); tag-edit and cross-copy work across
-           every source, matching their existing per-row buttons. -->
-      <div v-if="canUpload && selectedFiles.size > 0" class="batch-actions-bar">
-        <span class="batch-actions-count">{{ t("files.selectedCount", { n: selectedFiles.size }) }}</span>
-        <button class="btn-secondary" @click="openBatchTagEditor">{{ t("files.batchEditTags") }}</button>
+           every source, matching their existing per-row buttons — but grey
+           out while a folder is selected (they have no folder semantic).
+           Move/Delete handle folders recursively via moveFolder/deleteFolder. -->
+      <div v-if="canUpload && selectedTotal > 0" class="batch-actions-bar">
+        <span class="batch-actions-count">{{ t("files.selectedCount", { n: selectedTotal }) }}</span>
+        <button
+          class="btn-secondary"
+          :disabled="hasDirSelection"
+          :title="hasDirSelection ? t('files.filesOnlyAction') : ''"
+          @click="openBatchTagEditor"
+        >{{ t("files.batchEditTags") }}</button>
         <button v-if="isR2" class="btn-secondary" @click="openBatchMoveModal">{{ t("files.batchMove") }}</button>
         <button v-if="isR2" class="btn-danger" @click="openBatchDeleteConfirm">{{ t("files.batchDelete") }}</button>
-        <button class="btn-secondary" @click="openCrossModalBatch">{{ t("files.crossCopyBtn") }}</button>
-        <button class="btn-secondary batch-actions-clear" @click="selectedFiles.clear()">{{ t("files.clearSelection") }}</button>
+        <button
+          class="btn-secondary"
+          :disabled="hasDirSelection"
+          :title="hasDirSelection ? t('files.filesOnlyAction') : ''"
+          @click="openCrossModalBatch"
+        >{{ t("files.crossCopyBtn") }}</button>
+        <button class="btn-secondary batch-actions-clear" @click="clearSelection()">{{ t("files.clearSelection") }}</button>
       </div>
 
       <div class="entry-list">
         <div v-if="loading" class="list-loading">{{ t("common.loading") }}</div>
         <template v-else>
+          <!-- Select-all header: checked when every dir+file is selected,
+               indeterminate while only some are. -->
+          <label v-if="canUpload && dirs.length + files.length > 0" class="entry-row select-all-row">
+            <input
+              type="checkbox"
+              class="cross-select-box"
+              :checked="allSelected"
+              :indeterminate="selectedTotal > 0 && !allSelected"
+              @change="toggleSelectAll"
+            />
+            <span class="select-all-label">{{ t("files.selectAll") }}</span>
+            <span v-if="selectedTotal > 0" class="select-all-count">{{ t("files.selectedCount", { n: selectedTotal }) }}</span>
+          </label>
           <div v-for="d in dirs" :key="`d-${d.name}`" class="entry-row dir-row" @click="enterDir(d.name)">
+            <input
+              v-if="canUpload"
+              type="checkbox"
+              class="cross-select-box"
+              :checked="selectedDirs.has(d.name)"
+              @click.stop="toggleDirSelect(d)"
+            />
             <span class="entry-icon">📁</span>
             <span class="entry-name">{{ d.name }}</span>
           </div>
@@ -871,35 +1083,68 @@ onMounted(async () => {
       <div class="corner corner-bl"></div>
     </div>
 
-    <!-- Move / Copy modal — 150: generalized to N files (batch move) -->
+    <!-- Move / Copy modal — 150: generalized to N files (batch move); the
+         free-text destination input became a lazy-loaded folder tree: expand
+         with the caret (children fetched from files/list on demand), click a
+         name to pick it as the destination. -->
     <div v-if="opModal" class="modal-backdrop" @click.self="closeOpModal">
       <div class="modal">
         <div class="modal-title">
           {{ opModal.mode === "move" ? t("files.moveTo") : t("files.copyTo") }}:
-          {{ opModal.files.length === 1 ? opModal.files[0].name : t("files.crossCopyNFiles", { n: opModal.files.length }) }}
+          {{ opTargetCount === 1 ? opTitleName : t("files.nItems", { n: opTargetCount }) }}
         </div>
         <div class="form-group" style="margin-top:0.75rem">
-          <label class="form-label">{{ t("files.destPath") }}</label>
-          <input v-model="opDestInput" class="form-input" :disabled="opBusy" placeholder="music/subfolder" @keydown.enter="confirmOp" @keydown.escape="closeOpModal" />
-          <span class="field-hint">{{ t("files.destPathHint") }}</span>
+          <label class="form-label">{{ t("files.destFolder") }}</label>
+          <div class="dest-tree">
+            <div v-if="!destTreeRows.length" class="dest-tree-loading">{{ t("common.loading") }}</div>
+            <div
+              v-for="row in destTreeRows"
+              :key="row.node.path || '/'"
+              :class="['dest-tree-row', { selected: opDestSelected === row.node.path }]"
+              :style="{ paddingLeft: (0.4 + row.depth * 1.1) + 'rem' }"
+              @click="opDestSelected = row.node.path"
+            >
+              <button class="dest-tree-caret" :disabled="opBusy" @click.stop="toggleDestNode(row.node)">
+                {{ row.node.loading ? "…" : row.node.expanded ? "▾" : "▸" }}
+              </button>
+              <span class="dest-tree-name">{{ row.node.path === "" ? t("files.root") : row.node.name }}</span>
+            </div>
+          </div>
+          <div class="dest-selected">{{ t("files.destPath") }}: /{{ opDestSelected }}</div>
+          <p v-if="destInsideSelectedDir" class="dest-warning">{{ t("files.destInsideSelf") }}</p>
+          <div class="dest-newfolder">
+            <input
+              v-model="treeNewFolderName"
+              class="form-input"
+              :placeholder="t('files.folderNamePlaceholder')"
+              :disabled="opBusy || treeNewFolderBusy"
+              @keydown.enter="createFolderInTree"
+              @keydown.escape="closeOpModal"
+            />
+            <button
+              class="btn-secondary"
+              :disabled="opBusy || treeNewFolderBusy || !treeNewFolderName.trim()"
+              @click="createFolderInTree"
+            >{{ t("files.newFolderHere") }}</button>
+          </div>
         </div>
         <div v-if="opQueue.length > 1" class="cross-queue">
           <div class="cross-queue-bar">
             <div class="cross-queue-fill" :style="{ width: (opQueue.filter(i => i.status === 'done' || i.status === 'failed').length / opQueue.length * 100) + '%' }"></div>
           </div>
           <div class="cross-queue-list">
-            <div v-for="item in opQueue" :key="item.file.uri" class="cross-queue-item">
+            <div v-for="item in opQueue" :key="item.key" class="cross-queue-item">
               <span class="cross-queue-status" :class="`status-${item.status}`">
                 {{ item.status === "done" ? "✓" : item.status === "failed" ? "✕" : item.status === "running" ? "…" : "·" }}
               </span>
-              <span class="cross-queue-name">{{ item.file.name }}</span>
+              <span class="cross-queue-name">{{ item.kind === "dir" ? `📁 ${item.name}` : item.name }}</span>
               <span v-if="item.error" class="cross-queue-error">{{ item.error }}</span>
             </div>
           </div>
         </div>
         <div class="modal-actions">
           <button class="btn-secondary" :disabled="opBusy" @click="closeOpModal">{{ t("common.cancel") }}</button>
-          <button class="btn-primary" :disabled="opBusy" @click="confirmOp">{{ opModal.mode === "move" ? t("files.move") : t("files.copy") }}</button>
+          <button class="btn-primary" :disabled="opBusy || destInsideSelectedDir" @click="confirmOp">{{ opModal.mode === "move" ? t("files.move") : t("files.copy") }}</button>
         </div>
         <div class="corner corner-tl"></div>
         <div class="corner corner-br"></div>
@@ -939,11 +1184,7 @@ onMounted(async () => {
     <div v-if="deleteConfirmModal" class="modal-backdrop" @click.self="cancelDeleteConfirm">
       <div class="modal">
         <div class="modal-title">{{ t("files.deleteConfirmTitle") }}</div>
-        <p class="modal-confirm-text">
-          {{ deleteConfirmModal.files.length === 1
-            ? t("files.deleteConfirm", { name: deleteConfirmModal.files[0].name })
-            : t("files.deleteConfirmBatch", { n: deleteConfirmModal.files.length }) }}
-        </p>
+        <p class="modal-confirm-text">{{ deleteConfirmText }}</p>
         <div class="modal-actions">
           <button class="btn-secondary" :disabled="opBusy" @click="cancelDeleteConfirm">{{ t("common.cancel") }}</button>
           <button class="btn-danger" :disabled="opBusy" @click="confirmDelete">{{ t("files.deleteFile") }}</button>
@@ -1166,6 +1407,70 @@ onMounted(async () => {
 
 /* Cross-source copy batch selection + queue (144) */
 .cross-select-box { flex-shrink: 0; margin-right: 0.4rem; cursor: pointer; }
+
+/* Select-all header row above the entry list */
+.select-all-row { cursor: pointer; user-select: none; background: var(--color-bg-primary); }
+.select-all-label {
+  font-size: var(--fs-xs);
+  color: var(--color-text-muted);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.select-all-count { margin-left: auto; font-size: var(--fs-xs); color: var(--color-accent-primary); }
+
+/* Destination folder tree in the move/copy modal */
+.dest-tree {
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-primary);
+}
+.dest-tree-row {
+  display: flex; align-items: center; gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  color: var(--color-text-secondary);
+}
+.dest-tree-row:hover { background: var(--color-bg-tertiary); color: var(--color-text-primary); }
+.dest-tree-row.selected {
+  background: var(--color-accent-dim);
+  border-left-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+}
+.dest-tree-caret {
+  flex-shrink: 0; width: 1.4em;
+  background: none; border: none; padding: 0;
+  color: var(--color-text-muted);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.dest-tree-caret:hover { color: var(--color-text-primary); }
+.dest-tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dest-tree-loading {
+  padding: 0.75rem; text-align: center;
+  font-family: var(--font-mono); font-size: var(--fs-sm);
+  color: var(--color-text-muted);
+}
+.dest-selected {
+  margin-top: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-accent-primary);
+  word-break: break-all;
+}
+.dest-warning {
+  margin: 0.3rem 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--color-status-error);
+}
+.dest-newfolder { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+.dest-newfolder .form-input { flex: 1; min-width: 0; }
+.dest-newfolder .btn-secondary { flex-shrink: 0; font-size: var(--fs-xs); padding: 0.25rem 0.6rem; white-space: nowrap; }
 .btn-new-folder { margin-left: 0.6rem; font-size: var(--fs-xs); padding: 0.25rem 0.6rem; }
 
 /* 150 — batch action bar (tag-edit / move / delete / cross-copy) shown under

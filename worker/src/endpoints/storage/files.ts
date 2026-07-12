@@ -190,6 +190,33 @@ filesRoutes.post("/files/mkdir", permissionMiddleware("upload"), async (c) => {
   return c.json({ ok: true });
 });
 
+// Drop a song master when its last instance is gone, then garbage-collect the
+// album/artist rows nothing else references. Extracted from files/delete so
+// the recursive files/deleteFolder below can cascade with the same semantics.
+async function cleanupOrphanMaster(db: D1Database, masterId: string) {
+  const others = await db.prepare("SELECT COUNT(*) AS n FROM song_instances WHERE master_id = ?")
+    .bind(masterId).first<{ n: number }>();
+  if (others?.n) return;
+  const master = await db.prepare("SELECT album_id, artist_id FROM song_masters WHERE id = ?")
+    .bind(masterId).first<{ album_id: string; artist_id: string }>();
+  await db.prepare("DELETE FROM song_masters WHERE id = ?").bind(masterId).run();
+  if (master) {
+    await db.prepare("DELETE FROM albums WHERE id = ? AND NOT EXISTS (SELECT 1 FROM song_masters WHERE album_id = ?)")
+      .bind(master.album_id, master.album_id).run();
+    await db.prepare("DELETE FROM artists WHERE id = ? AND NOT EXISTS (SELECT 1 FROM song_masters WHERE artist_id = ? OR album_artist_id = ?)")
+      .bind(master.artist_id, master.artist_id, master.artist_id).run();
+  }
+}
+
+// Normalize a user-supplied folder path: strip surrounding slashes and refuse
+// empty results or "."/".." traversal segments (same policy as files/mkdir).
+function normalizeFolderPath(p: string | undefined): string | null {
+  const path = (p || "").replace(/^\/+|\/+$/g, "");
+  if (!path) return null;
+  if (path.split("/").some((seg) => !seg || seg === "." || seg === "..")) return null;
+  return path;
+}
+
 // POST /rest/files/delete body: { key: "music/file.mp3" }
 filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
@@ -205,21 +232,102 @@ filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {
     .bind(`r2://${key}`).first<{ master_id: string }>();
   if (inst) {
     await db.prepare("DELETE FROM song_instances WHERE storage_uri = ?").bind(`r2://${key}`).run();
-    const others = await db.prepare("SELECT COUNT(*) AS n FROM song_instances WHERE master_id = ?")
-      .bind(inst.master_id).first<{ n: number }>();
-    if (!others?.n) {
-      const master = await db.prepare("SELECT album_id, artist_id FROM song_masters WHERE id = ?")
-        .bind(inst.master_id).first<{ album_id: string; artist_id: string }>();
-      await db.prepare("DELETE FROM song_masters WHERE id = ?").bind(inst.master_id).run();
-      if (master) {
-        await db.prepare("DELETE FROM albums WHERE id = ? AND NOT EXISTS (SELECT 1 FROM song_masters WHERE album_id = ?)")
-          .bind(master.album_id, master.album_id).run();
-        await db.prepare("DELETE FROM artists WHERE id = ? AND NOT EXISTS (SELECT 1 FROM song_masters WHERE artist_id = ? OR album_artist_id = ?)")
-          .bind(master.artist_id, master.artist_id, master.artist_id).run();
-      }
-    }
+    await cleanupOrphanMaster(db, inst.master_id);
   }
   return c.json({ ok: true });
+});
+
+// POST /storage/files/deleteFolder body: { path: "music/folder" } — R2 only,
+// like the per-object delete/move above (the UI only ever offers folder ops
+// on the R2 source). Recursively deletes every object under `${path}/`,
+// including the 0-byte `.keep` marker files/mkdir drops, page by page (R2
+// list caps at 1000 keys per page and bulk delete accepts up to 1000 keys).
+// D1 cascade mirrors the single-file delete: drop every song_instances row
+// whose storage_uri lived under the prefix, then orphan-collect the affected
+// masters/albums/artists. The LIKE pattern escapes \ % _ so folder names
+// containing SQL wildcards can't over-match unrelated rows.
+filesRoutes.post("/files/deleteFolder", permissionMiddleware("upload"), async (c) => {
+  const env = c.env as Env;
+  const body = await c.req.json<{ path?: string }>();
+  const path = normalizeFolderPath(body.path);
+  if (!path) return c.json({ ok: false, error: "Invalid path" }, 400);
+
+  const db = env.DB;
+  const prefix = `${path}/`;
+  let deleted = 0;
+  let cursor: string | undefined;
+  do {
+    const listing = await env.MUSIC_BUCKET.list({ prefix, cursor, limit: 1000 });
+    const keys = listing.objects.map((o) => o.key);
+    if (keys.length) {
+      await env.MUSIC_BUCKET.delete(keys);
+      deleted += keys.length;
+    }
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+  if (deleted === 0) return c.json({ ok: false, error: "Folder not found" }, 404);
+
+  const likePrefix = `r2://${prefix}`.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+  const affected = await db.prepare(
+    "SELECT DISTINCT master_id FROM song_instances WHERE storage_uri LIKE ? ESCAPE '\\'",
+  ).bind(`${likePrefix}%`).all<{ master_id: string }>();
+  if (affected.results.length) {
+    await db.prepare("DELETE FROM song_instances WHERE storage_uri LIKE ? ESCAPE '\\'")
+      .bind(`${likePrefix}%`).run();
+    for (const row of affected.results) await cleanupOrphanMaster(db, row.master_id);
+  }
+  return c.json({ ok: true, deleted });
+});
+
+// POST /storage/files/moveFolder body: { path: "music/a", dest: "music/b/a" }
+// — R2 only. Recursively re-homes every object under `${path}/` to `${dest}/`
+// (the `.keep` marker travels along, so empty folders survive the move). Each
+// page is copied first (get→put) and only then bulk-deleted, so a mid-flight
+// failure can leave duplicates at both locations but never loses bytes — a
+// retry is idempotent. Moving a folder into itself or a descendant is refused:
+// it would rewrite keys back under the prefix being enumerated. storage_uri
+// rows are rewritten per page via exact-match db.batch updates.
+filesRoutes.post("/files/moveFolder", permissionMiddleware("upload"), async (c) => {
+  const env = c.env as Env;
+  const body = await c.req.json<{ path?: string; dest?: string }>();
+  const path = normalizeFolderPath(body.path);
+  const dest = normalizeFolderPath(body.dest);
+  if (!path || !dest) return c.json({ ok: false, error: "Invalid path or dest" }, 400);
+  if (dest === path || dest.startsWith(`${path}/`)) {
+    return c.json({ ok: false, error: "Cannot move a folder into itself" }, 400);
+  }
+
+  const db = env.DB;
+  const prefix = `${path}/`;
+  const destPrefix = `${dest}/`;
+  const now = Math.floor(Date.now() / 1000);
+  let moved = 0;
+  let cursor: string | undefined;
+  do {
+    const listing = await env.MUSIC_BUCKET.list({ prefix, cursor, limit: 1000 });
+    const movedKeys: string[] = [];
+    const uriUpdates: D1PreparedStatement[] = [];
+    for (const meta of listing.objects) {
+      const obj = await env.MUSIC_BUCKET.get(meta.key);
+      if (!obj) continue; // raced away mid-listing — nothing left to move
+      const destKey = destPrefix + meta.key.substring(prefix.length);
+      await env.MUSIC_BUCKET.put(destKey, obj.body, { httpMetadata: obj.httpMetadata, customMetadata: obj.customMetadata });
+      movedKeys.push(meta.key);
+      uriUpdates.push(
+        db.prepare("UPDATE song_instances SET storage_uri = ?, updated_at = ? WHERE storage_uri = ?")
+          .bind(`r2://${destKey}`, now, `r2://${meta.key}`),
+      );
+    }
+    if (movedKeys.length) {
+      await env.MUSIC_BUCKET.delete(movedKeys);
+      await db.batch(uriUpdates);
+      moved += movedKeys.length;
+    }
+    cursor = listing.truncated ? listing.cursor : undefined;
+  } while (cursor);
+
+  if (moved === 0) return c.json({ ok: false, error: "Folder not found" }, 404);
+  return c.json({ ok: true, moved });
 });
 
 // POST /rest/files/move body: { key, dest }
@@ -228,6 +336,10 @@ filesRoutes.post("/files/move", permissionMiddleware("upload"), async (c) => {
   const body = await c.req.json<{ key: string; dest: string }>();
   const { key, dest } = body;
   if (!key || !dest) return c.json({ ok: false, error: "Missing key or dest" }, 400);
+  // Moving onto itself would put-then-delete the same key, destroying the
+  // object — treat it as a no-op success instead (easy to trigger now that
+  // the move dialog defaults its folder picker to the current directory).
+  if (dest === key) return c.json({ ok: true });
 
   const obj = await env.MUSIC_BUCKET.get(key);
   if (!obj) return c.json({ ok: false, error: "Source not found" }, 404);
