@@ -391,6 +391,19 @@ CREATE INDEX IF NOT EXISTS idx_annotations_starred ON annotations(user_id, item_
 CREATE INDEX IF NOT EXISTS idx_annotations_rating ON annotations(user_id, item_type, rating);
 CREATE INDEX IF NOT EXISTS idx_annotations_played ON annotations(user_id, item_type, play_date);
 
+-- Clone identity map: remote Subsonic ids are not always valid local ids.
+-- Persist source-scoped mappings so clone audio, playlists and stars all point
+-- at the same local entities selected by /edgesonic/clone/upsertMaster.
+CREATE TABLE IF NOT EXISTS clone_id_map (
+  source_key TEXT NOT NULL,
+  item_type TEXT NOT NULL CHECK (item_type IN ('song', 'album', 'artist')),
+  remote_id TEXT NOT NULL,
+  local_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  PRIMARY KEY (source_key, item_type, remote_id)
+);
+
 -- ============================================================================
 -- 12. Playlists
 -- ============================================================================

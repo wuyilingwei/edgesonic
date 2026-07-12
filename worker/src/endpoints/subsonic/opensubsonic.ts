@@ -16,6 +16,8 @@
 //   * songLyrics v1         — 108: getLyricsBySongId emits spec-shaped
 //   structuredLyrics ({start,value} lines); clients only call it when the
 //   extension is advertised, which is why lyrics never showed in players.
+//   * edgeSonicCloneProxy v1 — EdgeSonic-specific clone/proxy capability plus
+//   automatic exact/fuzzy remote-id → local-id merge support.
 //
 // NOT advertised (kept honest):
 //  * transcodeOffset — 036
@@ -43,18 +45,23 @@ const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
 // require. The old form (versions="[1]" attribute) serialized to the JSON
 // string `"versions":"[1]"`, which strict clients reject.
 
-const EXTENSIONS: Array<{ name: string; versions: number[] }> = [
+const EXTENSIONS: Array<{ name: string; versions: number[]; attrs?: Record<string, string> }> = [
   { name: "apiKeyAuthentication", versions: [1] },
   { name: "tokenInfo", versions: [1] },
   { name: "formPost", versions: [1] },
   { name: "songLyrics", versions: [1] },
+  {
+    name: "edgeSonicCloneProxy",
+    versions: [1],
+    attrs: { proxy: "true", autoMerge: "true", fuzzyMerge: "true" },
+  },
 ];
 
 const extensionsHandler = (c: import("hono").Context) => {
   return c.text(
     subsonicOK({
       openSubsonicExtensions: EXTENSIONS.map((ext) => ({
-        _attributes: { name: ext.name },
+        _attributes: { name: ext.name, ...(ext.attrs || {}) },
         versions: ext.versions,
       })),
     }),

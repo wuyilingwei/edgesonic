@@ -149,6 +149,10 @@ async function main() {
     assert(xmlHas(body, 'name="formPost"'), "advertises formPost");
     // structuredLyrics, and clients only call it when the extension is declared.
     assert(xmlHas(body, 'name="songLyrics"'), "advertises songLyrics (108)");
+    assert(xmlHas(body, 'name="edgeSonicCloneProxy"'), "advertises EdgeSonic clone proxy capability");
+    assert(xmlHas(body, 'proxy="true"'), "declares clone proxy support");
+    assert(xmlHas(body, 'autoMerge="true"'), "declares automatic merge support");
+    assert(xmlHas(body, 'fuzzyMerge="true"'), "declares fuzzy merge support");
     // shape), so the JSON conversion yields "versions":[1] as a number array.
     assert(xmlHas(body, "<versions>1</versions>"), "versions emitted as child elements");
     assert(!xmlHas(body, 'versions="'), "no legacy versions attribute");

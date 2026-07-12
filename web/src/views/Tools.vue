@@ -334,6 +334,9 @@ interface CloneCache { metadataDone: string[]; audioDone: string[] }
 function cloneCacheKey(): string {
   return "edgesonic_clone_cache_" + md5(cloneForm.value.url.trim().toLowerCase());
 }
+function cloneSourceKey(): string {
+  return md5(cloneForm.value.url.trim().toLowerCase());
+}
 function loadCloneCache(): { metadataDone: Set<string>; audioDone: Set<string> } {
   try {
     const raw = localStorage.getItem(cloneCacheKey());
@@ -747,15 +750,12 @@ async function cloneMetadataStage() {
 
   await mapConcurrent(items, CLONE_METADATA_CONCURRENCY, async ({ s, albumNode, artist }) => {
     const sid = jget(s, "id") || "";
-    // 159: resume cache — a song already upserted in a previous run of this
-    // same upstream URL doesn't need the POST redone.
-    if (sid && cloneCache.metadataDone.has(sid)) {
-      stage.done++;
-      return;
-    }
+    // Metadata is intentionally re-upserted even when cached so the backend can
+    // refresh the source-scoped remote-id -> local-id map used by audio,
+    // playlists and starred items.
     const payload = normalizeSongNode(s, albumNode, { id: "", name: artist });
     try {
-      const data = JSON.parse(await edgesonicPost("clone/upsertMaster", payload));
+      const data = JSON.parse(await edgesonicPost("clone/upsertMaster", { ...payload, sourceKey: cloneSourceKey() }));
       if (!data.ok) throw new Error(data.error || "upsertMaster rejected");
       stage.done++;
       if (sid) { cloneCache.metadataDone.add(sid); markCloneCacheDirty(); }
@@ -816,7 +816,7 @@ async function cloneAudioStage() {
   // "running" is just a different kind of confusing (is it done counting
   // or not?). Collect fully first (still concurrent, so still fast) and
   // set stage.total exactly once, to its real final value.
-  const allSongs: { id: string; title: string; album: string; albumId: string; artist: string; suffix: string; contentType: string; size: number }[] = [];
+  const allSongs: { id: string; title: string; album: string; albumId: string; artist: string; suffix: string; contentType: string; size: number; path: string }[] = [];
   await mapConcurrent(albumMetas, CLONE_METADATA_CONCURRENCY, async (meta) => {
     if (cloneCancelRequested.value) return;
     const detail = await cloneFetchJson("getAlbum", { id: meta.id });
@@ -843,6 +843,7 @@ async function cloneAudioStage() {
         suffix: (jget(s, "suffix") || jget(s, "format") || "mp3").toLowerCase(),
         contentType: jget(s, "contentType") || suffixToMime((jget(s, "suffix") || "mp3").toLowerCase()),
         size: numOr(jget(s, "size"), 0) || 0,
+        path: jget(s, "path") || "",
       });
     }
   }, () => cloneCancelRequested.value);
@@ -876,11 +877,13 @@ async function cloneAudioStage() {
           password: cloneForm.value.password,
           songId: s.id,
           masterId: realMasterId,
+          sourceKey: cloneSourceKey(),
           suffix: s.suffix,
           contentType: s.contentType,
           artist: artistDir,
           album: albumDir,
           filename,
+          originalPath: s.path,
           size: s.size,
         }));
         if (!data.ok) throw new Error(data.error || "fetchAudioToR2 rejected");
@@ -917,11 +920,13 @@ async function cloneAudioStage() {
       if (buf.byteLength === 0) throw new Error("empty body");
       const qs = new URLSearchParams({
         masterId: realMasterId,
+        sourceKey: cloneSourceKey(),
         suffix: s.suffix,
         contentType: s.contentType,
         artist: artistDir,
         album: albumDir,
         filename,
+        originalPath: s.path,
         size: String(s.size || buf.byteLength),
       });
       // Reuse the session-signed edgesonicPost path but with a binary body.
@@ -1006,6 +1011,7 @@ async function clonePlaylistsStage() {
       const data = JSON.parse(await edgesonicPost("clone/upsertPlaylist", {
         playlist: { id, name, owner, public: isPublic, comment },
         entries,
+        sourceKey: cloneSourceKey(),
       }));
       if (!data.ok) throw new Error(data.error || "upsertPlaylist rejected");
       stage.done++;
@@ -1047,6 +1053,7 @@ async function cloneStarredStage() {
       const data = JSON.parse(await edgesonicPost("clone/upsertStarred", {
         userId: cloneForm.value.username,
         items,
+        sourceKey: cloneSourceKey(),
       }));
       if (!data.ok) throw new Error(data.error || "upsertStarred rejected");
       stage.done = items.length;
@@ -1090,7 +1097,7 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
       }
     }
     if (items.length > 0) {
-      const data = JSON.parse(await edgesonicPost("clone/upsertStarred", { userId: username, items }));
+      const data = JSON.parse(await edgesonicPost("clone/upsertStarred", { userId: username, items, sourceKey: cloneSourceKey() }));
       if (!data.ok) throw new Error(data.error || "upsertStarred rejected");
       cloneLogPush(`users: ✓ ${username} — ${items.length} starred item(s)`);
     }
@@ -1133,6 +1140,7 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
       const data = JSON.parse(await edgesonicPost("clone/upsertPlaylist", {
         playlist: { id, name, owner, public: isPublic, comment },
         entries,
+        sourceKey: cloneSourceKey(),
       }));
       if (!data.ok) throw new Error(data.error || "upsertPlaylist rejected");
       count++;

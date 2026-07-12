@@ -23,6 +23,150 @@ export const cloneRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
+const DEFAULT_CLONE_SOURCE_KEY = "default";
+const METADATA_SEPARATOR_RE = /[,，;；\/]+/g;
+
+function normMatch(s: string | null | undefined): string {
+  return (s || "").trim().toLowerCase().replace(METADATA_SEPARATOR_RE, " ").replace(/\s+/g, " ");
+}
+
+function normFuzzy(s: string | null | undefined): string {
+  return normMatch(s)
+    .replace(/[#＃]\s*\d+\s*/g, " ")
+    .replace(/^\s*\d{1,3}\s*[-–—_.、．:：)）]\s*/, "")
+    .replace(/^\s*\d{1,3}\s+/, "")
+    .replace(/[([（【].*?[)\]）】]/g, " ")
+    .replace(/[\p{P}\p{S}\s]+/gu, "")
+    .trim();
+}
+
+function fuzzyCompatible(a: string, b: string): boolean {
+  if (!a || !b) return false;
+  return a === b || a.includes(b) || b.includes(a);
+}
+
+function isUnknownArtistName(raw: string | null | undefined): boolean {
+  const normalized = normFuzzy(raw);
+  return normalized === "unknownartist" || normalized === "未知艺术家" || normalized === "未知藝術家";
+}
+
+function artistTokens(raw: string | null | undefined): string[] {
+  return normMatch(raw)
+    .split(" ")
+    .map((part) => normFuzzy(part))
+    .filter(Boolean);
+}
+
+function artistsCompatible(existingArtist: string | null | undefined, incomingArtist: string | null | undefined): boolean {
+  const existingF = normFuzzy(existingArtist);
+  const incomingF = normFuzzy(incomingArtist);
+  if (fuzzyCompatible(existingF, incomingF)) return true;
+  if (isUnknownArtistName(existingArtist) && isUnknownArtistName(incomingArtist)) return true;
+  const existingTokens = artistTokens(existingArtist);
+  const incomingTokens = artistTokens(incomingArtist);
+  if (!existingTokens.length || !incomingTokens.length) return false;
+  return incomingTokens.every((token) => existingTokens.includes(token)) || existingTokens.every((token) => incomingTokens.includes(token));
+}
+
+function isSoundtrackLikeDuplicate(title: string | null | undefined, album: string | null | undefined): boolean {
+  const haystack = `${title || ""} ${album || ""}`.toLowerCase();
+  return /soundtrack|bonus\s*track|theme\s*song|trailer|ost|原声|原聲/.test(haystack);
+}
+
+async function ensureCloneMapTable(db: D1Database): Promise<void> {
+  await db.prepare(
+    `CREATE TABLE IF NOT EXISTS clone_id_map (
+       source_key TEXT NOT NULL,
+       item_type TEXT NOT NULL CHECK (item_type IN ('song', 'album', 'artist')),
+       remote_id TEXT NOT NULL,
+       local_id TEXT NOT NULL,
+       created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+       updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+       PRIMARY KEY (source_key, item_type, remote_id)
+     )`,
+  ).run();
+}
+
+async function saveCloneIdMap(db: D1Database, sourceKey: string, itemType: "song" | "album" | "artist", remoteId: string, localId: string): Promise<void> {
+  if (!remoteId || !localId) return;
+  await ensureCloneMapTable(db);
+  const now = Math.floor(Date.now() / 1000);
+  await db.prepare(
+    `INSERT INTO clone_id_map (source_key, item_type, remote_id, local_id, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(source_key, item_type, remote_id) DO UPDATE SET
+       local_id = excluded.local_id,
+       updated_at = excluded.updated_at`,
+  ).bind(sourceKey || DEFAULT_CLONE_SOURCE_KEY, itemType, remoteId, localId, now, now).run();
+}
+
+async function resolveCloneId(db: D1Database, sourceKey: string, itemType: "song" | "album" | "artist", remoteId: string): Promise<string> {
+  if (!remoteId) return remoteId;
+  await ensureCloneMapTable(db);
+  const row = await db.prepare(
+    "SELECT local_id FROM clone_id_map WHERE source_key = ? AND item_type = ? AND remote_id = ?",
+  ).bind(sourceKey || DEFAULT_CLONE_SOURCE_KEY, itemType, remoteId).first<{ local_id: string }>();
+  return row?.local_id || remoteId;
+}
+
+async function resolveExistingSongMaster(
+  db: D1Database,
+  song: { id: string; title: string; duration?: number | null },
+  album: { name: string },
+  artist: { name: string },
+): Promise<string> {
+  const exact = await db.prepare("SELECT id FROM song_masters WHERE id = ?")
+    .bind(song.id).first<{ id: string }>();
+  if (exact) return exact.id;
+
+  const titleN = normMatch(song.title);
+  const albumN = normMatch(album.name);
+  const artistN = normMatch(artist.name);
+  if (!titleN || !albumN || !artistN) return song.id;
+
+  const result = await db.prepare(
+    `SELECT sm.id, sm.duration, sm.title, al.name AS album_name, ar.name AS artist_name
+       FROM song_masters sm
+       JOIN albums al ON al.id = sm.album_id
+       JOIN artists ar ON ar.id = sm.artist_id
+      WHERE lower(sm.title) = ?
+        AND lower(al.name) = ?
+        AND lower(ar.name) = ?
+      LIMIT 10`,
+  ).bind(titleN, albumN, artistN).all<{ id: string; duration: number | null; title: string; album_name: string; artist_name: string }>();
+
+  for (const row of result.results) {
+    if (normMatch(row.title) !== titleN || normMatch(row.album_name) !== albumN || normMatch(row.artist_name) !== artistN) continue;
+    if (song.duration == null || row.duration == null || Math.abs(row.duration - song.duration) <= 3) return row.id;
+  }
+
+  const fuzzyRows = await db.prepare(
+    `SELECT sm.id, sm.duration, sm.title, al.name AS album_name, ar.name AS artist_name
+       FROM song_masters sm
+       JOIN albums al ON al.id = sm.album_id
+       JOIN artists ar ON ar.id = sm.artist_id
+      WHERE (? IS NULL OR sm.duration IS NULL OR ABS(sm.duration - ?) <= 3)
+      LIMIT 500`,
+  ).bind(song.duration ?? null, song.duration ?? null).all<{ id: string; duration: number | null; title: string; album_name: string; artist_name: string }>();
+
+  const titleF = normFuzzy(song.title);
+  const albumF = normFuzzy(album.name);
+  const artistF = normFuzzy(artist.name);
+  for (const row of fuzzyRows.results) {
+    const durationOk = song.duration == null || row.duration == null || Math.abs(row.duration - song.duration) <= 3;
+    if (!durationOk) continue;
+    const rowTitleF = normFuzzy(row.title);
+    const rowAlbumF = normFuzzy(row.album_name);
+    const albumOk = fuzzyCompatible(rowAlbumF, albumF);
+    const titleOk = fuzzyCompatible(rowTitleF, titleF);
+    if (!albumOk || !titleOk) continue;
+    if (artistsCompatible(row.artist_name, artist.name)) return row.id;
+    if (rowTitleF === titleF && rowAlbumF === albumF && song.duration != null && row.duration != null && Math.abs(row.duration - song.duration) < 2) return row.id;
+    if (rowTitleF === titleF && rowAlbumF === albumF && isSoundtrackLikeDuplicate(song.title, album.name)) return row.id;
+  }
+  return song.id;
+}
+
 function signedUpstreamUrl(baseUrl: string, username: string, password: string, path: string, params?: Record<string, string>): string {
   const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
   const q = new URLSearchParams({
@@ -78,7 +222,7 @@ cloneRoutes.post("/clone/proxy", permissionMiddleware("manage_users"), async (c)
 // ---------------------------------------------------------------------------
 // POST /edgesonic/clone/upsertMaster
 // ---------------------------------------------------------------------------
-// Body: { artist, album, song, albumArtist? }
+// Body: { artist, album, song, albumArtist?, sourceKey? }
 //   artist:    { id, name, sortName?, imageUrl? }
 //   album:     { id, name, sortName?, year?, genre?, coverUrl? }
 //   song:      { id, albumId, artistId, albumArtistId?, title, sortTitle?,
@@ -108,6 +252,7 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
       compilation?: number | null; lyrics?: string | null;
     };
     albumArtist?: { id: string; name: string; sortName?: string | null };
+    sourceKey?: string;
   }>();
 
   const { artist, album, song, albumArtist } = body;
@@ -119,6 +264,8 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
   }
 
   const now = Math.floor(Date.now() / 1000);
+  const sourceKey = body.sourceKey || DEFAULT_CLONE_SOURCE_KEY;
+  const localSongId = await resolveExistingSongMaster(db, song, album, artist);
   const stmts: D1PreparedStatement[] = [];
 
   stmts.push(
@@ -148,7 +295,7 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
           track, disc, duration, genre, compilation, lyrics, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(
-      song.id,
+      localSongId,
       song.albumId,
       song.artistId,
       song.albumArtistId ?? null,
@@ -198,16 +345,20 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
     song.compilation ?? null,
     song.lyrics ?? null,
     now,
-    song.id,
+     localSongId,
   ).run();
 
-  return c.json({ ok: true, masterId: song.id });
+  await saveCloneIdMap(db, sourceKey, "song", song.id, localSongId);
+  await saveCloneIdMap(db, sourceKey, "album", album.id, album.id);
+  await saveCloneIdMap(db, sourceKey, "artist", artist.id, artist.id);
+
+  return c.json({ ok: true, masterId: localSongId });
 });
 
 // ---------------------------------------------------------------------------
 // POST /edgesonic/clone/upsertPlaylist
 // ---------------------------------------------------------------------------
-// Body: { playlist, entries }
+// Body: { playlist, entries, sourceKey? }
 //  playlist: { id, name, owner, public?, comment?, coverUrl? }
 //   entries:  string[] — song_master ids in order
 //
@@ -222,15 +373,22 @@ cloneRoutes.post("/clone/upsertPlaylist", permissionMiddleware("manage_users"), 
       public?: boolean | null; comment?: string | null;
     };
     entries?: string[];
+    sourceKey?: string;
   }>();
 
   const { playlist, entries } = body;
   if (!playlist || !playlist.id || !playlist.name || !playlist.owner) {
     return c.json({ ok: false, error: "Missing playlist fields" }, 400);
   }
-  const songIds = Array.isArray(entries) ? entries.filter((s) => typeof s === "string") : [];
+  const sourceKey = body.sourceKey || DEFAULT_CLONE_SOURCE_KEY;
+  const remoteSongIds = Array.isArray(entries) ? entries.filter((s) => typeof s === "string") : [];
+  const songIds: string[] = [];
+  for (const sid of remoteSongIds) songIds.push(await resolveCloneId(db, sourceKey, "song", sid));
 
   const now = Math.floor(Date.now() / 1000);
+  const ownerExists = await db.prepare("SELECT username FROM users WHERE username = ?")
+    .bind(playlist.owner).first<{ username: string }>();
+  const owner = ownerExists?.username || c.var.user.username;
   // Compute totals from existing song_masters so playlist headers stay
   // consistent (only entries that actually resolve locally are counted).
   let count = 0;
@@ -258,7 +416,7 @@ cloneRoutes.post("/clone/upsertPlaylist", permissionMiddleware("manage_users"), 
     ).bind(
       playlist.id,
       playlist.name,
-      playlist.owner,
+      owner,
       playlist.public ? 1 : 0,
       count,
       duration,
@@ -300,13 +458,13 @@ cloneRoutes.post("/clone/upsertPlaylist", permissionMiddleware("manage_users"), 
     ).bind(playlist.id, now, playlist.id).run();
   }
 
-  return c.json({ ok: true, playlistId: playlist.id, inserted: count });
+  return c.json({ ok: true, playlistId: playlist.id, inserted: count, owner });
 });
 
 // ---------------------------------------------------------------------------
 // POST /edgesonic/clone/upsertStarred
 // ---------------------------------------------------------------------------
-// Body: { userId, items }
+// Body: { userId, items, sourceKey? }
 //  userId: local users.username to attribute the stars to
 //  items: Array<{ id, type: 'song'|'album'|'artist', starredAt? }>
 //
@@ -318,6 +476,7 @@ cloneRoutes.post("/clone/upsertStarred", permissionMiddleware("manage_users"), a
   const body = await c.req.json<{
     userId?: string;
     items?: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }>;
+    sourceKey?: string;
   }>();
 
   const userId = body.userId;
@@ -327,9 +486,11 @@ cloneRoutes.post("/clone/upsertStarred", permissionMiddleware("manage_users"), a
   }
 
   let applied = 0;
+  const sourceKey = body.sourceKey || DEFAULT_CLONE_SOURCE_KEY;
   for (const it of items) {
     if (!it.id || !it.type) continue;
     if (it.type !== "song" && it.type !== "album" && it.type !== "artist") continue;
+    const localId = await resolveCloneId(db, sourceKey, it.type, it.id);
     const now = it.starredAt ?? Math.floor(Date.now() / 1000);
     await db.prepare(
       `INSERT INTO annotations (user_id, item_id, item_type, play_count, starred, starred_at)
@@ -337,7 +498,7 @@ cloneRoutes.post("/clone/upsertStarred", permissionMiddleware("manage_users"), a
        ON CONFLICT(user_id, item_id, item_type) DO UPDATE SET
          starred = 1,
          starred_at = excluded.starred_at`,
-    ).bind(userId, it.id, it.type, now).run();
+    ).bind(userId, localId, it.type, now).run();
     applied++;
   }
 
@@ -416,9 +577,10 @@ cloneRoutes.post("/clone/upsertUser", permissionMiddleware("manage_users"), asyn
 // ---------------------------------------------------------------------------
 // Body: raw bytes (the upstream /rest/stream payload).
 // Query: ?masterId=<song_master_id>&suffix=<ext>&contentType=<mime>&
-//      &artist=<...>&album=<...>&filename=<...>&size=<bytes>
+//      &artist=<...>&album=<...>&filename=<...>&size=<bytes>&originalPath=<...>
 //
-// Writes R2 key `music/{artist}/{album}/{filename}` and creates a
+// Writes R2 key from upstream originalPath when available, otherwise falls
+// back to `music/{artist}/{album}/{filename}`, and creates a
 // song_instances row (source_type='original', source_id='r2-local',
 // storage_uri=r2://music/...). Idempotent: if a song_instance with the
 // same storage_uri already exists, the R2 put still happens (overwrite)
@@ -439,15 +601,16 @@ async function registerAudioInstance(
   env: Env,
   db: D1Database,
   params: {
-    masterId: string; suffix: string; contentType: string;
-    artistDir: string; albumDir: string; filename: string;
+    masterId: string; suffix: string; contentType: string; sourceKey?: string;
+    artistDir: string; albumDir: string; filename: string; originalPath?: string;
     declaredSize: number; body: ArrayBuffer | ReadableStream<Uint8Array>;
   },
 ): Promise<
   | { ok: true; r2Key: string; size: number; instanceId?: string; registered: boolean }
   | { ok: false; error: string; status: 400 | 404 | 413 }
 > {
-  const { masterId, suffix, contentType, artistDir, albumDir, filename, declaredSize, body } = params;
+  const { suffix, contentType, artistDir, albumDir, filename, originalPath, declaredSize, body } = params;
+  const masterId = await resolveCloneId(db, params.sourceKey || DEFAULT_CLONE_SOURCE_KEY, "song", params.masterId);
 
   const isBuffer = body instanceof ArrayBuffer;
   if (isBuffer) {
@@ -465,7 +628,7 @@ async function registerAudioInstance(
     return { ok: false, error: "song_master not found — upsertMaster first", status: 404 };
   }
 
-  const r2Key = `music/${artistDir}/${albumDir}/${filename}`;
+  const r2Key = originalPathToR2Key(originalPath) || `music/${artistDir}/${albumDir}/${filename}`;
   const r2Object = await env.MUSIC_BUCKET.put(r2Key, body, {
     httpMetadata: { contentType },
   });
@@ -516,11 +679,13 @@ cloneRoutes.post("/clone/ingestAudio", permissionMiddleware("manage_users"), asy
   const env = c.env as Env;
   const db = env.DB;
   const masterId = c.req.query("masterId") || "";
+  const sourceKey = c.req.query("sourceKey") || DEFAULT_CLONE_SOURCE_KEY;
   const suffix = (c.req.query("suffix") || "").toLowerCase();
   const contentType = c.req.query("contentType") || "application/octet-stream";
   const artistDir = (c.req.query("artist") || "Unknown Artist").replace(/[\/]+/g, "_").trim() || "Unknown Artist";
   const albumDir = (c.req.query("album") || "Unknown Album").replace(/[\/]+/g, "_").trim() || "Unknown Album";
   const filename = (c.req.query("filename") || "").replace(/[\/]+/g, "_").trim();
+  const originalPath = c.req.query("originalPath") || "";
   const declaredSize = parseInt(c.req.query("size") || "0", 10);
 
   if (!masterId || !filename) {
@@ -534,7 +699,7 @@ cloneRoutes.post("/clone/ingestAudio", permissionMiddleware("manage_users"), asy
   const buf = await c.req.arrayBuffer();
 
   const result = await registerAudioInstance(env, db, {
-    masterId, suffix, contentType, artistDir, albumDir, filename, declaredSize, body: buf,
+    masterId, suffix, contentType, sourceKey, artistDir, albumDir, filename, originalPath, declaredSize, body: buf,
   });
   if (!result.ok) return c.json({ ok: false, error: result.error }, result.status);
   return c.json(result);
@@ -553,14 +718,14 @@ cloneRoutes.post("/clone/ingestAudio", permissionMiddleware("manage_users"), asy
 // fallback for flaky/slow upstreams.
 //
 // Body: { upstreamUrl, username, password, songId, masterId, suffix,
-//         contentType, artist, album, filename, size }
+//         contentType, artist, album, filename, originalPath, size }
 cloneRoutes.post("/clone/fetchAudioToR2", permissionMiddleware("manage_users"), async (c) => {
   const env = c.env as Env;
   const db = env.DB;
   const body = await c.req.json<{
     upstreamUrl?: string; username?: string; password?: string; songId?: string;
-    masterId?: string; suffix?: string; contentType?: string;
-    artist?: string; album?: string; filename?: string; size?: number;
+    masterId?: string; sourceKey?: string; suffix?: string; contentType?: string;
+    artist?: string; album?: string; filename?: string; originalPath?: string; size?: number;
   }>().catch(() => ({} as Record<string, never>));
 
   const { upstreamUrl, username, password, songId, masterId, filename } = body;
@@ -600,7 +765,7 @@ cloneRoutes.post("/clone/fetchAudioToR2", permissionMiddleware("manage_users"), 
   }
 
   const result = await registerAudioInstance(env, db, {
-    masterId, suffix, contentType, artistDir, albumDir, filename: cleanFilename,
+    masterId, sourceKey: body.sourceKey || DEFAULT_CLONE_SOURCE_KEY, suffix, contentType, artistDir, albumDir, filename: cleanFilename, originalPath: body.originalPath,
     declaredSize: body.size || upstreamLength || 0, body: resp.body,
   });
   if (!result.ok) return c.json({ ok: false, error: result.error }, result.status);
@@ -610,4 +775,17 @@ cloneRoutes.post("/clone/fetchAudioToR2", permissionMiddleware("manage_users"), 
 function extToSuffix(filename: string): string {
   const idx = filename.lastIndexOf(".");
   return idx > 0 ? filename.substring(idx + 1).toLowerCase() : "";
+}
+
+function originalPathToR2Key(path: string | null | undefined): string | null {
+  let clean = (path || "").replace(/\\+/g, "/").replace(/^\s+|\s+$/g, "");
+  if (!clean) return null;
+  clean = clean.replace(/^[A-Za-z]:\/+/, "").replace(/^\/+/, "");
+  const parts = clean.split("/").filter((part) => part && part !== "." && part !== "..");
+  if (!parts.length) return null;
+  const musicIdx = parts.findIndex((part) => part.toLowerCase() === "music");
+  const relative = musicIdx >= 0 ? parts.slice(musicIdx) : ["music", ...parts];
+  const safe = relative.map((part) => part.replace(/[\u0000-\u001f\u007f]/g, "").trim()).filter(Boolean);
+  if (safe.length < 2) return null;
+  return safe.join("/");
 }
