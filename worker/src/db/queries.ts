@@ -57,6 +57,23 @@ export function createQueries(db: D1Database) {
       return result.results;
     },
 
+    // 164: real COUNT(*) totals for the Dashboard stat tiles — those used to
+    // be derived from a capped search3 call (songCount/albumCount:"500"),
+    // which silently plateaus at exactly 500 for any library past that size
+    // instead of showing the true total.
+    async getLibraryCounts(): Promise<{ artists: number; albums: number; songs: number }> {
+      const [artists, albums, songs] = await Promise.all([
+        db.prepare("SELECT COUNT(*) AS n FROM artists").first<{ n: number }>(),
+        db.prepare("SELECT COUNT(*) AS n FROM albums").first<{ n: number }>(),
+        db.prepare("SELECT COUNT(*) AS n FROM song_masters").first<{ n: number }>(),
+      ]);
+      return {
+        artists: artists?.n ?? 0,
+        albums: albums?.n ?? 0,
+        songs: songs?.n ?? 0,
+      };
+    },
+
     async getArtist(id: string): Promise<Artist | null> {
       return db.prepare("SELECT * FROM artists WHERE id = ?").bind(id).first<Artist>();
     },
@@ -332,12 +349,18 @@ export function createQueries(db: D1Database) {
       artistCount?: number; artistOffset?: number;
       albumCount?: number; albumOffset?: number;
       songCount?: number; songOffset?: number;
+      // 154: EdgeSonic-only extension, not part of the Subsonic spec. Defaults
+      // to the original alphabetical order so third-party Subsonic clients
+      // (which never send this) see no behavior change; the web Songs tab
+      // passes "newest" to browse most-recently-added-to-library first.
+      songSort?: "title" | "newest";
     } = {}): Promise<{
       artists: Artist[];
       albums: Album[];
       songs: SongRow[];
     }> {
       const like = `%${query}%`;
+      const songOrder = opts.songSort === "newest" ? "sm.created_at DESC" : "sm.sort_title ASC";
       const [artists, albums, songs] = await Promise.all([
         db.prepare(
           "SELECT * FROM artists WHERE name LIKE ? ORDER BY sort_name ASC LIMIT ? OFFSET ?"
@@ -347,7 +370,7 @@ export function createQueries(db: D1Database) {
         ).bind(like, opts.albumCount ?? 20, opts.albumOffset ?? 0).all<Album>(),
         db.prepare(
           `SELECT ${SONG_ROW_COLS} FROM song_masters sm ${SONG_ROW_JOINS}
-           WHERE sm.title LIKE ? ORDER BY sm.sort_title ASC LIMIT ? OFFSET ?`
+           WHERE sm.title LIKE ? ORDER BY ${songOrder} LIMIT ? OFFSET ?`
         ).bind(like, opts.songCount ?? 20, opts.songOffset ?? 0)
           .all<SongRow>(),
       ]);

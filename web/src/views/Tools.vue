@@ -21,6 +21,8 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
 import { useWorkerPool } from "../stores/workerPool";
+import { mapConcurrent } from "../lib/concurrency";
+import { normalizeForMatch } from "../lib/trackMatch";
 
 const { t } = useI18n();
 const { isSuperAdmin, edgesonicPost, edgesonicFetch, rescanSongs, md5, signedParams, restUrl } = useAuth();
@@ -291,7 +293,18 @@ const migrateMode = ref<"clone" | "push">("clone");
 // "X / Y" counters and a per-stage status pill.
 interface CloneForm { url: string; username: string; password: string; }
 const cloneForm = ref<CloneForm>({ url: "", username: "", password: "" });
+// 161: on by default (matches the pre-existing always-on behavior) — the
+// toggle exists so a re-run that only needs starred/playlists/users doesn't
+// have to re-walk the whole library's metadata every time.
+const cloneMetadataEnabled = ref(true);
 const cloneAudioEnabled = ref(false);
+// "browser" (default): fetch upstream bytes in the browser then POST to
+// ingestAudio — more resilient on flaky upstreams, costs the operator's own
+// bandwidth twice (down then up). "worker": the Worker fetches upstream
+// bytes itself and writes straight to R2 — saves the browser-side bandwidth
+// entirely, at the cost of running through the Worker's own outbound
+// subrequest (less forgiving of a slow/unstable upstream).
+const cloneAudioMode = ref<"browser" | "worker">("browser");
 const cloneUsersEnabled = ref(false);
 const cloneProxyEnabled = ref(false);
 const clonePlaylistOnly = ref(false);
@@ -323,14 +336,95 @@ function cloneLogPush(line: string) {
   if (cloneLog.value.length > 500) cloneLog.value.splice(0, cloneLog.value.length - 500);
 }
 
+// 159: resume cache — a cancelled/interrupted/failed clone used to mean
+// starting over from song #1 next time: every album gets re-walked and
+// every song's audio gets re-fetched-and-reuploaded from scratch, even the
+// ones that already landed locally last run. Persist the set of song ids
+// that have already been metadata-upserted / audio-uploaded to
+// localStorage, keyed per upstream URL (so cloning two different servers
+// doesn't cross-contaminate completion state), and skip re-processing
+// anything already in the set. Re-running after a cancel/crash then just
+// picks up where it left off instead of redoing already-finished work.
+interface CloneCache { metadataDone: string[]; audioDone: string[] }
+function cloneCacheKey(): string {
+  return "edgesonic_clone_cache_" + md5(cloneForm.value.url.trim().toLowerCase());
+}
+function loadCloneCache(): { metadataDone: Set<string>; audioDone: Set<string> } {
+  try {
+    const raw = localStorage.getItem(cloneCacheKey());
+    if (!raw) return { metadataDone: new Set(), audioDone: new Set() };
+    const parsed = JSON.parse(raw) as CloneCache;
+    return {
+      metadataDone: new Set(parsed.metadataDone || []),
+      audioDone: new Set(parsed.audioDone || []),
+    };
+  } catch {
+    return { metadataDone: new Set(), audioDone: new Set() };
+  }
+}
+let cloneCache = { metadataDone: new Set<string>(), audioDone: new Set<string>() };
+let cloneCacheDirty = false;
+let cloneCacheFlushTimer: ReturnType<typeof setTimeout> | null = null;
+function saveCloneCacheNow() {
+  cloneCacheDirty = false;
+  try {
+    localStorage.setItem(cloneCacheKey(), JSON.stringify({
+      metadataDone: Array.from(cloneCache.metadataDone),
+      audioDone: Array.from(cloneCache.audioDone),
+    } satisfies CloneCache));
+  } catch {
+    // localStorage full/disabled — resume just won't work next time, not fatal.
+  }
+}
+// Debounced so a fast library (hundreds of items/sec once cache-hit-skipping
+// kicks in) doesn't hammer localStorage with a synchronous write per item.
+function markCloneCacheDirty() {
+  cloneCacheDirty = true;
+  if (cloneCacheFlushTimer) return;
+  cloneCacheFlushTimer = setTimeout(() => {
+    cloneCacheFlushTimer = null;
+    if (cloneCacheDirty) saveCloneCacheNow();
+  }, 1000);
+}
+const cloneCacheClearedAt = ref(0); // bump to re-render the "N cached" hint after clearing
+function clearCloneCache() {
+  if (cloneCacheFlushTimer) { clearTimeout(cloneCacheFlushTimer); cloneCacheFlushTimer = null; }
+  try { localStorage.removeItem(cloneCacheKey()); } catch { /* ignore */ }
+  cloneCache = { metadataDone: new Set(), audioDone: new Set() };
+  cloneCacheDirty = false;
+  cloneCacheClearedAt.value = Date.now();
+  showToast(t("settings.common.clone.cacheCleared"));
+}
+// Reactive-ish counts for the template hint — read at render time via a
+// computed so cloneCacheClearedAt / cloneForm.url changes refresh it.
+const cloneCacheCounts = computed(() => {
+  void cloneCacheClearedAt.value; // dependency: recompute after clearCloneCache()
+  void cloneForm.value.url;
+  const c = loadCloneCache();
+  return { metadata: c.metadataDone.size, audio: c.audioDone.size };
+});
+
+// mapConcurrent (shared, see lib/concurrency.ts) replaced the fully
+// sequential `for...await` this clone used to do — CLONE_*_CONCURRENCY
+// bounds how many albums/songs are in flight at once (does NOT cap the
+// total item count, which is already fully paginated before this runs).
+const CLONE_METADATA_CONCURRENCY = 4;
+const CLONE_AUDIO_CONCURRENCY = 3;
+
 // Build the upstream Subsonic auth query string for a single call.
 // t = md5(password + salt), s = salt — the same scheme EdgeSonic uses
 // in api.ts:signedParams, but signed with the *upstream* password.
-function cloneSignedParams(extra?: Record<string, string>): URLSearchParams {
+// 163: parameterized on username/password (rather than always reading
+// cloneForm.value) so cloneUsersStage can authenticate as each cloned user
+// in turn to pull *their own* starred/playlists — Subsonic's getStarred2
+// has no "give me user X's stars" param for a regular client, the only way
+// to get another user's personal data is to actually sign in as them (and
+// upstream getUsers already hands us their password for this exact reason).
+function cloneSignedParamsFor(username: string, password: string, extra?: Record<string, string>): URLSearchParams {
   const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
   return new URLSearchParams({
-    u: cloneForm.value.username,
-    t: md5(cloneForm.value.password + s),
+    u: username,
+    t: md5(password + s),
     s,
     v: "1.16.1",
     c: "EdgeSonicClone",
@@ -338,31 +432,36 @@ function cloneSignedParams(extra?: Record<string, string>): URLSearchParams {
     ...extra,
   });
 }
+function cloneSignedParams(extra?: Record<string, string>): URLSearchParams {
+  return cloneSignedParamsFor(cloneForm.value.username, cloneForm.value.password, extra);
+}
 
-function cloneUpstreamUrl(path: string, params?: Record<string, string>): string {
+function cloneUpstreamUrlFor(username: string, password: string, path: string, params?: Record<string, string>): string {
   const base = cloneForm.value.url.replace(/\/+$/, "");
-  return `${base}/rest/${path}?${cloneSignedParams(params).toString()}`;
+  return `${base}/rest/${path}?${cloneSignedParamsFor(username, password, params).toString()}`;
+}
+function cloneUpstreamUrl(path: string, params?: Record<string, string>): string {
+  return cloneUpstreamUrlFor(cloneForm.value.username, cloneForm.value.password, path, params);
 }
 
 // Subsonic JSON responses come back as { "subsonic-response": { ... } }.
 // We tolerate either JSON or XML for getAlbumList2/getAlbum/getSong etc;
 // when the server only speaks XML (older Navidrome / supysonic), we parse
 // the attributes out of the XML.
-async function cloneFetchJson(path: string, params?: Record<string, string>): Promise<any> {
+async function cloneFetchJsonAs(username: string, password: string, path: string, params?: Record<string, string>): Promise<any> {
   const resp = cloneProxyEnabled.value
     ? await fetch("/edgesonic/clone/proxy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           upstreamUrl: cloneForm.value.url,
-          username: cloneForm.value.username,
-          password: cloneForm.value.password,
+          username, password,
           path,
           params: params || {},
           binary: false,
         }),
       })
-    : await fetch(cloneUpstreamUrl(path, params));
+    : await fetch(cloneUpstreamUrlFor(username, password, path, params));
   const text = await resp.text();
   try {
     const json = JSON.parse(text);
@@ -370,6 +469,9 @@ async function cloneFetchJson(path: string, params?: Record<string, string>): Pr
   } catch {
     return { _xml: text };
   }
+}
+async function cloneFetchJson(path: string, params?: Record<string, string>): Promise<any> {
+  return cloneFetchJsonAs(cloneForm.value.username, cloneForm.value.password, path, params);
 }
 
 // Generic attribute parser for XML-fallback responses.
@@ -529,75 +631,157 @@ async function buildCloneFilterSet(): Promise<Set<string> | null> {
 // then getAlbum per album, then POST /clone/upsertMaster per song.
 async function cloneMetadataStage() {
   const stage = cloneStages.value.metadata;
+  if (!cloneMetadataEnabled.value) {
+    stage.status = "skipped";
+    stage.message = "disabled";
+    return;
+  }
   stage.status = "running";
   stage.message = "";
   const PAGE = 500;
   let offset = 0;
   const albumIds: { id: string; name: string; artist: string }[] = [];
-  // Page through album list until we get fewer than requested.
+  // year/genre live on the album-list entry itself (Subsonic AlbumID3), so
+  // this same paginated walk doubles as the metadata lookup search3 below
+  // needs — no per-album getAlbum call required just to learn them.
+  const albumMeta = new Map<string, { name: string; artist: string; year?: string; genre?: string }>();
   while (!cloneCancelRequested.value) {
     const resp = await cloneFetchJson("getAlbumList2", { type: "alphabeticalByName", size: String(PAGE), offset: String(offset) });
+    let arr: Record<string, string>[] = [];
     if (resp?._xml) {
-      const items = parseXmlChildren(resp._xml, "album");
-      for (const a of items) {
-        albumIds.push({ id: a.id || "", name: a.name || "Unknown Album", artist: a.artist || a.artistId || "" });
-      }
-      if (items.length < PAGE) break;
+      arr = parseXmlChildren(resp._xml, "album");
     } else {
       const albums = resp?.albumList2?.album || resp?.albums?.album || [];
-      const arr = Array.isArray(albums) ? albums : (albums ? [albums] : []);
-      if (arr.length === 0) break;
-      for (const a of arr) {
-        albumIds.push({ id: jget(a, "id") || "", name: jget(a, "name") || "Unknown Album", artist: jget(a, "artist") || "" });
-      }
-      if (arr.length < PAGE) break;
+      arr = Array.isArray(albums) ? albums : (albums ? [albums] : []);
     }
+    if (arr.length === 0) break;
+    for (const a of arr) {
+      const id = jget(a, "id") || "";
+      const name = jget(a, "name") || "Unknown Album";
+      const artist = jget(a, "artist") || jget(a, "artistId") || "";
+      albumIds.push({ id, name, artist });
+      if (id) albumMeta.set(id, { name, artist, year: jget(a, "year"), genre: jget(a, "genre") });
+    }
+    if (arr.length < PAGE) break;
     offset += PAGE;
   }
-  stage.total = albumIds.length;
-  cloneLogPush(`metadata: ${albumIds.length} album(s) discovered`);
+  cloneLogPush(`metadata: ${albumIds.length} album(s) discovered, scanning for songs…`);
 
-  for (const meta of albumIds) {
-    if (cloneCancelRequested.value) break;
-    try {
-      const albumResp = await cloneFetchJson("getAlbum", { id: meta.id });
-      let albumNode: any = meta;
+  interface MetaItem { s: any; albumNode: any; artist: string }
+
+  // 162: search3 with an empty query is the "list everything" convention
+  // this app's own Songs tab already relies on (Navidrome-compatible) — one
+  // paginated walk gets every song directly, each entry already carrying
+  // albumId/artistId/track/genre/duration/…, instead of one getAlbum
+  // round-trip per album. For a library of e.g. 2000 albums that's the
+  // difference between ~4 requests and ~2000.
+  async function collectViaSearch3(): Promise<MetaItem[]> {
+    const out: MetaItem[] = [];
+    const SONG_PAGE = 500;
+    let songOffset = 0;
+    while (!cloneCancelRequested.value) {
+      const resp = await cloneFetchJson("search3", {
+        query: "", songCount: String(SONG_PAGE), songOffset: String(songOffset),
+        albumCount: "0", artistCount: "0",
+      });
       let songs: any[] = [];
-      if (albumResp?._xml) {
-        // XML fallback — parse <album .../> and <song .../> siblings.
-        const albumMatch = /<album\s+([^>]+?)\s*\/?>/.exec(albumResp._xml);
-        if (albumMatch) {
-          const attrs: Record<string, string> = {};
-          const attrRe = /(\w+)="([^"]*)"/g;
-          let am;
-          while ((am = attrRe.exec(albumMatch[1]))) attrs[am[1]] = am[2];
-          albumNode = attrs;
-        }
-        songs = parseXmlChildren(albumResp._xml, "song");
+      if (resp?._xml) {
+        songs = parseXmlChildren(resp._xml, "song");
       } else {
-        albumNode = albumResp?.album || albumNode;
-        const raw = albumResp?.album?.song || albumResp?.songs?.song || [];
+        const raw = resp?.searchResult3?.song || resp?.searchResult2?.song || [];
         songs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
       }
+      if (songs.length === 0) break;
       for (const s of songs) {
-        if (cloneCancelRequested.value) break;
         const sid = jget(s, "id") || "";
         if (cloneFilterSongIds.value && sid && !cloneFilterSongIds.value.has(sid)) continue;
-        const payload = normalizeSongNode(s, albumNode, { id: "", name: meta.artist });
-        try {
-          const data = JSON.parse(await edgesonicPost("clone/upsertMaster", payload));
-          if (!data.ok) throw new Error(data.error || "upsertMaster rejected");
-          stage.done++;
-        } catch (e: unknown) {
-          stage.failed++;
-          cloneLogPush(`metadata: ✗ ${payload.song.title} — ${e instanceof Error ? e.message : String(e)}`);
-        }
+        const aid = jget(s, "albumId") || "";
+        const am = albumMeta.get(aid);
+        out.push({
+          s,
+          albumNode: { id: aid, name: am?.name || jget(s, "album"), artist: am?.artist || jget(s, "artist"), year: am?.year, genre: am?.genre },
+          artist: jget(s, "artist") || am?.artist || "",
+        });
       }
+      if (songs.length < SONG_PAGE) break;
+      songOffset += SONG_PAGE;
+    }
+    return out;
+  }
+
+  // Fallback for upstreams that don't honor the empty-query convention
+  // (some strict spec-only servers return zero results instead of "all").
+  // Detected by getting nothing back from search3 despite having just
+  // discovered real albums above — not proactive, so well-behaved upstreams
+  // never pay for both walks.
+  async function collectViaGetAlbum(): Promise<MetaItem[]> {
+    const out: MetaItem[] = [];
+    await mapConcurrent(albumIds, CLONE_METADATA_CONCURRENCY, async (meta) => {
+      try {
+        const albumResp = await cloneFetchJson("getAlbum", { id: meta.id });
+        let albumNode: any = meta;
+        let songs: any[] = [];
+        if (albumResp?._xml) {
+          // XML fallback — parse <album .../> and <song .../> siblings.
+          const albumMatch = /<album\s+([^>]+?)\s*\/?>/.exec(albumResp._xml);
+          if (albumMatch) {
+            const attrs: Record<string, string> = {};
+            const attrRe = /(\w+)="([^"]*)"/g;
+            let am;
+            while ((am = attrRe.exec(albumMatch[1]))) attrs[am[1]] = am[2];
+            albumNode = attrs;
+          }
+          songs = parseXmlChildren(albumResp._xml, "song");
+        } else {
+          albumNode = albumResp?.album || albumNode;
+          const raw = albumResp?.album?.song || albumResp?.songs?.song || [];
+          songs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+        }
+        const keptSongs = cloneFilterSongIds.value
+          ? songs.filter((s) => {
+              const sid = jget(s, "id") || "";
+              return !sid || cloneFilterSongIds.value!.has(sid);
+            })
+          : songs;
+        for (const s of keptSongs) out.push({ s, albumNode, artist: meta.artist });
+      } catch (e: unknown) {
+        cloneLogPush(`metadata: ✗ album ${meta.name} (scan) — ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }, () => cloneCancelRequested.value);
+    return out;
+  }
+
+  let items: MetaItem[] = albumIds.length ? await collectViaSearch3() : [];
+  if (items.length === 0 && albumIds.length > 0) {
+    cloneLogPush(`metadata: search3 returned no songs despite ${albumIds.length} album(s) — falling back to per-album scan`);
+    items = await collectViaGetAlbum();
+  }
+
+  stage.total = items.length;
+  cloneLogPush(`metadata: ${items.length} song(s) to upload`);
+
+  await mapConcurrent(items, CLONE_METADATA_CONCURRENCY, async ({ s, albumNode, artist }) => {
+    const sid = jget(s, "id") || "";
+    // 159: resume cache — a song already upserted in a previous run of this
+    // same upstream URL doesn't need the POST redone.
+    if (sid && cloneCache.metadataDone.has(sid)) {
+      stage.done++;
+      return;
+    }
+    const payload = normalizeSongNode(s, albumNode, { id: "", name: artist });
+    try {
+      const data = JSON.parse(await edgesonicPost("clone/upsertMaster", payload));
+      if (!data.ok) throw new Error(data.error || "upsertMaster rejected");
+      stage.done++;
+      if (sid) { cloneCache.metadataDone.add(sid); markCloneCacheDirty(); }
     } catch (e: unknown) {
       stage.failed++;
-      cloneLogPush(`metadata: ✗ album ${meta.name} — ${e instanceof Error ? e.message : String(e)}`);
+      cloneLogPush(`metadata: ✗ ${payload.song.title} — ${e instanceof Error ? e.message : String(e)}`);
     }
-  }
+  // 159: mapConcurrent's isCancelled param was never wired up here — it only
+  // stopped a lane from picking up the *next* item, but nothing was even
+  // passing it, so the cancel button had no effect on this stage at all.
+  }, () => cloneCancelRequested.value);
   stage.status = cloneCancelRequested.value ? "skipped" : "done";
   stage.message = cloneCancelRequested.value ? "cancelled" : "";
 }
@@ -618,7 +802,7 @@ async function cloneAudioStage() {
   // masterId lookup will succeed.
   const PAGE = 500;
   let offset = 0;
-  const allSongs: { id: string; title: string; album: string; albumId: string; artist: string; suffix: string; contentType: string; size: number }[] = [];
+  const albumMetas: { id: string; name: string; artist: string }[] = [];
   while (!cloneCancelRequested.value) {
     const resp = await cloneFetchJson("getAlbumList2", { type: "alphabeticalByName", size: String(PAGE), offset: String(offset) });
     let albums: any[] = [];
@@ -630,40 +814,103 @@ async function cloneAudioStage() {
     }
     if (albums.length === 0) break;
     for (const a of albums) {
-      const albumId = jget(a, "id") || "";
-      const albumName = jget(a, "name") || "Unknown Album";
-      const albumArtist = jget(a, "artist") || "Unknown Artist";
-      const detail = await cloneFetchJson("getAlbum", { id: albumId });
-      let songs: any[] = [];
-      if (detail?._xml) {
-        songs = parseXmlChildren(detail._xml, "song");
-      } else {
-        const raw = detail?.album?.song || detail?.songs?.song || [];
-        songs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
-      }
-      for (const s of songs) {
-        const sid = jget(s, "id") || "";
-        if (cloneFilterSongIds.value && sid && !cloneFilterSongIds.value.has(sid)) continue;
-        allSongs.push({
-          id: sid,
-          title: jget(s, "title") || "Unknown Title",
-          album: albumName,
-          albumId,
-          artist: jget(s, "artist") || albumArtist,
-          suffix: (jget(s, "suffix") || jget(s, "format") || "mp3").toLowerCase(),
-          contentType: jget(s, "contentType") || suffixToMime((jget(s, "suffix") || "mp3").toLowerCase()),
-          size: numOr(jget(s, "size"), 0) || 0,
-        });
-      }
+      albumMetas.push({
+        id: jget(a, "id") || "",
+        name: jget(a, "name") || "Unknown Album",
+        artist: jget(a, "artist") || "Unknown Artist",
+      });
     }
     if (albums.length < PAGE) break;
     offset += PAGE;
   }
+
+  // 160: the per-album getAlbum walk used to be a plain sequential `for`
+  // loop with stage.total only set after everything had been fetched —
+  // 158 made it concurrent and grew stage.total live as each album
+  // resolved, but a total that keeps climbing while the row already reads
+  // "running" is just a different kind of confusing (is it done counting
+  // or not?). Collect fully first (still concurrent, so still fast) and
+  // set stage.total exactly once, to its real final value.
+  const allSongs: { id: string; title: string; album: string; albumId: string; artist: string; suffix: string; contentType: string; size: number }[] = [];
+  await mapConcurrent(albumMetas, CLONE_METADATA_CONCURRENCY, async (meta) => {
+    if (cloneCancelRequested.value) return;
+    const detail = await cloneFetchJson("getAlbum", { id: meta.id });
+    let songs: any[] = [];
+    if (detail?._xml) {
+      songs = parseXmlChildren(detail._xml, "song");
+    } else {
+      const raw = detail?.album?.song || detail?.songs?.song || [];
+      songs = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    }
+    const keptSongs = cloneFilterSongIds.value
+      ? songs.filter((s) => {
+          const sid = jget(s, "id") || "";
+          return !sid || cloneFilterSongIds.value!.has(sid);
+        })
+      : songs;
+    for (const s of keptSongs) {
+      allSongs.push({
+        id: jget(s, "id") || "",
+        title: jget(s, "title") || "Unknown Title",
+        album: meta.name,
+        albumId: meta.id,
+        artist: jget(s, "artist") || meta.artist,
+        suffix: (jget(s, "suffix") || jget(s, "format") || "mp3").toLowerCase(),
+        contentType: jget(s, "contentType") || suffixToMime((jget(s, "suffix") || "mp3").toLowerCase()),
+        size: numOr(jget(s, "size"), 0) || 0,
+      });
+    }
+  }, () => cloneCancelRequested.value);
   stage.total = allSongs.length;
   cloneLogPush(`audio: ${allSongs.length} song(s) to fetch`);
 
-  for (const s of allSongs) {
-    if (cloneCancelRequested.value) break;
+  await mapConcurrent(allSongs, CLONE_AUDIO_CONCURRENCY, async (s) => {
+    // 159: resume cache — this song's bytes already landed in R2 in a
+    // previous run of this same upstream URL, skip re-fetching/re-uploading.
+    if (s.id && cloneCache.audioDone.has(s.id)) {
+      stage.done++;
+      return;
+    }
+    const filename = `${sanitizePathPart(s.title, "track")}.${s.suffix}`;
+    const artistDir = sanitizePathPart(s.artist, "Unknown Artist");
+    const albumDir = sanitizePathPart(s.album, "Unknown Album");
+    // Derive the masterId consistently with normalizeSongNode so the
+    // backend's FK lookup matches the row inserted in stage 1. We use
+    // the upstream album id directly when present — upsertMaster stored
+    // under that same albumId.
+    const realAlbumId = s.albumId || ("al-" + simpleHash(s.artist + " " + s.album));
+    const realMasterId = s.id || ("sm-clone-" + simpleHash(s.artist + s.title + realAlbumId));
+
+    if (cloneAudioMode.value === "worker") {
+      // Server-side path: the Worker fetches the upstream bytes itself and
+      // writes straight to R2 — no bytes ever pass through this browser.
+      try {
+        const data = JSON.parse(await edgesonicPost("clone/fetchAudioToR2", {
+          upstreamUrl: cloneForm.value.url,
+          username: cloneForm.value.username,
+          password: cloneForm.value.password,
+          songId: s.id,
+          masterId: realMasterId,
+          suffix: s.suffix,
+          contentType: s.contentType,
+          artist: artistDir,
+          album: albumDir,
+          filename,
+          size: s.size,
+        }));
+        if (!data.ok) throw new Error(data.error || "fetchAudioToR2 rejected");
+        stage.done++;
+        if (s.id) { cloneCache.audioDone.add(s.id); markCloneCacheDirty(); }
+        cloneLogPush(`audio: ✓ ${s.artist} — ${s.title} (${fmtBytes(data.size || s.size || 0)}, worker)`);
+      } catch (e: unknown) {
+        stage.failed++;
+        cloneLogPush(`audio: ✗ ${s.artist} — ${s.title} — ${e instanceof Error ? e.message : String(e)}`);
+      }
+      return;
+    }
+
+    // Browser path (default, more stable on flaky upstreams): fetch the
+    // bytes here, then re-upload to ingestAudio.
     try {
       const streamUrl = cloneUpstreamUrl("stream", { id: s.id });
       const resp = cloneProxyEnabled.value
@@ -683,15 +930,6 @@ async function cloneAudioStage() {
       if (!resp.ok) throw new Error(`stream ${resp.status}`);
       const buf = await resp.arrayBuffer();
       if (buf.byteLength === 0) throw new Error("empty body");
-      const filename = `${sanitizePathPart(s.title, "track")}.${s.suffix}`;
-      const artistDir = sanitizePathPart(s.artist, "Unknown Artist");
-      const albumDir = sanitizePathPart(s.album, "Unknown Album");
-      // Derive the masterId consistently with normalizeSongNode so the
-      // backend's FK lookup matches the row inserted in stage 1. We use
-      // the upstream album id directly when present — upsertMaster stored
-      // under that same albumId.
-      const realAlbumId = s.albumId || ("al-" + simpleHash(s.artist + " " + s.album));
-      const realMasterId = s.id || ("sm-clone-" + simpleHash(s.artist + s.title + realAlbumId));
       const qs = new URLSearchParams({
         masterId: realMasterId,
         suffix: s.suffix,
@@ -712,12 +950,13 @@ async function cloneAudioStage() {
       const data = await uploadResp.json().catch(() => ({ ok: false, error: "non-json" }));
       if (!data.ok) throw new Error(data.error || "ingestAudio rejected");
       stage.done++;
+      if (s.id) { cloneCache.audioDone.add(s.id); markCloneCacheDirty(); }
       cloneLogPush(`audio: ✓ ${s.artist} — ${s.title} (${fmtBytes(buf.byteLength)})`);
     } catch (e: unknown) {
       stage.failed++;
       cloneLogPush(`audio: ✗ ${s.artist} — ${s.title} — ${e instanceof Error ? e.message : String(e)}`);
     }
-  }
+  }, () => cloneCancelRequested.value);
   stage.status = cloneCancelRequested.value ? "skipped" : "done";
 }
 
@@ -839,6 +1078,86 @@ async function cloneStarredStage() {
 }
 
 // Stage 5 — users (requires upstream admin).
+// 163: a cloned user account used to mean just the login — their own
+// starred items and owned playlists never came along, since getStarred2 has
+// no "give me user X's stars" param for a regular client and getPlaylists'
+// admin-visibility into other users' playlists isn't guaranteed by every
+// server. The only universal way to see another user's personal data is to
+// actually authenticate as them — which upstream getUsers's password field
+// (the same one that unlocks the account clone at all) already lets us do.
+async function cloneUserStarredAndPlaylists(username: string, password: string): Promise<void> {
+  try {
+    const resp = await cloneFetchJsonAs(username, password, "getStarred2");
+    const items: Array<{ id: string; type: "song" | "album" | "artist" }> = [];
+    if (resp?._xml) {
+      for (const s of parseXmlChildren(resp._xml, "song")) items.push({ id: s.id, type: "song" });
+      for (const a of parseXmlChildren(resp._xml, "album")) items.push({ id: a.id, type: "album" });
+      for (const ar of parseXmlChildren(resp._xml, "artist")) items.push({ id: ar.id, type: "artist" });
+    } else {
+      const sr = resp?.starred2 || resp?.starred || {};
+      for (const bucket of ["song", "album", "artist"] as const) {
+        const raw = sr[bucket] || [];
+        const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+        for (const n of arr) {
+          const id = jget(n, "id");
+          if (id) items.push({ id, type: bucket });
+        }
+      }
+    }
+    if (items.length > 0) {
+      const data = JSON.parse(await edgesonicPost("clone/upsertStarred", { userId: username, items }));
+      if (!data.ok) throw new Error(data.error || "upsertStarred rejected");
+      cloneLogPush(`users: ✓ ${username} — ${items.length} starred item(s)`);
+    }
+  } catch (e: unknown) {
+    cloneLogPush(`users: ✗ ${username} (starred) — ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  // Only playlists this user actually owns — a public playlist owned by
+  // someone else but visible to them would otherwise get reprocessed once
+  // per user who can see it; it gets handled on its real owner's own turn
+  // through this same loop instead.
+  try {
+    const resp = await cloneFetchJsonAs(username, password, "getPlaylists");
+    let playlists: any[] = [];
+    if (resp?._xml) {
+      playlists = parseXmlChildren(resp._xml, "playlist");
+    } else {
+      const raw = resp?.playlists?.playlist || [];
+      playlists = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+    }
+    let count = 0;
+    for (const p of playlists) {
+      if (cloneCancelRequested.value) break;
+      const owner = jget(p, "owner") || username;
+      if (owner !== username) continue;
+      const id = jget(p, "id") || "";
+      const name = jget(p, "name") || "Untitled";
+      const isPublic = jget(p, "public") === "true";
+      const comment = jget(p, "comment") || null;
+      const detail = await cloneFetchJsonAs(username, password, "getPlaylist", { id });
+      let entries: string[] = [];
+      if (detail?._xml) {
+        const songs = parseXmlChildren(detail._xml, "entry");
+        entries = songs.map((s) => s.id).filter(Boolean);
+      } else {
+        const raw = detail?.playlist?.entry || detail?.entries?.entry || [];
+        const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+        entries = arr.map((s) => jget(s, "id") || "").filter(Boolean);
+      }
+      const data = JSON.parse(await edgesonicPost("clone/upsertPlaylist", {
+        playlist: { id, name, owner, public: isPublic, comment },
+        entries,
+      }));
+      if (!data.ok) throw new Error(data.error || "upsertPlaylist rejected");
+      count++;
+    }
+    if (count > 0) cloneLogPush(`users: ✓ ${username} — ${count} playlist(s)`);
+  } catch (e: unknown) {
+    cloneLogPush(`users: ✗ ${username} (playlists) — ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 async function cloneUsersStage() {
   const stage = cloneStages.value.users;
   if (!cloneUsersEnabled.value) {
@@ -877,6 +1196,13 @@ async function cloneUsersStage() {
       if (!data.ok) throw new Error(data.error || "upsertUser rejected");
       stage.done++;
       cloneLogPush(`users: ✓ ${username}`);
+      // clonePlaylistsStage/cloneStarredStage above only ever cover the
+      // single admin identity used to authenticate this whole run — skip
+      // it here so its starred/playlists don't get pulled (and upserted)
+      // twice.
+      if (username !== cloneForm.value.username && !cloneCancelRequested.value) {
+        await cloneUserStarredAndPlaylists(username, password);
+      }
     } catch (e: unknown) {
       stage.failed++;
       cloneLogPush(`users: ✗ ${jget(u, "username") || "?"} — ${e instanceof Error ? e.message : String(e)}`);
@@ -895,6 +1221,12 @@ async function runClone() {
   cloneCancelRequested.value = false;
   cloneLog.value = [];
   cloneFilterSongIds.value = null;
+  // 159: reload from localStorage (not just reuse the module-level var) in
+  // case the URL field changed since last load — cache is scoped per URL.
+  cloneCache = loadCloneCache();
+  if (cloneCache.metadataDone.size || cloneCache.audioDone.size) {
+    cloneLogPush(`resume: ${cloneCache.metadataDone.size} metadata + ${cloneCache.audioDone.size} audio item(s) cached from a previous run, will be skipped`);
+  }
   for (const k of Object.keys(cloneStages.value) as Array<keyof typeof cloneStages.value>) {
     cloneStages.value[k] = newCloneProgress();
   }
@@ -912,6 +1244,9 @@ async function runClone() {
   } catch (e: unknown) {
     showToast(`${t("settings.common.clone.failed")}: ${e instanceof Error ? e.message : String(e)}`, "error");
   }
+  // Flush whatever the debounce timer hasn't written yet — matters most on
+  // cancel/error, where the run stops well before the 1s debounce would.
+  saveCloneCacheNow();
   cloneRunning.value = false;
 }
 
@@ -934,17 +1269,6 @@ const pushStages = ref({
 // title|artist → matched upstream id (or null after a failed search), so the
 // starred pass and every playlist share one search per distinct song.
 const pushMatchCache = new Map<string, string | null>();
-
-// Strip decorations that differ between libraries but not between versions of
-// the same song: leading track numbers ("01.", "01 - ", "#1 "), collapsed
-// whitespace, case. Applied symmetrically to both sides before comparing.
-function normalizeForMatch(raw: string | undefined): string {
-  let s = (raw || "").toLowerCase();
-  s = s.replace(/[#＃]\s*\d+\s*/g, " ");
-  s = s.replace(/^\s*\d{1,3}\s*[-–—_.、．:：)）]\s*/, "");
-  s = s.replace(/^\s*\d{1,3}\s+/, "");
-  return s.replace(/\s+/g, " ").trim();
-}
 
 function scorePushCandidate(
   local: { titleN: string; artistN: string; duration: number | null },
@@ -1252,6 +1576,15 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
             </div>
             <div class="transcode-grid">
               <label class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.metadataToggle") }}</span>
+                <span class="scan-toggle">
+                  <input type="checkbox" v-model="cloneMetadataEnabled" :disabled="cloneRunning" />
+                  <span>{{ cloneMetadataEnabled ? t("common.on") : t("common.off") }}</span>
+                </span>
+              </label>
+              <p class="feature-desc tc-desc">{{ t("settings.common.clone.metadataToggleDesc") }}</p>
+
+              <label class="tc-row">
                 <span class="tc-key">{{ t("settings.common.clone.audioToggle") }}</span>
                 <span class="scan-toggle">
                   <input type="checkbox" v-model="cloneAudioEnabled" :disabled="cloneRunning" />
@@ -1259,6 +1592,21 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                 </span>
               </label>
               <p class="feature-desc tc-desc">{{ t("settings.common.clone.audioToggleDesc") }}</p>
+
+              <label v-if="cloneAudioEnabled" class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.audioMode") }}</span>
+                <span class="seg">
+                  <button type="button" :class="['seg-btn', { active: cloneAudioMode === 'browser' }]" :disabled="cloneRunning" @click="cloneAudioMode = 'browser'">
+                    {{ t("settings.common.clone.audioModeBrowser") }}
+                  </button>
+                  <button type="button" :class="['seg-btn', { active: cloneAudioMode === 'worker' }]" :disabled="cloneRunning" @click="cloneAudioMode = 'worker'">
+                    {{ t("settings.common.clone.audioModeWorker") }}
+                  </button>
+                </span>
+              </label>
+              <p v-if="cloneAudioEnabled" class="feature-desc tc-desc">
+                {{ cloneAudioMode === "worker" ? t("settings.common.clone.audioModeWorkerDesc") : t("settings.common.clone.audioModeBrowserDesc") }}
+              </p>
 
               <label class="tc-row">
                 <span class="tc-key">{{ t("settings.common.clone.usersToggle") }}</span>
@@ -1269,7 +1617,17 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
               </label>
               <p class="feature-desc tc-desc">{{ t("settings.common.clone.usersToggleDesc") }}</p>
 
+              <p v-if="!cloneRunning && cloneForm.url && (cloneCacheCounts.metadata || cloneCacheCounts.audio)" class="feature-desc tc-desc">
+                {{ t("settings.common.clone.cacheHint", { metadata: cloneCacheCounts.metadata, audio: cloneCacheCounts.audio }) }}
+              </p>
+
               <div class="tc-actions">
+                <button
+                  v-if="!cloneRunning && cloneForm.url && (cloneCacheCounts.metadata || cloneCacheCounts.audio)"
+                  type="button"
+                  class="btn-secondary"
+                  @click="clearCloneCache"
+                >{{ t("settings.common.clone.clearCache") }}</button>
                 <button v-if="!cloneRunning" class="btn-primary" :disabled="pushRunning" @click="runClone">
                   {{ t("settings.common.clone.start") }}
                 </button>

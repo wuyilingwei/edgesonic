@@ -288,10 +288,9 @@ register("getStarred2", permissionMiddleware("browse"), getStarredHandler("starr
 // getRandomSongs
 // =============================================================================
 const getRandomSongsHandler = async (c: import("hono").Context) => {
-  const size = Math.min(
-    Math.max(parseIntQ(c.req.query("size")) ?? 10, 1),
-    500,
-  );
+  // 157: was capped at 500 for no documented reason — dropped, keeping only
+  // the floor of 1 (reject zero/negative).
+  const size = Math.max(parseIntQ(c.req.query("size")) ?? 10, 1);
   const genre = c.req.query("genre") || undefined;
   const fromYear = parseIntQ(c.req.query("fromYear"));
   const toYear = parseIntQ(c.req.query("toYear"));

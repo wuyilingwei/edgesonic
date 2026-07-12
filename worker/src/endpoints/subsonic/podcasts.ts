@@ -187,7 +187,9 @@ const getNewestPodcastsHandler = async (
   c: Context<{ Bindings: Env; Variables: { user: User } }>,
 ) => {
   const params = await readParams(c);
-  const count = Math.max(1, Math.min(500, parseIntDefault(getFirst(params, "count"), 20)));
+  // 157: was capped at 500 for no documented reason — dropped, keeping only
+  // the floor of 1.
+  const count = Math.max(1, parseIntDefault(getFirst(params, "count"), 20));
   const queries = createQueries(c.env.DB);
 
   const episodes = await queries.listNewestEpisodes(count);

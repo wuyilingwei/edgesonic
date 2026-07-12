@@ -47,10 +47,49 @@ const loading = ref(false);
 const error = ref("");
 
 // === Albums tab (paged grid over the whole library) ===
-const ALBUM_PAGE = 48;
+// 153: bumped 48 → 100 per Rosmontis ("首次加载100首") — first page and every
+// subsequent page both use this size, so the requirement is met on load 1
+// and every infinite-scroll page after it stays consistent.
+const ALBUM_PAGE = 100;
 const allAlbums = ref<Album[]>([]);
 const albumOffset = ref(0);
 const albumsDone = ref(false);
+
+// 154: waterfall grid columns. Went through CSS multi-column (`columns:`)
+// first, but that fills strictly column-first — item order on screen no
+// longer matches fetch/alphabetical order, and worse, every async cover
+// image that finishes loading after initial paint changes that column's
+// total height, which can shove *later* items into a different column
+// entirely (the whole grid re-flows, reads as flicker). Splitting
+// allAlbums into fixed column buckets by index (round-robin) up front
+// fixes both: order is deterministic from the source array, and an image
+// loading late only grows its own column downward — no cross-column
+// reflow.
+const WATERFALL_COL_TARGET = 190; // matches the old minmax() card width
+const WATERFALL_GAP = 16; // px, mirrors the 1rem gap in CSS below
+const albumWaterfallEl = ref<HTMLElement | null>(null);
+const waterfallColCount = ref(
+  typeof window !== "undefined"
+    ? Math.max(1, Math.floor((window.innerWidth + WATERFALL_GAP) / (WATERFALL_COL_TARGET + WATERFALL_GAP)))
+    : 4,
+);
+let waterfallRO: ResizeObserver | null = null;
+watch(albumWaterfallEl, (el) => {
+  if (waterfallRO) { waterfallRO.disconnect(); waterfallRO = null; }
+  if (!el || typeof ResizeObserver === "undefined") return;
+  waterfallColCount.value = Math.max(1, Math.floor((el.clientWidth + WATERFALL_GAP) / (WATERFALL_COL_TARGET + WATERFALL_GAP)));
+  waterfallRO = new ResizeObserver((entries) => {
+    const w = entries[0]?.contentRect.width;
+    if (w) waterfallColCount.value = Math.max(1, Math.floor((w + WATERFALL_GAP) / (WATERFALL_COL_TARGET + WATERFALL_GAP)));
+  });
+  waterfallRO.observe(el);
+});
+const albumWaterfallCols = computed<Album[][]>(() => {
+  const n = waterfallColCount.value;
+  const cols: Album[][] = Array.from({ length: n }, () => []);
+  allAlbums.value.forEach((al, i) => cols[i % n].push(al));
+  return cols;
+});
 
 // === Songs tab (paged flat list over the whole library) ===
 // bumped from 500 to 1000 per ("默认拉取1k"): the list is a
@@ -88,7 +127,13 @@ function setupObserver(): void {
       const kind = el.dataset.kind as "songs" | "albums" | undefined;
       if (kind) guardLoad(kind);
     }
-  }, { rootMargin: "600px 0px 0px 0px" });
+  // 155: rootMargin order is (top, right, bottom, left) — this was expanding
+  // the *top* of the intersection root, which only matters for content
+  // scrolled above the viewport. The sentinel sits below the list, so the
+  // "preload before the user hits the literal last pixel" buffer needs to
+  // be on the *bottom* instead; as written this sentinel only ever fired
+  // once it was pixel-exact inside the visible viewport.
+  }, { rootMargin: "0px 0px 600px 0px" });
   if (songListEnd.value) io.observe(songListEnd.value);
   if (albumListEnd.value) io.observe(albumListEnd.value);
 }
@@ -275,6 +320,13 @@ const editMsg = ref("");
 const editErr = ref(false);
 const editorOpen = ref(false);
 const editorMode = computed<"single" | "batch">(() => editTargets.value.length > 1 ? "batch" : "single");
+// 149: preload the song's current cover into TagEditor — single mode only,
+// batch targets may span different albums so there's no one image to show.
+const editExistingCoverUrl = computed(() => {
+  if (editorMode.value !== "single") return undefined;
+  const coverArt = editTargets.value[0]?.coverArt;
+  return coverArt ? coverArtUrl(coverArt, 200) : undefined;
+});
 
 // === Edit mode toggle (songs tab, admin-only) ===
 // Default OFF: admins land in browse mode; click the ✎ toggle to reveal
@@ -466,15 +518,22 @@ onMounted(() => {
   setupObserver();
 });
 
-// re-observe the new tab's sentinel after switchTab inserts it. Vue
-// updates the ref before `nextTick` resolves, so by the time this watch
-// fires the sentinel is mounted and `io.observe` can take effect.
+// re-observe the new tab's sentinel after switchTab inserts it. 156: default
+// (`pre`) flush runs this callback BEFORE Vue patches the DOM for the tab
+// switch, so `albumListEnd`/`songListEnd` were still pointing at the
+// *previous* tab's sentinel (or null, the very first time) — `io.observe()`
+// was silently a no-op and the newly-active tab's infinite scroll never
+// fired again after the first tab switch. Verified with a minimal repro:
+// same watcher, default flush read the ref as null; `flush:'post'` read it
+// correctly. `flush:'post'` runs this after the DOM update, once the ref is
+// actually attached to the new tab's sentinel element.
 watch(() => tab.value, () => {
   refreshTargets();
-});
+}, { flush: "post" });
 
 onUnmounted(() => {
   if (io) { io.disconnect(); io = null; }
+  if (waterfallRO) { waterfallRO.disconnect(); waterfallRO = null; }
   if (searchTimer) clearTimeout(searchTimer);
 });
 
@@ -814,26 +873,32 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
     </div>
 
     <!-- Tab: all albums -->
+    <!-- 154: waterfall grid — allAlbums is pre-split into fixed column
+         buckets (round-robin by index, see albumWaterfallCols) so on-screen
+         order always matches fetch/alphabetical order and a late-loading
+         cover only grows its own column, never reflows the whole grid. -->
     <div v-else-if="tab === 'albums'">
-      <div class="album-grid">
-        <div v-for="al in allAlbums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
-          <div class="album-cover">
-            <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
-            <span v-else class="album-cover-placeholder">♪</span>
+      <div class="album-grid album-waterfall" ref="albumWaterfallEl">
+        <div v-for="(col, ci) in albumWaterfallCols" :key="ci" class="waterfall-col">
+          <div v-for="al in col" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
+            <div class="album-cover">
+              <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
+              <span v-else class="album-cover-placeholder">♪</span>
+            </div>
+            <div class="album-body">
+              <div class="album-name">{{ al.name }}</div>
+              <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
+            </div>
+            <!-- 061: per-album share. -->
+            <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
+            <div class="corner corner-tr"></div>
+            <div class="corner corner-bl"></div>
           </div>
-          <div class="album-body">
-            <div class="album-name">{{ al.name }}</div>
-            <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
-          </div>
-          <!-- 061: per-album share. -->
-          <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
-          <div class="corner corner-tr"></div>
-          <div class="corner corner-bl"></div>
         </div>
-        <div v-if="!allAlbums.length && !loading" class="empty-state" style="grid-column: 1/-1">
-          <div class="empty-state-icon">◌</div>
-          <div>{{ t("library.noAlbums") }}</div>
-        </div>
+      </div>
+      <div v-if="!allAlbums.length && !loading" class="empty-state">
+        <div class="empty-state-icon">◌</div>
+        <div>{{ t("library.noAlbums") }}</div>
       </div>
       <div class="load-more">
         <span v-if="loading" class="mono-label">{{ t("common.loading") }}</span>
@@ -1034,6 +1099,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       :mode="editorMode"
       :song-ids="editTargets.map((t) => t.id)"
       :initial-tags="editInitial"
+      :existing-cover-url="editExistingCoverUrl"
       :busy="editBusy"
       :message="editMsg"
       :error="editErr"
@@ -1240,6 +1306,35 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 .album-cover img { width: 100%; height: 100%; object-fit: cover; transition: transform 0.4s ease; }
 .album-card:hover .album-cover img { transform: scale(1.05); }
 .album-cover-placeholder { font-size: 2rem; color: var(--color-text-muted); }
+
+/* 154: waterfall grid for the full-library albums tab. allAlbums is
+   pre-split into fixed column buckets in script (round-robin by index, see
+   albumWaterfallCols) and each bucket renders as its own independent
+   vertical flex stack — that's what makes it a waterfall rather than a
+   uniform grid: a column with a two-line album name just runs longer, it
+   doesn't force every other column's row band to match its height the way
+   CSS Grid auto-rows would.
+   Covers stay at the fixed 1:1 aspect ratio from the base .album-cover rule
+   (deliberately NOT switched to natural image aspect ratio) — that was
+   tried and reverted: it made each cover's box grow/jump the moment its
+   image finished decoding, and because that happens near-simultaneously
+   for a whole viewport of covers on load, it read as repeated flicker.
+   Column buckets being fixed by index (not by running content height, like
+   CSS multi-column `columns:` used before) also means a cover loading late
+   only pushes down its own column — never reshuffles items into a
+   different column. */
+.album-waterfall {
+  display: flex;
+  align-items: flex-start;
+  gap: 1rem;
+}
+.waterfall-col {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  flex: 1 1 0;
+  min-width: 0;
+}
 .album-body { padding: 0.8rem 0.9rem 0.9rem; }
 .album-name {
   font-weight: 700; font-size: var(--fs-md); color: var(--color-text-primary);

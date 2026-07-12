@@ -20,6 +20,8 @@ import { createR2Adapter } from "../../adapters/r2";
 import { createWebDAVAdapter } from "../../adapters/webdav";
 import { urlAdapter } from "../../adapters/url";
 import { createSubsonicAdapter } from "../../adapters/subsonic";
+import { encodePath } from "./scan";
+import { srcBaseUrl, type SourceRow } from "../../utils/slices";
 
 export const filesRoutes = new Hono();
 
@@ -143,6 +145,50 @@ function normalizeAudioContentType(contentType: string | null | undefined, suffi
 }
 
 // ── File operations (studio-style structured REST, no notes/color-labels) ──
+
+// POST /storage/files/mkdir body: { source: "r2" | <sourceId>, path: "music/newfolder" }
+//
+// R2 has no real directories — env.MUSIC_BUCKET.list() only surfaces a prefix
+// as a "dir" once some object exists under it (see browse.ts's delimiter
+// logic), so we drop a 0-byte marker object at `${path}/.keep`. browse.ts
+// filters that marker name back out of file listings so it never shows up
+// as a stray file inside the folder the user just created.
+//
+// Every other source is treated as WebDAV, same as files/list does for any
+// non-r2 source id — MKCOL is idempotent here (405 "already exists" counts
+// as success).
+filesRoutes.post("/files/mkdir", permissionMiddleware("upload"), async (c) => {
+  const env = c.env as Env;
+  const body = await c.req.json<{ source?: string; path?: string }>();
+  const source = body.source || "r2";
+  const path = (body.path || "").replace(/^\/+|\/+$/g, "");
+  const segments = path.split("/").filter(Boolean);
+  if (!path || segments.some((seg) => seg === "." || seg === "..")) {
+    return c.json({ ok: false, error: "Invalid path" }, 400);
+  }
+
+  if (source === "r2") {
+    await env.MUSIC_BUCKET.put(`${path}/.keep`, new Uint8Array(0), {
+      httpMetadata: { contentType: "application/x-directory" },
+    });
+    return c.json({ ok: true });
+  }
+
+  const src = await env.DB.prepare(
+    "SELECT id, base_url, username, password, root_path FROM storage_sources WHERE id = ? AND enabled = 1",
+  ).bind(source).first<SourceRow>();
+  if (!src) return c.json({ ok: false, error: "Source not found" }, 404);
+
+  const url = `${srcBaseUrl(src)}/${encodePath(path)}/`;
+  const resp = await fetch(url, {
+    method: "MKCOL",
+    headers: { Authorization: `Basic ${btoa(`${src.username || ""}:${src.password || ""}`)}` },
+  });
+  if (!resp.ok && resp.status !== 405) {
+    return c.json({ ok: false, error: `MKCOL failed: HTTP ${resp.status}` }, 502);
+  }
+  return c.json({ ok: true });
+});
 
 // POST /rest/files/delete body: { key: "music/file.mp3" }
 filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {

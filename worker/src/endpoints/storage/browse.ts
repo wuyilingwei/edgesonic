@@ -37,12 +37,17 @@ browseRoutes.get("/files/list", permissionMiddleware("download"), async (c) => {
       dirs: listing.delimitedPrefixes.map((p) => ({
         name: p.substring(prefix.length).replace(/\/$/, ""),
       })),
-      files: listing.objects.map((o) => ({
-        name: o.key.substring(prefix.length),
-        size: o.size,
-        contentType: o.httpMetadata?.contentType || null,
-        uri: `r2://${o.key}`,
-      })),
+      // ".keep" is the 0-byte marker files/mkdir drops to make an otherwise
+      // real-object-free R2 "folder" show up via the delimiter above — hide
+      // it from the folder's own contents so it doesn't look like a stray file.
+      files: listing.objects
+        .filter((o) => o.key.substring(prefix.length) !== ".keep")
+        .map((o) => ({
+          name: o.key.substring(prefix.length),
+          size: o.size,
+          contentType: o.httpMetadata?.contentType || null,
+          uri: `r2://${o.key}`,
+        })),
     });
   }
 

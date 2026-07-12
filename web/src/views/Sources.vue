@@ -17,6 +17,7 @@
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
+import { mapConcurrent } from "../lib/concurrency";
 
 const { t } = useI18n();
 const { isAdmin, isSuperAdmin, storageFetch, storagePost, crossCopy } = useAuth();
@@ -284,24 +285,47 @@ async function deleteSource(id: string) {
 // Each crossCopy is a separate Worker request so a large library never
 // holds a single long-running connection that could hit the Worker CPU
 // time limit. Progress is shown inline on the source row.
+// 144/146 — batched via mapConcurrent (was one item at a time) and gated by
+// an in-app confirm modal instead of window.confirm(), which blocks the
+// whole page (including the Claude-in-Chrome extension, if that's ever
+// driving the browser) until a human physically clicks a native dialog.
 interface MirrorState {
   running: boolean;
   total: number;
   done: number;
   failed: number;
-  currentTitle: string;
+  inFlight: string[]; // titles currently copying, for the multi-lane progress line
   error: string | null;
 }
 const mirrorState = ref<Record<string, MirrorState>>({});
+const mirrorConfirmSource = ref<Source | null>(null);
+const MIRROR_CONCURRENCY = 3;
 
 function mirrorFor(s: Source): MirrorState | null {
   return mirrorState.value[s.id] || null;
 }
 
-async function startMirror(s: Source) {
-  if (!confirm(t("sources.mirror.confirm", { name: s.name || s.base_url }))) return;
-  const st: MirrorState = { running: true, total: 0, done: 0, failed: 0, currentTitle: "", error: null };
-  mirrorState.value[s.id] = st;
+function startMirror(s: Source) {
+  mirrorConfirmSource.value = s;
+}
+function cancelMirrorConfirm() {
+  mirrorConfirmSource.value = null;
+}
+
+async function confirmStartMirror() {
+  const s = mirrorConfirmSource.value;
+  mirrorConfirmSource.value = null;
+  if (!s) return;
+  // 093f had a real reactivity bug here: it built `st` as a plain object,
+  // assigned it into the reactive `mirrorState` record, then kept mutating
+  // the pre-assignment local variable — which stays a *raw* object, not the
+  // reactive proxy Vue wraps around whatever it stores. Every later `st.x =`
+  // therefore bypassed Vue's setter trap entirely, so the progress line
+  // never re-rendered (always showing the initial 0/0/0). Re-reading `st`
+  // from the record right after insertion makes it the live reactive proxy,
+  // matching the pattern Tools.vue's clone/push stages already use correctly.
+  mirrorState.value[s.id] = { running: true, total: 0, done: 0, failed: 0, inFlight: [], error: null };
+  const st = mirrorState.value[s.id];
   try {
     let offset = 0;
     const limit = 50;
@@ -311,10 +335,12 @@ async function startMirror(s: Source) {
     if (!data.ok) throw new Error(data.error || "listForMirror failed");
     st.total = data.total || 0;
     if (st.total === 0) { showToast(t("sources.mirror.none")); st.running = false; return; }
-    // Iterate pages
+    // Iterate pages; within each page, up to MIRROR_CONCURRENCY items copy
+    // in parallel instead of strictly one at a time.
     while (st.running) {
-      for (const item of data.items || []) {
-        st.currentTitle = item.title || item.storageUri.split("/").pop() || item.instanceId;
+      await mapConcurrent(data.items || [], MIRROR_CONCURRENCY, async (item: any) => {
+        const title = item.title || item.storageUri.split("/").pop() || item.instanceId;
+        st.inFlight.push(title);
         try {
           // 093f — Preserve the remote directory structure (relative to the
           // source's root_path). storage_uri is `webdav://{sourceId}/{relPath}`
@@ -347,10 +373,13 @@ async function startMirror(s: Source) {
           st.failed++;
           st.error = e instanceof Error ? e.message : String(e);
           // Continue to next item — one failure shouldn't abort the whole mirror.
+        } finally {
+          const idx = st.inFlight.indexOf(title);
+          if (idx >= 0) st.inFlight.splice(idx, 1);
         }
-      }
+      }, () => !st.running);
       offset += data.items?.length || 0;
-      if (offset >= st.total || (data.items?.length || 0) < limit) break;
+      if (!st.running || offset >= st.total || (data.items?.length || 0) < limit) break;
       // Fetch next page
       text = await storageFetch(`scan/listForMirror?source=${encodeURIComponent(s.id)}&limit=${limit}&offset=${offset}`);
       data = JSON.parse(text);
@@ -362,7 +391,7 @@ async function startMirror(s: Source) {
     showToast(t("sources.mirror.failed", { error: st.error }), "error");
   } finally {
     st.running = false;
-    st.currentTitle = "";
+    st.inFlight = [];
   }
 }
 
@@ -623,6 +652,16 @@ onUnmounted(() => {
             <span v-else class="text-muted">{{ t("sources.notSynced") }}</span>
           </template>
         </div>
+        <!-- 146 — real determinate progress bar for a running scan, once the
+             job has reported a total (early on, total=0 and the spinner in
+             the pill above is the only signal — that's still correct since
+             there's genuinely nothing to show a percentage of yet). Reuses
+             the same visual language as mirror-progress below. -->
+        <div v-if="isAdmin && s.scanStatus === 'running' && s.scanTotal > 0" class="scan-progress">
+          <div class="scan-progress-bar">
+            <div class="scan-progress-fill" :style="{ width: Math.min(100, (s.scanScanned / s.scanTotal) * 100) + '%' }"></div>
+          </div>
+        </div>
         <!-- Mirror progress (if active) -->
         <div v-if="mirrorFor(s)" class="mirror-progress">
           <div class="mirror-progress-meta">
@@ -631,7 +670,7 @@ onUnmounted(() => {
           <div class="mirror-progress-bar">
             <div class="mirror-progress-fill" :style="{ width: (mirrorFor(s)!.total > 0 ? (mirrorFor(s)!.done / mirrorFor(s)!.total * 100) : 0) + '%' }"></div>
           </div>
-          <div v-if="mirrorFor(s)?.currentTitle" class="mirror-current">{{ mirrorFor(s)!.currentTitle }}</div>
+          <div v-if="mirrorFor(s)?.inFlight.length" class="mirror-current">{{ mirrorFor(s)!.inFlight.join(" · ") }}</div>
           <div v-if="mirrorFor(s)?.error" class="mirror-error">{{ mirrorFor(s)!.error }}</div>
         </div>
         <!-- Bottom: action buttons (vertical) -->
@@ -679,6 +718,26 @@ onUnmounted(() => {
       <!-- P3: empty state only shown after loading completes -->
       <div v-if="!sources.length" class="empty-state" style="grid-column:1/-1">
         <div class="empty-state-icon">◌</div><div>{{ t("sources.empty") }}</div>
+      </div>
+    </div>
+
+    <!-- 146 — in-app confirm modal for "镜像到 R2", replacing window.confirm().
+         A native confirm() blocks the whole page (including any assistive/
+         automation tooling attached to the tab) until a human answers it in
+         a dialog the page itself can't style or recover from — this modal
+         behaves like every other confirmation in the app instead. -->
+    <div v-if="mirrorConfirmSource" class="modal-backdrop" @click.self="cancelMirrorConfirm">
+      <div class="modal">
+        <div class="modal-title">{{ t("sources.mirror.confirmTitle") }}</div>
+        <p class="mirror-confirm-text">
+          {{ t("sources.mirror.confirm", { name: mirrorConfirmSource.name || mirrorConfirmSource.base_url }) }}
+        </p>
+        <div class="modal-actions">
+          <button class="btn-secondary" @click="cancelMirrorConfirm">{{ t("common.cancel") }}</button>
+          <button class="btn-primary" @click="confirmStartMirror">{{ t("sources.mirror.btn") }}</button>
+        </div>
+        <div class="corner corner-tl"></div>
+        <div class="corner corner-br"></div>
       </div>
     </div>
 
@@ -855,6 +914,13 @@ onUnmounted(() => {
   padding: 0.5rem 1rem;
 }
 
+.mirror-confirm-text {
+  margin: 0.5rem 0 0;
+  font-size: var(--fs-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+
 /* 093f — Mirror to R2 progress */
 .mirror-progress {
   margin-top: 0.6rem;
@@ -877,16 +943,34 @@ onUnmounted(() => {
 }
 .mirror-progress-fill {
   height: 100%;
-  background: var(--color-accent-primary);
+  background: linear-gradient(90deg, var(--color-accent-primary), rgba(255,255,255,0.55), var(--color-accent-primary));
+  background-size: 200% 100%;
   transition: width 0.3s;
+  animation: progressShimmer 1.6s linear infinite;
 }
 .mirror-current {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
   margin-top: 0.3rem;
   font-size: var(--fs-sm);
   color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.mirror-current::before {
+  content: "";
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent-primary);
+  animation: mirrorPulse 1.4s ease-in-out infinite;
+}
+@keyframes mirrorPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 .mirror-error {
   margin-top: 0.2rem;
@@ -981,6 +1065,29 @@ onUnmounted(() => {
 }
 @keyframes scanSpin {
   to { transform: rotate(360deg); }
+}
+
+/* 146 — determinate scan progress bar (shown once a job reports a total
+   alongside the spinner pill above). The shimmer sweep gives the bar visual
+   life instead of a flat static fill, matching the mirror-progress bar's
+   upgrade below. */
+.scan-progress { margin-top: 0.5rem; }
+.scan-progress-bar {
+  height: 4px;
+  background: var(--color-border-subtle);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.scan-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--color-accent-primary), rgba(255,255,255,0.55), var(--color-accent-primary));
+  background-size: 200% 100%;
+  transition: width 0.3s;
+  animation: progressShimmer 1.6s linear infinite;
+}
+@keyframes progressShimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 
 /* history toggle + table */

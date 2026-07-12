@@ -7,6 +7,15 @@
     </radialGradient>
   </defs>
 
+  <!-- 161: the mark used to sit at r=90 inside a 256 canvas — a ~38px empty
+       margin on every side (canvas only ~70% full). At favicon/tab-icon
+       sizes (16-32px) that reads as "the icon is just smaller than everyone
+       else's", and the nav-bar <img> (object-fit:contain in a 38x38 box)
+       shows the same wasted margin. Scale the whole mark up ~1.3x about its
+       own center so it fills the canvas the way a favicon should, without
+       recomputing every individual coordinate below. -->
+  <g transform="translate(128 128) scale(1.3) translate(-128 -128)">
+
   <!-- 主碟片(vinyl/CD) -->
   <circle cx="128" cy="128" r="90" fill="url(#discGrad)" stroke="#0C1E3E" stroke-width="3"/>
 
@@ -42,4 +51,6 @@
 
   <!-- 焦点:加粗中心点 -->
   <circle cx="128" cy="128" r="4" fill="#FFFFFF" stroke="#F38020" stroke-width="2.5"/>
+
+  </g>
 </svg>

@@ -65,6 +65,12 @@ const props = withDefaults(
     busy?: boolean;
     message?: string;
     error?: boolean;
+    // 149: URL of the cover currently on file (single mode only — batch targets
+    // may span different albums, so there's no one image to preview/reuse).
+    // Shown as the drop-zone's starting preview, and re-fetched + compressed
+    // when the user clicks the {write} keyword instead of relying on the
+    // server to embed the album's raw R2 bytes uncompressed.
+    existingCoverUrl?: string;
   }>(),
   { busy: false, message: "", error: false, initialTags: () => ({}) }
 );
@@ -105,9 +111,28 @@ const coverError = ref<string>("");
 const coverBusy = ref(false);
 const coverInputEl = ref<HTMLInputElement | null>(null);
 
+// 149: the cover already on file, shown as the drop-zone's starting preview
+// so opening the editor doesn't look like the song has no artwork. Purely
+// informational — it never counts toward `hasCover` (no pending change until
+// the user actually picks a new image or clicks a keyword). Albums without
+// any embedded art 404 on getCoverArt; `existingCoverBroken` catches that so
+// we fall back to the plain drop-hint instead of a broken <img>.
+const existingCoverBroken = ref(false);
+const hasExistingCover = computed(() => !!props.existingCoverUrl && !existingCoverBroken.value);
+// Falls back to the existing cover once a newly-picked image is cleared.
+const displayCoverUrl = computed(() => coverPreviewUrl.value || (hasExistingCover.value ? props.existingCoverUrl! : ""));
+function onExistingCoverError() {
+  if (!coverPreviewUrl.value) existingCoverBroken.value = true;
+}
+
 // picked image: choosing a keyword clears any picked cover, and picking an
 // image clears the keyword. Empty string means "no cover op".
 const coverKeyword = ref<"" | typeof KW_WRITE | typeof KW_EXPORT>("");
+// 149: provenance of `coverData` — lets the {write} button show an active
+// state and lets clearing it fall back to the existing-cover preview instead
+// of the empty drop hint. Batch mode never sets this (it uses coverKeyword
+// instead, since each target song may belong to a different album).
+const coverSource = ref<"" | "picked" | "write">("");
 
 function resetFromProps() {
   const i = props.initialTags || {};
@@ -131,6 +156,8 @@ function resetFromProps() {
   coverInfo.value = "";
   coverError.value = "";
   coverKeyword.value = "";
+  coverSource.value = "";
+  existingCoverBroken.value = false;
 }
 
 watch(() => props.open, (v) => { if (v) resetFromProps(); }, { immediate: true });
@@ -229,6 +256,7 @@ function clearCover() {
   coverInfo.value = "";
   coverError.value = "";
   coverKeyword.value = "";
+  coverSource.value = "";
   if (coverInputEl.value) coverInputEl.value.value = "";
 }
 // a keyword button is toggled on).
@@ -238,10 +266,15 @@ function clearCoverImageOnly() {
   coverPreviewUrl.value = "";
   coverInfo.value = "";
   coverError.value = "";
+  coverSource.value = "";
   if (coverInputEl.value) coverInputEl.value.value = "";
 }
 
-async function handleCoverFile(file: File) {
+// `source` records provenance for the {write} active-state + clear fallback;
+// see the `coverSource` declaration above. Accepts a Blob so the {write}
+// fetch path (a same-origin getCoverArt response, not a <input type=file>
+// File) can reuse the exact same compression pipeline as a manual pick.
+async function handleCoverFile(file: File | Blob, source: "picked" | "write" = "picked") {
   coverError.value = "";
   if (!/^image\//i.test(file.type)) {
     coverError.value = t("tagEditor.cover.errInvalidType");
@@ -276,6 +309,7 @@ async function handleCoverFile(file: File) {
     }
     coverData.value = await blobToBase64(blob);
     coverMime.value = "image/jpeg";
+    coverSource.value = source;
 
     // Generate a small thumbnail for the in-modal preview (separate canvas →
     // a separate blob URL so re-encoding the main blob doesn't blur it).
@@ -302,7 +336,50 @@ async function handleCoverFile(file: File) {
   }
 }
 
-function loadImage(file: File): Promise<HTMLImageElement> {
+// 149: single-mode {write} — fetch the album's current cover (same-origin
+// getCoverArt, cookie-authed) and run it through the same canvas compressor
+// as a manual pick, instead of sending the `{write}` keyword to the server.
+// The server-side keyword path embeds the R2 bytes verbatim (only bounded by
+// a 500KB reject, no resize), so anything above that ceiling silently never
+// got embedded — fetching client-side guarantees compression and surfaces
+// failures via the same coverError the picker already uses.
+async function useAlbumCoverForWrite() {
+  if (!props.existingCoverUrl) {
+    coverError.value = t("tagEditor.cover.errNoAlbumCover");
+    return;
+  }
+  coverError.value = "";
+  coverBusy.value = true;
+  try {
+    const resp = await fetch(props.existingCoverUrl);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const blob = await resp.blob();
+    await handleCoverFile(blob, "write");
+  } catch (e) {
+    coverError.value = e instanceof Error ? e.message : String(e);
+    coverBusy.value = false;
+  }
+}
+
+// Batch mode keeps the legacy keyword passthrough — targets may span
+// different albums, so there's no single image the client could resolve and
+// compress up front; the server still resolves + embeds each song's own
+// album cover per-instance (unchanged behaviour).
+function onWriteKeywordClick() {
+  if (coverKeyword.value === KW_WRITE || coverSource.value === "write") {
+    clearCoverImageOnly();
+    coverKeyword.value = "";
+    return;
+  }
+  if (isBatch.value) {
+    coverKeyword.value = KW_WRITE;
+    clearCoverImageOnly();
+    return;
+  }
+  void useAlbumCoverForWrite();
+}
+
+function loadImage(file: File | Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(file);
     const img = new Image();
@@ -346,11 +423,13 @@ function blobToBase64(blob: Blob): Promise<string> {
       </div>
 
       <!-- cover slot — 042: drag/drop or click to pick. Canvas-compressed to
-           ≤500KB JPEG client-side, base64 attached to the submit payload. -->
+           ≤500KB JPEG client-side, base64 attached to the submit payload.
+           149: pre-loads the song's existing cover (single mode) as the
+           starting preview so the modal doesn't look art-less on open. -->
       <slot name="cover">
         <div
           class="cover-drop"
-          :class="{ 'cover-drop-has': hasCover, 'cover-drop-busy': coverBusy }"
+          :class="{ 'cover-drop-has': hasCover || hasExistingCover, 'cover-drop-busy': coverBusy }"
           @dragover.prevent
           @drop.prevent="onCoverDrop"
           @click="triggerCoverPick"
@@ -362,12 +441,9 @@ function blobToBase64(blob: Blob): Promise<string> {
             class="cover-file-hidden"
             @change="onCoverPick"
           />
-          <img v-if="coverPreviewUrl" :src="coverPreviewUrl" class="cover-thumb" alt="cover preview" />
-          <div v-if="!hasCover && !coverBusy" class="cover-drop-hint mono-label">
-            {{ t("tagEditor.cover.dropHint") }}
-          </div>
-          <div v-else-if="coverBusy" class="cover-drop-hint mono-label">{{ t("tagEditor.cover.compressing") }}</div>
-          <div v-else class="cover-info-row">
+          <img v-if="displayCoverUrl" :src="displayCoverUrl" class="cover-thumb" alt="cover preview" @error="onExistingCoverError" />
+          <div v-if="coverBusy" class="cover-drop-hint mono-label">{{ t("tagEditor.cover.compressing") }}</div>
+          <div v-else-if="hasCover" class="cover-info-row">
             <span class="cover-info mono-label">{{ coverInfo }}</span>
             <button
               type="button"
@@ -375,18 +451,28 @@ function blobToBase64(blob: Blob): Promise<string> {
               @click.stop="clearCover"
             >{{ t("tagEditor.cover.clear") }}</button>
           </div>
+          <div v-else-if="hasExistingCover" class="cover-info-row">
+            <span class="cover-info mono-label">{{ t("tagEditor.cover.current") }}</span>
+          </div>
+          <div v-else class="cover-drop-hint mono-label">
+            {{ t("tagEditor.cover.dropHint") }}
+          </div>
         </div>
         <p v-if="coverError" class="cover-error mono-label">{{ coverError }}</p>
-        <!-- cover keyword picker: {write} embeds the album's R2 cover into
-             the file; {export} writes cover.jpg sidecar. Mutually exclusive with
-             a picked image (choosing one clears the other). -->
+        <!-- cover keyword picker: {write} embeds the album's cover into the
+             file — single mode fetches + canvas-compresses it client-side
+             (same pipeline as a manual pick); batch mode (targets may span
+             albums) still sends the `{write}` keyword for the server to
+             resolve per-song. {export} writes a cover.jpg sidecar (no size
+             ceiling, so no compression needed) and stays keyword-based in
+             both modes. Mutually exclusive with a picked image. -->
         <div class="cover-keyword-row">
           <button
             type="button"
             class="cover-kw-btn"
-            :class="{ active: coverKeyword === KW_WRITE }"
+            :class="{ active: coverKeyword === KW_WRITE || coverSource === 'write' }"
             :title="t('tagEditor.cover.writeHint')"
-            @click.stop="coverKeyword = (coverKeyword === KW_WRITE ? '' : KW_WRITE); clearCoverImageOnly()"
+            @click.stop="onWriteKeywordClick"
           >{{ KW_WRITE }}</button>
           <button
             type="button"
