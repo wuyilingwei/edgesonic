@@ -584,12 +584,15 @@ export function createQueries(db: D1Database) {
       return db.prepare("SELECT * FROM playlists WHERE id = ?").bind(id).first<Playlist>();
     },
 
-    async getPlaylistSongs(playlistId: string): Promise<SongMaster[]> {
+    // Physical instance columns included so playlist entries carry the
+    // spec's Child.path/suffix/contentType/size like every other listing.
+    async getPlaylistSongs(playlistId: string): Promise<SongRow[]> {
       const result = await db.prepare(
-        `SELECT sm.* FROM playlist_songs ps
+        `SELECT ${SONG_ROW_COLS} FROM playlist_songs ps
          JOIN song_masters sm ON sm.id = ps.song_master_id
+         ${SONG_ROW_JOINS}
          WHERE ps.playlist_id = ? ORDER BY ps.position ASC`
-      ).bind(playlistId).all<SongMaster>();
+      ).bind(playlistId).all<SongRow>();
       return result.results;
     },
 
@@ -781,12 +784,15 @@ export function createQueries(db: D1Database) {
       return db.prepare("SELECT * FROM shares WHERE id = ?").bind(id).first<Share>();
     },
 
-    async getShareEntries(shareId: string): Promise<SongMaster[]> {
+    // Physical instance columns included so share entries carry the spec's
+    // Child.path/suffix/contentType/size like every other listing.
+    async getShareEntries(shareId: string): Promise<SongRow[]> {
       const result = await db.prepare(
-        `SELECT sm.* FROM share_entries se
+        `SELECT ${SONG_ROW_COLS} FROM share_entries se
          JOIN song_masters sm ON sm.id = se.song_master_id
+         ${SONG_ROW_JOINS}
          WHERE se.share_id = ? ORDER BY se.position ASC`
-      ).bind(shareId).all<SongMaster>();
+      ).bind(shareId).all<SongRow>();
       return result.results;
     },
 
