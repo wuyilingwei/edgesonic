@@ -19,12 +19,20 @@ import { useI18n } from "vue-i18n";
 import { useRouter, useRoute } from "vue-router";
 import { usePlayerStore } from "../stores/player";
 import { useAuth, formatDuration } from "../api";
+import { activeTheme } from "../theme";
+import { getTheme } from "../themes/registry";
 
 const { t } = useI18n();
 const router = useRouter();
 const route = useRoute();
 const player = usePlayerStore();
 const { coverArtUrl } = useAuth();
+
+// The active theme can replace the progress-thumb visual generically (see
+// themes/registry.ts) — this component never checks for a specific theme
+// id, it just renders whatever's registered, defaulting to the plain dot
+// below when a theme doesn't provide one.
+const activeThemeDef = computed(() => getTheme(activeTheme.value));
 
 // Remember the last non-now-playing route so the cover/track-info click can
 // toggle the now-playing view open/closed instead of only ever navigating
@@ -160,7 +168,9 @@ function removeFromQueue(i: number) {
             :style="{ left: seg.left + '%', width: seg.width + '%' }"
           ></div>
           <div class="pb-progress-fill" :style="{ width: progressPct + '%' }"></div>
-          <div class="pb-progress-thumb" :class="{ active: dragging }" :style="{ left: progressPct + '%' }"></div>
+          <div class="pb-progress-thumb" :class="{ active: dragging }" :style="{ left: progressPct + '%' }">
+            <component :is="activeThemeDef?.progressThumb" v-if="activeThemeDef?.progressThumb" />
+          </div>
           <div v-if="dragging" class="pb-progress-tooltip" :style="{ left: progressPct + '%' }">{{ fmtPrecise(player.currentTime) }}</div>
         </div>
         <span class="pb-time">{{ formatDuration(Math.floor(player.duration)) }}</span>
@@ -229,25 +239,6 @@ function removeFromQueue(i: number) {
   background: rgba(10, 10, 11, 0.95);
   backdrop-filter: blur(12px);
   border-top: 1px solid var(--color-border-subtle);
-}
-
-/* Stardust theme: light glass player with cube/facet progress treatment. */
-:root[data-theme="stardust"] .player-bar {
-  background:
-    linear-gradient(90deg, rgba(255,255,255,0.88), rgba(248,243,255,0.78), rgba(255,255,255,0.9));
-  border-top: none;
-  box-shadow: inset 0 1px 0 0 rgba(107, 99, 255, 0.22), 0 -12px 36px rgba(107, 99, 255, 0.14);
-}
-:root[data-theme="stardust"] .pb-play {
-  border-color: transparent;
-  color: #fffdf8;
-  background: linear-gradient(135deg, var(--color-accent-primary), var(--color-stardust-violet));
-  box-shadow: 0 0 18px rgba(107, 99, 255, 0.28), 0 0 0 3px rgba(255, 214, 74, 0.14);
-}
-:root[data-theme="stardust"] .pb-cover {
-  border-radius: 8px;
-  border-color: rgba(107,99,255,0.22);
-  box-shadow: 0 0 0 3px rgba(255, 214, 74, 0.12), 0 10px 24px rgba(107,99,255,0.12);
 }
 
 /* --- track info --- */
@@ -363,44 +354,6 @@ function removeFromQueue(i: number) {
   border-radius: 3px;
   white-space: nowrap;
   pointer-events: none;
-}
-
-:root[data-theme="stardust"] .pb-progress { height: 18px; }
-:root[data-theme="stardust"] .pb-progress::before {
-  height: 8px;
-  border-radius: 0;
-  background:
-    repeating-linear-gradient(90deg, rgba(107,99,255,0.14) 0 10px, transparent 10px 16px),
-    linear-gradient(180deg, rgba(255,255,255,0.92), rgba(238,234,255,0.7));
-  border: 1px solid rgba(107,99,255,0.18);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.9);
-}
-:root[data-theme="stardust"] .pb-progress-fill {
-  height: 8px;
-  border-radius: 0;
-  background:
-    repeating-linear-gradient(90deg, rgba(255,255,255,0.42) 0 7px, transparent 7px 14px),
-    linear-gradient(135deg, var(--color-accent-primary), var(--color-stardust-blue) 52%, var(--color-stardust-gold));
-  box-shadow: 0 0 16px rgba(107,99,255,0.32);
-}
-:root[data-theme="stardust"] .pb-progress-buffered {
-  height: 8px;
-  background: rgba(107,99,255,0.18);
-  opacity: 1;
-}
-:root[data-theme="stardust"] .pb-progress-thumb {
-  width: 14px;
-  height: 14px;
-  opacity: 1;
-  background: linear-gradient(135deg, #fffdf8 0 18%, var(--color-stardust-gold) 18% 44%, var(--color-accent-primary) 44% 72%, var(--color-stardust-blue) 72%);
-  border: 1px solid rgba(107,99,255,0.42);
-  transform: translateX(-50%) rotate(45deg) skew(-6deg, -6deg);
-  box-shadow: 0 0 0 3px rgba(255,214,74,0.18), 0 0 18px rgba(107,99,255,0.36);
-}
-:root[data-theme="stardust"] .pb-progress-tooltip {
-  background: rgba(255,255,255,0.92);
-  border-color: rgba(107,99,255,0.28);
-  box-shadow: 0 10px 24px rgba(107,99,255,0.12);
 }
 
 /* --- right: volume + queue --- */

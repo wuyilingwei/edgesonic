@@ -35,7 +35,12 @@ export function createR2Adapter(bucket: R2Bucket): StorageAdapter {
 
       if (range) {
         const match = range.match(/bytes=(\d+)-(\d*)/);
-        if (match) {
+        // 138 — `bytes=0-` (open-ended from offset 0) is semantically the
+        // whole file. Treat it as a non-range GET so R2 returns the complete
+        // object in a single 200 response (avoids any R2 range-stream edge
+        // behaviour that could stall the browser's demuxer after the metadata
+        // block on files with large embedded PICTURE blocks).
+        if (match && !(match[1] === "0" && match[2] === "")) {
           const start = parseInt(match[1], 10);
           const endStr = match[2];
           const length = endStr ? parseInt(endStr, 10) - start + 1 : undefined;

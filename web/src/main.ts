@@ -51,7 +51,13 @@ const router = createRouter({ history: createWebHashHistory(), routes });
 
 // 导航守卫：未登录跳 /login
 router.beforeEach((to) => {
-  const loggedIn = !!localStorage.getItem("edgesonic_auth");
+  // After the httpOnly-cookie upgrade the SPA no longer keeps the session
+  // token in localStorage, only a non-secret "logged in" flag — see
+  // api.ts's login(). If the cookie has actually expired server-side, the
+  // first authenticated fetch will 401/403 and handleAuthError redirects
+  // to /login anyway, so this guard is purely to avoid a half-loaded SPA
+  // flash on a tab that opened after the cookie expired.
+  const loggedIn = !!localStorage.getItem("edgesonic_logged_in") || !!localStorage.getItem("edgesonic_user");
   if (!to.meta.public && !loggedIn) return "/login";
   if (to.path === "/login" && loggedIn) return "/";
   return true;

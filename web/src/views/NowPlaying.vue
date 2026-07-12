@@ -311,30 +311,6 @@ watch(coverSrc, () => { coverFailed.value = false; });
   box-shadow: 0 8px 40px rgba(0,0,0,0.5);
   background: var(--color-bg-tertiary);
 }
-:root[data-theme="stardust"] .np-cover-wrap {
-  border: 1px solid rgba(107,99,255,0.22);
-  box-shadow:
-    0 26px 58px rgba(107,99,255,0.16),
-    0 0 0 8px rgba(255,214,74,0.1),
-    0 0 0 1px rgba(255,255,255,0.88) inset;
-  background: linear-gradient(145deg, rgba(255,255,255,0.92), rgba(238,234,255,0.72));
-}
-:root[data-theme="stardust"] .np-cover-wrap::after {
-  content: "";
-  position: absolute;
-  inset: 10px;
-  border: 1px solid rgba(255,214,74,0.42);
-  border-radius: 10px;
-  pointer-events: none;
-  mix-blend-mode: screen;
-}
-:root[data-theme="stardust"] .np-track-info {
-  padding: 0.75rem 1.2rem;
-  border: 1px solid rgba(107,99,255,0.14);
-  border-radius: 999px;
-  background: rgba(255,255,255,0.62);
-  box-shadow: 0 14px 34px rgba(107,99,255,0.1);
-}
 .np-cover { width: 100%; height: 100%; object-fit: cover; display: block; }
 .np-cover-placeholder {
   width: 100%; height: 100%;
@@ -400,31 +376,6 @@ watch(coverSrc, () => { coverFailed.value = false; });
   color: var(--color-text-secondary);
 }
 
-:root[data-theme="stardust"] .np-lyric-line {
-  opacity: 0.52;
-}
-:root[data-theme="stardust"] .np-lyric-line.active {
-  opacity: 1;
-  transform: scale(1.08);
-  text-shadow: 0 0 18px rgba(107,99,255,0.18);
-}
-:root[data-theme="stardust"] .np-lyric-line.active .np-lyric-original {
-  color: var(--color-accent-primary);
-  font-weight: 700;
-}
-:root[data-theme="stardust"] .np-lyric-line.active::before,
-:root[data-theme="stardust"] .np-lyric-line.active::after {
-  content: "✦";
-  display: inline-block;
-  color: var(--color-stardust-gold);
-  margin: 0 0.55rem;
-  filter: drop-shadow(0 0 8px rgba(255,214,74,0.55));
-  animation: lyricStarPulse 2.4s ease-in-out infinite;
-}
-@keyframes lyricStarPulse {
-  0%, 100% { transform: scale(0.78) rotate(0deg); opacity: 0.6; }
-  50% { transform: scale(1.15) rotate(24deg); opacity: 1; }
-}
 
 /* Mobile */
 @media (max-width: 768px) {

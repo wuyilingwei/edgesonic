@@ -315,7 +315,15 @@ const streamHandler = async (c: Context) => {
       const secretKey = env.R2_SECRET_ACCESS_KEY;
       const accountId = env.CF_ACCOUNT_ID;
       const schemeAllowed = strategy === "always" || strategy === "r2_only";
-      if (!isBrowserSession && presignOn === "1" && schemeAllowed && accessKeyId && secretKey && accountId) {
+      // 138 — re-enabled R2 presign 302 for browser sessions. The original
+      // ban (task 001) existed because the presigned URL signed the Range
+      // header; the browser's own Range value 403'd, leaving only the ~1.2 MB
+      // pre-buffer before playback died. r2presign.ts now signs `host` only,
+      // so any Range the <audio> element sends is accepted by R2. COEP is
+      // also switched to `credentialless` (cross_origin_isolation.ts), so R2's
+      // no-CORP cross-origin response no longer gets blocked by the embedder
+      // policy.
+      if (presignOn === "1" && schemeAllowed && accessKeyId && secretKey && accountId) {
         try {
           const key = selected.storage_uri.substring("r2://".length);
           const presigned = await presignR2Get({

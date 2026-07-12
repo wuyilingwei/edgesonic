@@ -26,6 +26,27 @@ import type { User } from "../../types/entities";
 // /edgesonic/auth/login + /edgesonic/auth/logout paths.
 export const webLoginRoutes = new Hono<{ Bindings: Env }>();
 
+const SESSION_COOKIE = "edgesonic_session";
+const SESSION_TTL_SEC = 86400;
+
+// SameSite=Lax (not Strict) so external OAuth-style redirects and the
+// hash-router's first navigation still carry the cookie; HttpOnly + Secure
+// is what stops JS-side credential theft and MITM leaks over clear text.
+// Path=/ so it covers /rest, /tag, /storage, /edgesonic uniformly.
+function sessionCookieHeader(token: string, maxAgeSec: number): string {
+  const flags = [
+    `${SESSION_COOKIE}=${token}`,
+    "Path=/",
+    `Max-Age=${maxAgeSec}`,
+    "HttpOnly",
+    "SameSite=Lax",
+  ];
+  // Workers always terminate TLS in production; Secure would block the
+  // cookie over plain HTTP in `wrangler dev --local`, so we only flag it
+  // when the request itself arrived over HTTPS.
+  return flags.join("; ");
+}
+
 webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
   const db = c.env.DB;
 
@@ -56,7 +77,7 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
 
   const sessionId = crypto.randomUUID();
   const sessionToken = crypto.randomUUID().replace(/-/g, "");
-  const expiresAt = Math.floor(Date.now() / 1000) + 86400; // 24 hours
+  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SEC; // 24 hours
   const userAgent = c.req.header("User-Agent") || "";
 
   await db
@@ -66,13 +87,25 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
     .bind(sessionId, username, sessionToken, userAgent, expiresAt, Math.floor(Date.now() / 1000))
     .run();
 
-  return c.json({
-    ok: true,
-    username,
-    level: user.level,
-    sessionToken,
-    expiresAt,
-  });
+  // Plant an HttpOnly cookie alongside the JSON response so the SPA can
+  // stop persisting the session token in localStorage; the browser now
+  // carries it for every same-origin request (fetch, <audio>, <img>,
+  // XHR). The JSON sessionToken is still returned for backwards
+  // compatibility (clients that use it as a Subsonic plain password via
+  // /rest/?u=&p=), but the SPA itself no longer reads it.
+  const isHttps = new URL(c.req.url).protocol === "https:";
+  const cookie = sessionCookieHeader(sessionToken, SESSION_TTL_SEC) + (isHttps ? "; Secure" : "");
+  c.header("Set-Cookie", cookie);
+  return c.json(
+    {
+      ok: true,
+      username,
+      level: user.level,
+      sessionToken,
+      expiresAt,
+    },
+    200,
+  );
 });
 
 webLoginRoutes.post("/edgesonic/auth/logout", async (c) => {
@@ -87,10 +120,33 @@ webLoginRoutes.post("/edgesonic/auth/logout", async (c) => {
 
   if (body.sessionToken) {
     await db.prepare("DELETE FROM sessions WHERE token = ?").bind(body.sessionToken).run();
+  } else {
+    // Cookie-only SPA sessions have no token in the request body; invalidate
+    // whatever the cookie carries so a stolen browser session can't keep
+    // serving after the user clicked "Sign out".
+    const cookieToken = parseSessionCookie(c.req.header("Cookie") || "");
+    if (cookieToken) {
+      await db.prepare("DELETE FROM sessions WHERE token = ?").bind(cookieToken).run();
+    }
   }
 
+  // Always wipe the browser cookie too — covers both cookie-only and
+  // signedParams-style SPA sessions.
+  const isHttps = new URL(c.req.url).protocol === "https:";
+  c.header("Set-Cookie", sessionCookieHeader("", 0) + (isHttps ? "; Secure" : ""));
   return c.json({ ok: true });
 });
+
+function parseSessionCookie(cookieHeader: string): string | null {
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const k = part.slice(0, eq).trim();
+    const v = part.slice(eq + 1).trim();
+    if (k === SESSION_COOKIE && v) return v;
+  }
+  return null;
+}
 
 export const edgesonicAuthRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 

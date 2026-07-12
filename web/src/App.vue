@@ -23,6 +23,7 @@ import UpdateBanner from "./components/UpdateBanner.vue";
 import { usePlayerStore } from "./stores/player";
 import { useWorkerPool } from "./stores/workerPool";
 import { activeTheme } from "./theme";
+import { getTheme } from "./themes/registry";
 
 const router = useRouter();
 const route = useRoute();
@@ -98,82 +99,14 @@ function doLogout() {
   router.push("/login");
 }
 
-// === stardust theme: celestial geometry background ===
-// Light Stardust mode adds slow cube/hexagram/star motion behind every page.
-// Randomized once per mount rather than fixed nth-child CSS so reloads feel
-// slightly alive without introducing runtime animation state.
-const isStardust = computed(() => activeTheme.value === "stardust");
-interface DriftCube { top: string; size: string; duration: string; delay: string; spin: string; opacity: number; }
-interface StardustSpark { left: string; top: string; size: string; duration: string; delay: string; opacity: number; }
-interface StardustHex { left: string; top: string; size: string; duration: string; delay: string; opacity: number; }
-function randomCube(): DriftCube {
-  const size = 22 + Math.random() * 34;
-  return {
-    top: `${Math.random() * 90}vh`,
-    size: `${size}px`,
-    duration: `${26 + Math.random() * 26}s`,
-    delay: `-${Math.random() * 30}s`,
-    spin: `${9 + Math.random() * 16}s`,
-    opacity: 0.2 + Math.random() * 0.28,
-  };
-}
-function randomSpark(): StardustSpark {
-  const size = 6 + Math.random() * 12;
-  return {
-    left: `${Math.random() * 100}vw`,
-    top: `${Math.random() * 100}vh`,
-    size: `${size}px`,
-    duration: `${3.5 + Math.random() * 5}s`,
-    delay: `-${Math.random() * 8}s`,
-    opacity: 0.35 + Math.random() * 0.4,
-  };
-}
-function randomHex(): StardustHex {
-  const size = 80 + Math.random() * 130;
-  return {
-    left: `${Math.random() * 100}vw`,
-    top: `${Math.random() * 100}vh`,
-    size: `${size}px`,
-    duration: `${18 + Math.random() * 24}s`,
-    delay: `-${Math.random() * 20}s`,
-    opacity: 0.08 + Math.random() * 0.11,
-  };
-}
-const driftCubes = Array.from({ length: 6 }, randomCube);
-const stardustSparks = Array.from({ length: 26 }, randomSpark);
-const stardustHexes = Array.from({ length: 5 }, randomHex);
+// Theme-provided extras (decorative background layer, sidebar footer
+// reveal height, ...) are consumed generically here — App.vue never
+// checks for any specific theme id. See themes/registry.ts.
+const activeThemeDef = computed(() => getTheme(activeTheme.value));
 </script>
 
 <template>
-  <div v-if="isStardust" class="stardust-bg" aria-hidden="true">
-    <div
-      v-for="(h, i) in stardustHexes"
-      :key="`h-${i}`"
-      class="stardust-hex"
-      :style="{ left: h.left, top: h.top, width: h.size, height: h.size, animationDuration: h.duration, animationDelay: h.delay, opacity: h.opacity }"
-    ></div>
-    <i
-      v-for="(s, i) in stardustSparks"
-      :key="`s-${i}`"
-      class="stardust-spark"
-      :style="{ left: s.left, top: s.top, width: s.size, height: s.size, animationDuration: s.duration, animationDelay: s.delay, opacity: s.opacity }"
-    ></i>
-    <div
-      v-for="(c, i) in driftCubes"
-      :key="`c-${i}`"
-      class="star-cube-drift"
-      :style="{ top: c.top, animationDuration: c.duration, animationDelay: c.delay, opacity: c.opacity, '--cube-half': `calc(${c.size} / 2)` }"
-    >
-      <div class="star-cube-spin" :style="{ width: c.size, height: c.size, animationDuration: c.spin }">
-        <span class="cube-face cube-front"></span>
-        <span class="cube-face cube-back"></span>
-        <span class="cube-face cube-top"></span>
-        <span class="cube-face cube-bottom"></span>
-        <span class="cube-face cube-left"></span>
-        <span class="cube-face cube-right"></span>
-      </div>
-    </div>
-  </div>
+  <component :is="activeThemeDef?.background" v-if="activeThemeDef?.background" />
 
   <UpdateBanner />
 
@@ -205,18 +138,26 @@ const stardustHexes = Array.from({ length: 5 }, randomHex);
     <div class="sidebar-overlay" :class="{ open: menuOpen }" @click="menuOpen = false"></div>
 
     <aside class="sidebar" :class="{ open: menuOpen }">
-      <div v-for="g in groups" :key="g.label" class="nav-group">
-        <div class="nav-group-label">{{ g.label }}</div>
-        <router-link
-          v-for="item in g.items"
-          :key="item.path"
-          :to="item.path"
-          class="side-link"
-          :class="{ active: item.path === '/' ? route.path === '/' : route.path.startsWith(item.path) }"
-        >
-         <span v-if="item.icon" class="side-emoji" aria-hidden="true">{{ item.icon }}</span>{{ item.label }}
-        </router-link>
+      <div class="sidebar-scroll">
+        <div v-for="g in groups" :key="g.label" class="nav-group">
+          <div class="nav-group-label">{{ g.label }}</div>
+          <router-link
+            v-for="item in g.items"
+            :key="item.path"
+            :to="item.path"
+            class="side-link"
+            :class="{ active: item.path === '/' ? route.path === '/' : route.path.startsWith(item.path) }"
+          >
+           <span v-if="item.icon" class="side-emoji" aria-hidden="true">{{ item.icon }}</span>{{ item.label }}
+          </router-link>
+        </div>
       </div>
+
+      <div
+        class="sidebar-footer-spacer"
+        :style="{ height: `${activeThemeDef?.sidebarFooterHeight ?? 0}px` }"
+        aria-hidden="true"
+      ></div>
     </aside>
 
     <main class="main">
@@ -234,95 +175,6 @@ const stardustHexes = Array.from({ length: 5 }, randomHex);
 <style>
 @import "./assets/palette.css";
 
-/* === stardust theme: celestial background ===
- * Hexagrams rotate slowly, yellow sparks pulse, and cube props drift across
- * the light page. Kept CSS-only and behind content for cheap compositing.
- */
-.stardust-bg {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  overflow: hidden;
-  pointer-events: none;
-  background:
-    linear-gradient(115deg, rgba(255,255,255,0.18), rgba(107,99,255,0.06), rgba(255,214,74,0.08)),
-    radial-gradient(circle at 20% 25%, rgba(154,123,255,0.16), transparent 28rem),
-    radial-gradient(circle at 80% 10%, rgba(111,199,255,0.18), transparent 24rem),
-    radial-gradient(circle at 62% 86%, rgba(255,214,74,0.18), transparent 26rem);
-}
-.stardust-hex {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  animation: stardustHexSpin linear infinite;
-  filter: drop-shadow(0 0 18px rgba(107, 99, 255, 0.18));
-}
-.stardust-hex::before,
-.stardust-hex::after {
-  content: "";
-  position: absolute;
-  inset: 16%;
-  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
-  border: 1px solid rgba(107, 99, 255, 0.5);
-  background: linear-gradient(135deg, rgba(107,99,255,0.05), rgba(255,214,74,0.08));
-}
-.stardust-hex::after {
-  transform: rotate(30deg) scale(0.72);
-  border-color: rgba(255, 214, 74, 0.75);
-}
-.stardust-spark {
-  position: absolute;
-  display: block;
-  transform: translate(-50%, -50%) rotate(45deg);
-  background: var(--color-stardust-gold);
-  clip-path: polygon(50% 0%, 61% 36%, 100% 50%, 61% 64%, 50% 100%, 39% 64%, 0% 50%, 39% 36%);
-  box-shadow: 0 0 18px rgba(255, 214, 74, 0.75);
-  animation: stardustSparkPulse ease-in-out infinite;
-}
-.star-cube-drift {
-  position: absolute;
-  left: 0;
-  perspective: 700px;
-  animation: cubeDrift linear infinite;
-}
-.star-cube-spin {
-  transform-style: preserve-3d;
-  animation: cubeSpin linear infinite;
-  filter: drop-shadow(0 0 12px rgba(107, 99, 255, 0.3));
-}
-.cube-face {
-  position: absolute;
-  inset: 0;
-  border: 1px solid rgba(107, 99, 255, 0.42);
-  background: linear-gradient(135deg, rgba(107, 99, 255, 0.12), rgba(255, 214, 74, 0.18));
-}
-.cube-front  { transform: translateZ(var(--cube-half)); }
-.cube-back   { transform: translateZ(calc(var(--cube-half) * -1)) rotateY(180deg); }
-.cube-right  { transform: rotateY(90deg) translateZ(var(--cube-half)); }
-.cube-left   { transform: rotateY(-90deg) translateZ(var(--cube-half)); }
-.cube-top    { transform: rotateX(90deg) translateZ(var(--cube-half)); }
-.cube-bottom { transform: rotateX(-90deg) translateZ(var(--cube-half)); }
-
-@keyframes cubeDrift {
-  from { transform: translateX(-10vw); }
-  to   { transform: translateX(110vw); }
-}
-@keyframes cubeSpin {
-  from { transform: rotateX(0deg) rotateY(0deg); }
-  to   { transform: rotateX(360deg) rotateY(360deg); }
-}
-@keyframes stardustHexSpin {
-  from { transform: translate(-50%, -50%) rotate(0deg) scale(0.92); }
-  50%  { transform: translate(-50%, -50%) rotate(180deg) scale(1.04); }
-  to   { transform: translate(-50%, -50%) rotate(360deg) scale(0.92); }
-}
-@keyframes stardustSparkPulse {
-  0%, 100% { transform: translate(-50%, -50%) rotate(45deg) scale(0.7); filter: blur(0); }
-  50% { transform: translate(-50%, -50%) rotate(45deg) scale(1.25); filter: blur(0.2px); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .stardust-bg { display: none; }
-}
-
 /* === App shell === */
 .shell,
 .login-view {
@@ -330,10 +182,6 @@ const stardustHexes = Array.from({ length: 5 }, randomHex);
   z-index: 1;
 }
 .shell { min-height: 100vh; }
-:root[data-theme="stardust"] .login-view {
-  background: transparent !important;
-  background-image: none !important;
-}
 
 /* --- NavBar (fixed, 60px) --- */
 .navbar {
@@ -407,7 +255,14 @@ const stardustHexes = Array.from({ length: 5 }, randomHex);
   width: 32px; height: 32px;
 }
 
-/* --- Sidebar (240px) --- */
+/* --- Sidebar (240px) ---
+ * .sidebar is the fixed flex host; only .sidebar-scroll (the nav-group
+ * list) scrolls. .sidebar-footer-spacer is an empty reserved spacer below
+ * it, sized per-theme (see themes/registry.ts's sidebarFooterHeight) — a
+ * theme can fade .sidebar's own background to transparent across exactly
+ * that height from its own stylesheet, so a shared page-wide background
+ * shows through instead of needing a second, separate widget here.
+ */
 .sidebar {
   position: fixed;
   top: var(--nav-h);
@@ -415,14 +270,20 @@ const stardustHexes = Array.from({ length: 5 }, randomHex);
   left: 0;
   width: var(--sidebar-w);
   z-index: 150;
-  overflow-y: auto;
-  padding: 1.25rem 0.9rem;
   background: var(--color-bg-secondary);
   border-right: 1px solid var(--color-border-subtle);
   display: flex;
   flex-direction: column;
+  transition: transform 0.25s ease, background 0.25s ease;
+}
+.sidebar-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 1.25rem 0.9rem;
+  display: flex;
+  flex-direction: column;
   gap: 1.5rem;
-  transition: transform 0.25s ease;
 }
 .nav-group { display: flex; flex-direction: column; gap: 2px; }
 .nav-group-label {
@@ -461,6 +322,17 @@ const stardustHexes = Array.from({ length: 5 }, randomHex);
   inset: 0;
   z-index: 140;
   background: var(--color-bg-overlay);
+}
+
+/* Reserved space at the bottom of the sidebar flex column, sized from the
+ * active theme's `sidebarFooterHeight` (0 for themes that don't set one —
+ * see themes/registry.ts). A theme that wants this space to visually bleed
+ * into a shared page background does so via its own stylesheet targeting
+ * `.sidebar` directly (e.g. themes/stardust/stardust.css); this file never
+ * mentions any specific theme.
+ */
+.sidebar-footer-spacer {
+  flex-shrink: 0;
 }
 
 /* --- Main content --- */

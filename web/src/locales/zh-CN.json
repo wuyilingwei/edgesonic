@@ -370,6 +370,15 @@
         "yellow": "黄",
         "stardust": "星尘"
       },
+      "externalTheme": {
+        "title": "外部主题",
+        "desc": "从 URL 加载一个主题模块。这会在 EdgeSonic 里执行该 URL 提供的 JavaScript——仅加载你自己编写或明确信任的主题。",
+        "placeholder": "https://example.com/my-theme.js",
+        "load": "加载",
+        "remove": "移除",
+        "loaded": "已加载主题「{id}」",
+        "loadFailed": "主题加载失败"
+      },
       "featureFlags": "功能开关",
       "noFeatures": "未定义功能开关",
       "apiError": "API 错误",

@@ -48,72 +48,119 @@
 }
 
 /* --- Theme variants ---
-   "black" (default) is the palette above; each variant below only retints
-   the accent-related tokens (bg/border/typography stay identical) so every
-   existing component keeps its structure and only the highlight color shifts. */
+   "black" (default) is the palette above. Red/green/yellow are light themes
+   with white base surfaces and a single accent; Stardust is a black celestial
+   theme with its own geometry treatment. */
 :root[data-theme="red"] {
+  --color-bg-primary: #fffafa;
+  --color-bg-secondary: #fff1f1;
+  --color-bg-tertiary: #ffe4e4;
+  --color-bg-elevated: #ffffff;
+  --color-bg-overlay: rgba(68, 20, 20, 0.22);
+
+  --color-text-primary: #241111;
+  --color-text-secondary: #6f3a3a;
+  --color-text-muted: #9c7171;
   --color-accent-primary: #e53d3d;
   --color-accent-dim: rgba(229, 61, 61, 0.18);
-  --color-text-inverse: #fdf2f2;
+  --color-text-inverse: #ffffff;
+  --color-border-subtle: rgba(229, 61, 61, 0.14);
+  --color-border-default: rgba(229, 61, 61, 0.26);
+  --color-border-strong: rgba(229, 61, 61, 0.44);
   --glow: 0 0 20px rgba(229, 61, 61, 0.25);
 }
 
 :root[data-theme="green"] {
+  --color-bg-primary: #fbfffc;
+  --color-bg-secondary: #effbf3;
+  --color-bg-tertiary: #dcf7e5;
+  --color-bg-elevated: #ffffff;
+  --color-bg-overlay: rgba(13, 62, 32, 0.22);
+
+  --color-text-primary: #0d2416;
+  --color-text-secondary: #315d42;
+  --color-text-muted: #6f947c;
   --color-accent-primary: #1ed760;
   --color-accent-dim: rgba(30, 215, 96, 0.18);
-  --color-text-inverse: #05170c;
+  --color-text-inverse: #ffffff;
+  --color-border-subtle: rgba(30, 215, 96, 0.14);
+  --color-border-default: rgba(30, 215, 96, 0.26);
+  --color-border-strong: rgba(30, 215, 96, 0.44);
   --glow: 0 0 20px rgba(30, 215, 96, 0.25);
 }
 
 :root[data-theme="yellow"] {
+  --color-bg-primary: #fffdf4;
+  --color-bg-secondary: #fff8d9;
+  --color-bg-tertiary: #ffefad;
+  --color-bg-elevated: #ffffff;
+  --color-bg-overlay: rgba(79, 62, 0, 0.22);
+
+  --color-text-primary: #241d04;
+  --color-text-secondary: #68581d;
+  --color-text-muted: #978a5a;
   --color-accent-primary: #f5c518;
   --color-accent-dim: rgba(245, 197, 24, 0.18);
   --color-text-inverse: #1a1400;
+  --color-border-subtle: rgba(245, 197, 24, 0.18);
+  --color-border-default: rgba(245, 197, 24, 0.32);
+  --color-border-strong: rgba(245, 197, 24, 0.52);
   --glow: 0 0 20px rgba(245, 197, 24, 0.25);
 }
 
-/* "stardust" is a fuller reskin, not just an accent retint: a light celestial
-   theme for the Stardust virtual singer, built from white/lavender space,
-   violet-blue vocals, and warm yellow star geometry. */
+/* "stardust" is a fuller reskin, not just an accent retint: a black celestial
+   theme for the Stardust virtual singer, keyed to gray-white hair, cobalt-blue
+   glow, yellow eyes/star light, dark blue dress tones, and octahedral geometry. */
 :root[data-theme="stardust"] {
-  --color-bg-primary: #fffdf8;
-  --color-bg-secondary: #f8f3ff;
-  --color-bg-tertiary: #eeeaff;
-  --color-bg-elevated: rgba(255, 255, 255, 0.82);
-  --color-bg-overlay: rgba(54, 42, 120, 0.22);
+  --color-bg-primary: #050611;
+  --color-bg-secondary: #0b1024;
+  --color-bg-tertiary: #12193a;
+  --color-bg-elevated: rgba(15, 21, 48, 0.84);
+  --color-bg-overlay: rgba(5, 6, 17, 0.72);
 
-  --color-text-primary: #241a4f;
-  --color-text-secondary: #5e5596;
-  --color-text-muted: #9188ba;
-  --color-text-inverse: #fffdf8;
+  --color-text-primary: #f4f7ff;
+  --color-text-secondary: #c4ccff;
+  --color-text-muted: #7f8ac4;
+  --color-text-inverse: #050611;
 
-  --color-accent-primary: #6b63ff;
-  --color-accent-dim: rgba(107, 99, 255, 0.16);
-  --color-stardust-blue: #6fc7ff;
-  --color-stardust-violet: #9a7bff;
+  --color-accent-primary: #4d5dff;
+  --color-accent-dim: rgba(77, 93, 255, 0.2);
+  --color-stardust-blue: #1c7bff;
+  --color-stardust-violet: #7a4dff;
   --color-stardust-gold: #ffd64a;
 
-  --color-border-subtle: rgba(107, 99, 255, 0.14);
-  --color-border-default: rgba(107, 99, 255, 0.28);
-  --color-border-strong: rgba(107, 99, 255, 0.48);
+  --color-border-subtle: rgba(77, 93, 255, 0.18);
+  --color-border-default: rgba(77, 93, 255, 0.34);
+  --color-border-strong: rgba(77, 93, 255, 0.56);
 
-  --glow: 0 0 26px rgba(107, 99, 255, 0.24), 0 0 18px rgba(255, 214, 74, 0.2);
+  --glow: 0 0 30px rgba(28, 123, 255, 0.36), 0 0 20px rgba(255, 214, 74, 0.28);
 }
 
-/* .navbar/.player-bar paint hardcoded rgba() backgrounds, so the stardust
-   reskin needs explicit light-glass overrides. */
+/* .navbar/.player-bar paint hardcoded rgba() backgrounds, so non-default
+   themes need explicit glass overrides. */
+:root[data-theme="red"] .navbar,
+:root[data-theme="red"] .player-bar,
+:root[data-theme="green"] .navbar,
+:root[data-theme="green"] .player-bar,
+:root[data-theme="yellow"] .navbar,
+:root[data-theme="yellow"] .player-bar {
+  background: rgba(255, 255, 255, 0.84);
+  border-color: var(--color-border-subtle);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.06);
+}
+
 :root[data-theme="stardust"] .navbar,
 :root[data-theme="stardust"] .player-bar {
-  background: rgba(255, 253, 248, 0.74);
-  border-color: rgba(107, 99, 255, 0.2);
-  box-shadow: 0 10px 34px rgba(107, 99, 255, 0.08);
+  background: rgba(5, 6, 17, 0.76);
+  border-color: rgba(255, 214, 74, 0.18);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.32), 0 0 26px rgba(22, 120, 255, 0.12);
 }
 
 :root[data-theme="stardust"] body {
   background:
-    radial-gradient(circle at 12% 8%, rgba(255, 214, 74, 0.22), transparent 24rem),
-    radial-gradient(circle at 86% 14%, rgba(111, 199, 255, 0.22), transparent 28rem),
-    radial-gradient(circle at 55% 95%, rgba(154, 123, 255, 0.2), transparent 30rem),
+    radial-gradient(circle at 12% 8%, rgba(255, 214, 74, 0.2), transparent 24rem),
+    radial-gradient(circle at 86% 14%, rgba(28, 123, 255, 0.34), transparent 28rem),
+    radial-gradient(circle at 55% 95%, rgba(122, 77, 255, 0.3), transparent 30rem),
     var(--color-bg-primary);
 }
 
@@ -121,19 +168,19 @@
 :root[data-theme="stardust"] .settings-section,
 :root[data-theme="stardust"] .modal,
 :root[data-theme="stardust"] .browser-card {
-  background: linear-gradient(145deg, rgba(255,255,255,0.86), rgba(248,243,255,0.72));
-  border-color: rgba(107, 99, 255, 0.18);
-  box-shadow: 0 18px 48px rgba(107, 99, 255, 0.08), inset 0 1px 0 rgba(255,255,255,0.86);
+  background: linear-gradient(145deg, rgba(15,21,48,0.9), rgba(5,6,17,0.78));
+  border-color: rgba(255, 214, 74, 0.16);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255,255,255,0.08);
   backdrop-filter: blur(16px);
 }
 
 :root[data-theme="stardust"] .btn-primary {
   background: linear-gradient(135deg, var(--color-accent-primary), var(--color-stardust-violet));
   border-color: transparent;
-  color: #fffdf8;
+  color: #fffefd;
 }
 :root[data-theme="stardust"] .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #7c75ff, #b293ff);
+  background: linear-gradient(135deg, #4d75ff, #735ce0);
   box-shadow: var(--glow);
 }
 :root[data-theme="stardust"] .btn-secondary:hover:not(:disabled) {
