@@ -1,6 +1,6 @@
 # Development
 
-Local dev workflow, type-checking, running tests, and applying database migrations outside of a full deploy.
+Local dev workflow, type-checking, running tests, and applying the database schema outside of a full deploy.
 
 ## Commands
 
@@ -27,15 +27,21 @@ find test -name '*.test.ts' -exec npx tsx {} \;
 cd web && npx vue-tsc --noEmit
 ```
 
-## Apply a DB migration
+## Apply the DB schema
+
+`worker/migrations/Schema.sql` is the single source of truth — no incremental
+patch files are kept or shipped. It is fully idempotent (`IF NOT EXISTS` /
+`INSERT OR IGNORE`), so a fresh deployment executes it once and re-running it
+on an existing database is safe. Schema changes are made by editing
+Schema.sql and re-applying it:
 
 ```bash
-./deploy.sh --migrate worker/migrations/0031_s3_source.sql
+./deploy.sh --migrate worker/migrations/Schema.sql
 ```
 
 Or without a full deploy:
 
 ```bash
 cd worker
-npx wrangler d1 execute edgesonic-db --remote --file migrations/0031_s3_source.sql
+npx wrangler d1 execute edgesonic-db --remote --file migrations/Schema.sql
 ```

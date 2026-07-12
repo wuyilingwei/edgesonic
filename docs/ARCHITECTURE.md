@@ -20,7 +20,7 @@ edgesonic/
 │   │   ├── utils/        # SigV4, tag I/O, work queue helpers, …
 │   │   └── index.ts      # Worker entry point
 │   ├── migrations/
-│   │   └── Schema.sql    # Single-file schema (fresh install); per-release incremental .sql files alongside
+│   │   └── Schema.sql    # Single-file schema — the single source of truth (idempotent; no incremental patches)
 │   ├── wrangler.toml.example   # Sanitised template — copy → wrangler.toml and fill in IDs
 │   └── SECRETS.md        # Which Worker Secrets to set and why
 │

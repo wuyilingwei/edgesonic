@@ -246,8 +246,9 @@ assert(mapSong({ ...physRow, duration: null }, "al-9").duration === 207,
 const mediaSrc = readFileSync(join(here, "../../worker/src/endpoints/subsonic/media.ts"), "utf-8");
 assert(mediaSrc.includes('getFeatureString(env, "enable_webdav_presign", "0")'),
   "webdav presign code default is 0");
-const migration35 = readFileSync(join(here, "../../worker/migrations/0035_webdav_presign_default_off.sql"), "utf-8");
-assert(migration35.includes("SET value = '0'"), "migration 0035 flips existing rows to 0");
+const schemaSql = readFileSync(join(here, "../../worker/migrations/Schema.sql"), "utf-8");
+assert(schemaSql.includes("('enable_webdav_presign', '0'"),
+  "Schema.sql seeds enable_webdav_presign default 0");
 
 // ---------------------------------------------------------------------------
 console.log(`\n${passed + failed} checks, ${passed} passed, ${failed} failed`);
