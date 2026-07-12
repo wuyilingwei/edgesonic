@@ -9,7 +9,7 @@
 //
 // Coverage:
 //  1. subsonic credential + feature on + raw r2 instance → 302 with SigV4 Location
-//   2. browser session + feature on                      → 200 in-Worker stream (fallback)
+//   2. browser session + feature on                      → 302 (138 — re-enabled; R2 302 no longer blocked for browser sessions)
 //   3. feature off                                       → 200 in-Worker stream (fallback)
 //   4. secrets missing                                   → 200 fallback (no 302)
 //   5. needsTranscode (format=mp3 mismatch)              → 200 (transcode/raw fallback, no 302)
@@ -232,7 +232,7 @@ async function main() {
     assert(loc.includes("/music/album/track.flac"), "Location path has key");
   }
 
-  console.log("\nstream: browser session + feature on + secrets set + raw r2 → 200 same-origin proxy");
+  console.log("\nstream: browser session + feature on + secrets set + raw r2 → 302 (138 re-enabled)");
   {
     const sqlite = buildDb();
     setFeature(sqlite, "enable_r2_presign", "1");
@@ -242,9 +242,10 @@ async function main() {
       CF_ACCOUNT_ID: "df4481f3ce1fa0394b4617442a97d147",
     }, "session");
     const r = await get("/rest/stream?id=sm-1&format=raw");
-    assert(r.status === 200, `200 fallback (got ${r.status})`);
-    assert(r.headers.get("Location") === null, "no cross-origin R2 redirect for browser sessions");
-    assert(r.headers.get("Accept-Ranges") === "bytes", "same-origin proxy still supports byte ranges");
+    assert(r.status === 302, `302 (got ${r.status})`);
+    const loc = r.headers.get("Location") || "";
+    assert(loc.startsWith("https://edgesonic-music.df4481f3ce1fa0394b4617442a97d147.r2.cloudflarestorage.com/"),
+      "browser session also redirects to R2 (138 fix)");
   }
 
   console.log("\nstream: feature off → 200 in-Worker stream (fallback)");

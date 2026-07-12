@@ -1,6 +1,6 @@
 //
 // Coverage:
-//  1. Feature ON → response carries COOP=same-origin, COEP=require-corp,
+//  1. Feature ON → response carries COOP=same-origin, COEP=credentialless,
 //                  CORP=same-origin on a vanilla handler.
 //  2. Feature OFF ('0' in feature_strings) → response carries NONE of the
 //                  three headers (middleware skips entirely).
@@ -146,8 +146,8 @@ async function run() {
     assert(r.status === 200, "200 OK");
     assert(r.headers.get("Cross-Origin-Opener-Policy") === "same-origin",
       "COOP same-origin");
-    assert(r.headers.get("Cross-Origin-Embedder-Policy") === "require-corp",
-      "COEP require-corp");
+    assert(r.headers.get("Cross-Origin-Embedder-Policy") === "credentialless",
+      "COEP credentialless");
     assert(r.headers.get("Cross-Origin-Resource-Policy") === "same-origin",
       "CORP same-origin default");
   }
@@ -181,7 +181,7 @@ async function run() {
     const r = await app.request("/ping");
     assert(r.headers.get("Cross-Origin-Opener-Policy") === "same-origin",
       "missing row → COOP still stamped (fallback '1')");
-    assert(r.headers.get("Cross-Origin-Embedder-Policy") === "require-corp",
+    assert(r.headers.get("Cross-Origin-Embedder-Policy") === "credentialless",
       "missing row → COEP still stamped");
   }
 
@@ -213,7 +213,7 @@ async function run() {
     assert(await r.text() === "share:abc", "share body intact");
     assert(r.headers.get("Cross-Origin-Opener-Policy") === "same-origin",
       "share inherits COOP");
-    assert(r.headers.get("Cross-Origin-Embedder-Policy") === "require-corp",
+    assert(r.headers.get("Cross-Origin-Embedder-Policy") === "credentialless",
       "share inherits COEP");
     assert(r.headers.get("Cross-Origin-Resource-Policy") === "same-origin",
       "share inherits CORP=same-origin (Part F default)");

@@ -5,6 +5,8 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 import { setLocale, SUPPORTED_LOCALES, type AppLocale } from "../i18n";
 import { setTheme, activeTheme, SUPPORTED_THEMES, type AppTheme } from "../theme";
+import { ensureBuiltinThemeLoaded } from "../themes/builtin";
+import { getTheme, registeredThemeIds, externalThemeIds, loadExternalTheme, unregisterExternalTheme } from "../themes/registry";
 import PermissionsMatrix from "../components/PermissionsMatrix.vue";
 import { useWorkerPool } from "../stores/workerPool";
 
@@ -43,6 +45,58 @@ function onLocaleChange(e: Event) {
 // === Common: theme ===
 function onThemeChange(next: AppTheme) {
   setTheme(next);
+}
+
+// Built-ins are always offered even before their module has loaded
+// (selecting one triggers the load, see theme.ts's applyTheme); externally
+// registered themes are appended once loaded. `registeredThemeIds()` reads
+// a reactive Map, so this recomputes as soon as a lazy built-in or
+// external theme finishes registering — no manual refresh needed.
+const pickerThemeIds = computed(() => {
+  const known = new Set<string>(SUPPORTED_THEMES);
+  const extra = registeredThemeIds().filter((id) => !known.has(id));
+  return [...SUPPORTED_THEMES, ...extra];
+});
+function themeTitle(id: string): string {
+  return (SUPPORTED_THEMES as readonly string[]).includes(id)
+    ? t(`settings.common.themeOptions.${id}`)
+    : (getTheme(id)?.label ?? id);
+}
+function themeSwatchStyle(id: string): Record<string, string> {
+  const preview = getTheme(id)?.swatchPreview;
+  return preview ? { background: preview } : {};
+}
+onMounted(() => {
+  // Warm every built-in theme's module so the picker's swatches/titles are
+  // ready without waiting on a click.
+  for (const id of SUPPORTED_THEMES) void ensureBuiltinThemeLoaded(id);
+});
+
+// === Common: external themes ===
+// Loading a theme from a URL dynamically imports and executes that URL's
+// JS in this origin — the same trust level as adding a <script src="...">
+// tag. Only ever point this at a theme you wrote or explicitly trust.
+const externalThemeUrl = ref("");
+const externalThemeBusy = ref(false);
+const loadedExternalThemeIds = computed(() => externalThemeIds());
+async function addExternalTheme() {
+  const url = externalThemeUrl.value.trim();
+  if (!url) return;
+  externalThemeBusy.value = true;
+  try {
+    const def = await loadExternalTheme(url);
+    externalThemeUrl.value = "";
+    showToast(t("settings.common.externalTheme.loaded", { id: def.id }));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    showToast(`${t("settings.common.externalTheme.loadFailed")}: ${msg}`, "error");
+  } finally {
+    externalThemeBusy.value = false;
+  }
+}
+function removeExternalTheme(id: string) {
+  if (activeTheme.value === id) setTheme("black");
+  unregisterExternalTheme(id);
 }
 
 // === Common: features + instance ===
@@ -1059,14 +1113,46 @@ onMounted(() => {
             <span class="feature-desc">{{ t("settings.common.themeDesc") }}</span>
             <div class="theme-swatches">
               <button
-                v-for="th in SUPPORTED_THEMES"
+                v-for="th in pickerThemeIds"
                 :key="th"
                 type="button"
                 class="theme-swatch"
-                :class="[`theme-swatch-${th}`, { active: activeTheme === th }]"
-                :title="t(`settings.common.themeOptions.${th}`)"
+                :class="{ active: activeTheme === th }"
+                :style="themeSwatchStyle(th)"
+                :title="themeTitle(th)"
                 @click="onThemeChange(th)"
               />
+            </div>
+          </div>
+        </div>
+
+        <!-- External themes -->
+        <div class="sub-block">
+          <div class="sub-header"><span class="mono-label">{{ t("settings.common.externalTheme.title") }}</span></div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.externalTheme.desc") }}
+          </p>
+          <div class="tc-row">
+            <input
+              v-model="externalThemeUrl"
+              type="text"
+              class="form-input"
+              :placeholder="t('settings.common.externalTheme.placeholder')"
+              autocomplete="off"
+              @keydown.enter="addExternalTheme"
+            />
+          </div>
+          <div class="tc-actions">
+            <button class="btn-primary" :disabled="externalThemeBusy || !externalThemeUrl.trim()" @click="addExternalTheme">
+              {{ t("settings.common.externalTheme.load") }}
+            </button>
+          </div>
+          <div v-if="loadedExternalThemeIds.length" class="external-theme-list">
+            <div v-for="id in loadedExternalThemeIds" :key="id" class="external-theme-row">
+              <span class="external-theme-id">{{ getTheme(id)?.label ?? id }}</span>
+              <button class="btn-secondary btn-sm" @click="removeExternalTheme(id)">
+                {{ t("settings.common.externalTheme.remove") }}
+              </button>
             </div>
           </div>
         </div>
@@ -2112,14 +2198,19 @@ onMounted(() => {
 }
 .theme-swatch:hover { transform: scale(1.1); }
 .theme-swatch.active { border-color: var(--color-text-primary); }
-.theme-swatch-black { background: #0a0a0b; }
-.theme-swatch-red { background: #e53d3d; }
-.theme-swatch-green { background: #1ed760; }
-.theme-swatch-yellow { background: #f5c518; }
-.theme-swatch-stardust {
-  background:
-    radial-gradient(circle at 72% 24%, #ffd64a 0 12%, transparent 13%),
-    linear-gradient(135deg, #fffdf8 0 28%, #eeeaff 28% 48%, #6b63ff 48% 76%, #6fc7ff 100%);
+
+.external-theme-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.6rem; }
+.external-theme-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 3px;
+}
+.external-theme-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  color: var(--color-text-primary);
 }
 
 .feature-list { display: flex; flex-direction: column; }

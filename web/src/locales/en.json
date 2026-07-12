@@ -374,6 +374,15 @@
         "yellow": "Yellow",
         "stardust": "Stardust"
       },
+      "externalTheme": {
+        "title": "External Themes",
+        "desc": "Load a theme module from a URL. This runs that URL's JavaScript in EdgeSonic — only load themes you wrote or explicitly trust.",
+        "placeholder": "https://example.com/my-theme.js",
+        "load": "Load",
+        "remove": "Remove",
+        "loaded": "Loaded theme \"{id}\"",
+        "loadFailed": "Failed to load theme"
+      },
       "featureFlags": "Feature Flags",
       "noFeatures": "NO FEATURE FLAGS DEFINED",
       "apiError": "API ERROR",

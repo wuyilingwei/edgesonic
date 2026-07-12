@@ -8,6 +8,37 @@ import type { User } from "./types/entities";
 
 export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 
+const SESSION_COOKIE = "edgesonic_session";
+
+function parseSessionCookie(cookieHeader: string): string | null {
+  for (const part of cookieHeader.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq < 0) continue;
+    const k = part.slice(0, eq).trim();
+    const v = part.slice(eq + 1).trim();
+    if (k === SESSION_COOKIE && v) return v;
+  }
+  return null;
+}
+
+// Cookie-based session lookup used by the authMiddleware when the request
+// arrives without Subsonic signed params (the SPA's same-origin fetches
+// after the httpOnly-cookie login; see /edgesonic/auth/login). Returns the
+// same shape as findSubsonicCredentialByPassword so the caller can drop the
+// result straight into the authMethod === "session" path.
+async function findSessionByCookie(
+  db: D1Database,
+  cookieToken: string,
+): Promise<{ credential: string; kind: "session"; streamProxyStrategy: string } | null> {
+  const row = await db
+    .prepare("SELECT token FROM sessions WHERE token = ? AND expires_at > ?")
+    .bind(cookieToken, Math.floor(Date.now() / 1000))
+    .first<{ token: string }>();
+  if (!row) return null;
+  await renewSessionIfNeeded(db, row.token);
+  return { credential: row.token, kind: "session", streamProxyStrategy: "always" };
+}
+
 // ============================================================================
 // Path Classification
 // ============================================================================
@@ -230,7 +261,7 @@ async function lookupUser(db: D1Database, username: string): Promise<User | null
 // ============================================================================
 export const authMiddleware = createMiddleware<{
   Bindings: Env;
-  Variables: { user: User; authMethod: AuthMethod; streamProxyStrategy?: string };
+  Variables: { user: User; authMethod: AuthMethod; authSource?: "cookie" | "query"; streamProxyStrategy?: string };
 }>(async (c, next) => {
   const path = new URL(c.req.url).pathname;
 
@@ -295,6 +326,31 @@ export const authMiddleware = createMiddleware<{
     if (apiKeyRow && !username) username = apiKeyRow.username;
   }
 
+  // HttpOnly-cookie SPA session: the cookie carries the session token
+  // after /edgesonic/auth/login. SPA fetches arrive either with no `u`
+  // (preferred) or with `u` matching the cookie's owner (legacy). Third-party
+  // Subsonic clients never carry our cookie, so this branch only costs a
+  // D1 round-trip for requests that actually came from the SPA — and it's
+  // skipped entirely when an apiKey path is in play.
+  const cookieToken = parseSessionCookie(c.req.header("Cookie") || "");
+  let cookieSession: { credential: string; kind: "session"; streamProxyStrategy: string } | null = null;
+  let cookieUsername: string | null = null;
+  if (cookieToken && !apiKey) {
+    cookieSession = await findSessionByCookie(db, cookieToken);
+    if (cookieSession) {
+      const sessUser = await db
+        .prepare("SELECT username FROM sessions WHERE token = ?")
+        .bind(cookieToken)
+        .first<{ username: string }>();
+      if (sessUser) cookieUsername = sessUser.username;
+      // Only fill username from the cookie when the request didn't claim
+      // one already; the cross-user mismatch case is rejected below in the
+      // auth-method chain (cookieSession && cookieUsername !== username
+      // falls through to auth-fail).
+      if (!username && cookieUsername) username = cookieUsername;
+    }
+  }
+
   if (!username) {
     return authFail(40, "Missing username", 401);
   }
@@ -306,27 +362,40 @@ export const authMiddleware = createMiddleware<{
 
   // --- Authenticate (records which credential type succeeded) ---
   let authMethod: AuthMethod | null = null;
+  let authSource: "cookie" | "query" | null = null;
 
   if (apiKey) {
     if (apiKeyRow?.username === username) {
       authMethod = "apikey";
+      authSource = "query";
     }
   } else if (token && salt) {
     // Subsonic token auth: subsonic_credentials or web session token
     const cred = await findSubsonicCredential(db, username, token, salt);
     if (cred) {
       authMethod = cred.kind;
+      authSource = "query";
       c.set("streamProxyStrategy", cred.streamProxyStrategy);
     }
   } else if (q.p) {
     const cred = await findSubsonicCredentialByPassword(db, username, q.p);
     if (cred) {
       authMethod = cred.kind;
+      authSource = "query";
       c.set("streamProxyStrategy", cred.streamProxyStrategy);
     }
+  } else if (cookieSession && cookieUsername === username) {
+    // SPA cookie path: cookie already validated above. The strict equality
+    // also rejects a request that arrives with `u=attacker` and the
+    // victim's cookie — if the claimed username doesn't match the row the
+    // cookie belongs to, we fall through to auth-fail.
+    authMethod = "session";
+    authSource = "cookie";
+    c.set("streamProxyStrategy", cookieSession.streamProxyStrategy);
   }
 
   if (apiKey && authMethod === "apikey") {
+    authSource = "query";
     c.set("streamProxyStrategy", "always");
   }
 
@@ -358,18 +427,26 @@ export const authMiddleware = createMiddleware<{
     }
   }
 
-  // --- Session-Only Guard (credential-type gating, replaces UA sniffing) ---
-  // The /tag /storage /edgesonic buckets are management-only and uniformly
-  // demand a web session credential. Inside /rest/* a handful of management-
-  // shaped endpoints (changePassword, share/podcast/radio CUD, download) still
-  // need the same protection — REST_SESSION_ONLY_PATHS lists those.
-  const needsSession = isMgmt || REST_SESSION_ONLY_PATHS.has(path);
-  if (needsSession && authMethod !== "session") {
+  // --- Credential-source guard ---
+  // Built-in management APIs (/tag /storage /edgesonic) are browser-only and
+  // require the HttpOnly cookie session. /rest/* remains protocol-compatible:
+  // third-party clients can keep using token+salt / apiKey / plain password,
+  // while same-origin browser requests may also authenticate by cookie.
+  if (isMgmt && (authMethod !== "session" || authSource !== "cookie")) {
+    return authFail(50, "This endpoint requires a browser cookie session", 403);
+  }
+
+  // Inside /rest/* a handful of management-shaped endpoints (changePassword,
+  // share/podcast/radio CUD, download) still need a session credential, but it
+  // may be either the browser cookie or the legacy web-session token+salt path
+  // for REST compatibility.
+  if (REST_SESSION_ONLY_PATHS.has(path) && authMethod !== "session") {
     return authFail(50, "This endpoint requires a web session credential", 403);
   }
 
   c.set("user", user);
   c.set("authMethod", authMethod);
+  if (authSource) c.set("authSource", authSource);
   return next();
 });
 
@@ -386,7 +463,7 @@ export const authMiddleware = createMiddleware<{
 export const permissionMiddleware = (requiredPermission: string) =>
   createMiddleware<{
     Bindings: Env;
-    Variables: { user: User; authMethod: AuthMethod; streamProxyStrategy?: string };
+    Variables: { user: User; authMethod: AuthMethod; authSource?: "cookie" | "query"; streamProxyStrategy?: string };
   }>(async (c, next) => {
     const user = c.get("user");
     const enabled = await hasPermission(c.env, user, requiredPermission);

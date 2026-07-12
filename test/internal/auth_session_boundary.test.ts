@@ -5,18 +5,19 @@
 // before this file.
 //
 // Boundary rule (auth.ts): `/tag/*`, `/storage/*`, `/edgesonic/*` are
-// management surfaces and require authMethod === "session" — a leaked
-// apiKey or Subsonic client password (subsonic_credentials) must never reach
-// them, only a real browser login session. `/rest/*` (the Subsonic protocol
-// surface) accepts any of the three credential kinds.
+// management surfaces and require the HttpOnly browser cookie session — a
+// leaked apiKey, Subsonic client password, or even a web-session token used as
+// Subsonic t+s must never reach them. `/rest/*` (the Subsonic protocol
+// surface) stays compatible with token+salt / apiKey / plain password and also
+// accepts the browser cookie path (covered by auth_cookie_session.test.ts).
 //
 // Coverage:
 //  1. apiKey → 200 on /rest/*, 403 on /tag/*, /storage/*, /edgesonic/*
 //  2. subsonic_cred (t+s against subsonic_credentials) → 200 on /rest/*,
 //     403 on all three management prefixes
 //  3. session (t+s against the sessions table, i.e. the web app's own login
-//     token used as a Subsonic credential) → 200 on /rest/* AND all three
-//     management prefixes (the one credential kind allowed everywhere)
+//     token used as a Subsonic credential) → 200 on /rest/*, 403 on all three
+//     management prefixes because built-in APIs are cookie-only.
 //  4. Session auto-renew: expires_at bumped to now+24h when under the 20h
 //     threshold; left untouched when comfortably far from expiry (no
 //     unnecessary D1 write)
@@ -146,7 +147,7 @@ async function main() {
     }
   }
 
-  console.log("\nsession (web login token as t+s) → 200 on /rest AND all three management prefixes:");
+  console.log("\nsession (web login token as t+s) → 200 on /rest, 403 on management prefixes:");
   {
     const sqlite = buildDb();
     const sessionToken = "web-session-token-abc";
@@ -164,7 +165,7 @@ async function main() {
       const s = `salt-${p}`;
       const t = md5(sessionToken + s);
       const r = await get(p, `u=alice&t=${t}&s=${s}`);
-      assert(r.status === 200, `${p} 200 for session (got ${r.status})`);
+      assert(r.status === 403, `${p} 403 for query-session (got ${r.status})`);
     }
   }
 

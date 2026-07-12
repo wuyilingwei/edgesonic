@@ -7,6 +7,20 @@ const TAG_BASE = "/tag";
 const STORAGE_BASE = "/storage";
 const EDGESONIC_BASE = "/edgesonic";
 
+function audioMimeFromName(name: string): string | null {
+  const suffix = name.split(".").pop()?.toLowerCase() || "";
+  switch (suffix) {
+    case "flac": return "audio/flac";
+    case "mp3": return "audio/mpeg";
+    case "m4a": return "audio/mp4";
+    case "aac": return "audio/aac";
+    case "ogg": return "audio/ogg";
+    case "opus": return "audio/opus";
+    case "wav": return "audio/wav";
+    default: return null;
+  }
+}
+
 export function md5(input: string): string {
   const bytes = new TextEncoder().encode(input);
   const nblk = ((bytes.length + 8) >> 6) + 1;
@@ -45,7 +59,17 @@ export function md5(input: string): string {
 interface LoginResult { ok: boolean; name?: string; level?: number; error?: string; }
 
 // Module-level singleton state so every component shares the same reactive auth.
-const token = ref(localStorage.getItem("edgesonic_auth") || "");
+//
+// After the httpOnly-cookie login upgrade the SPA no longer keeps the
+// session token in JS-readable storage: the browser carries
+// `edgesonic_session` as an HttpOnly+Secure+SameSite=Lax cookie and
+// attaches it to every same-origin request (fetch / <audio> / <img> /
+// XHR). `token` here is just a non-secret "I am logged in" flag held in
+// localStorage so `isLoggedIn`, the router guard and the player store can
+// answer "are we authenticated" without ever touching the credential
+// itself. The backend rejects management calls whose cookie is expired,
+// at which point handleAuthError logs out and bounces to /login.
+const token = ref(localStorage.getItem("edgesonic_logged_in") || "");
 const username = ref(localStorage.getItem("edgesonic_user") || "");
 const level = ref(parseInt(localStorage.getItem("edgesonic_level") || "0"));
 const salt = ref("");
@@ -67,18 +91,24 @@ export function useAuth() {
   }
 
   async function login(u: string, p: string): Promise<LoginResult> {
-    // /edgesonic/auth/login during the API four-bucket refactor).
+    // /edgesonic/auth/login sets the `edgesonic_session` HttpOnly cookie
+    // (see worker/src/endpoints/edgesonic/auth.ts) AND returns the
+    // sessionToken in JSON — the SPA keeps only the non-secret username +
+    // level + a boolean "logged in" marker in localStorage. The cookie
+    // itself is unreadable from JS so an XSS can no longer exfiltrate the
+    // credential the way it could when it was sitting in localStorage.
     const resp = await fetch(`${EDGESONIC_BASE}/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       body: JSON.stringify({ username: u, password: p }),
     });
     const data = await resp.json();
     if (data.ok) {
-      token.value = data.sessionToken;
+      token.value = "1";
       username.value = data.username;
       level.value = data.level;
-      localStorage.setItem("edgesonic_auth", data.sessionToken);
+      localStorage.setItem("edgesonic_logged_in", "1");
       localStorage.setItem("edgesonic_user", data.username);
       localStorage.setItem("edgesonic_level", String(data.level));
       return { ok: true, name: data.username, level: data.level };
@@ -86,22 +116,46 @@ export function useAuth() {
     return { ok: false, error: data.error || "Login failed" };
   }
 
-  function logout() {
+  async function logout() {
     token.value = ""; username.value = ""; level.value = 0;
-    localStorage.removeItem("edgesonic_auth");
+    localStorage.removeItem("edgesonic_logged_in");
     localStorage.removeItem("edgesonic_user");
     localStorage.removeItem("edgesonic_level");
+    // Best-effort: clear the cookie + delete the session row server-side.
+    // If the request fails (offline, worker down) the SPA-side state is
+    // already cleared; the cookie will lapse at its natural 24h expiry
+    // and can't be re-used because the row still exists but the SPA's
+    // logged-in flag is gone so the user is back at /login anyway.
+    try {
+      await fetch(`${EDGESONIC_BASE}/auth/logout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({}),
+      });
+    } catch {
+      // swallow — see above
+    }
   }
 
   /**
-   * Build standard Subsonic auth params, freshly signed per call: t = md5(sessionToken + salt).
+   * Build the Subsonic protocol params for an SPA-side URL or fetch.
+   *
+   * Post httpOnly-cookie upgrade: the SPA does NOT carry the session token
+   * in JS-readable storage, so it can no longer sign `t = md5(token +
+   * salt)` itself. The browser attaches the `edgesonic_session` cookie to
+   * every same-origin request and the backend's authMiddleware
+   * (`findSessionByCookie`) resolves the session from the cookie. We
+   * still emit `u`/`v`/`c` (and any `extra`) so log lines, format
+   * detection and Subsonic spec compliance are preserved; the middleware
+   * ignores `t`/`s`/`p` when they're absent and falls back to the cookie.
+   *
    * A value can be a string[] to emit the same key multiple times (Subsonic's
    * convention for repeatable params like createShare/star's `id`).
    */
   function signedParams(extra?: Record<string, string | string[]>): URLSearchParams {
-    const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
     const params = new URLSearchParams({
-      u: username.value, t: md5(token.value + s), s, v: "1.16.1", c: "EdgeSonicWeb",
+      u: username.value, v: "1.16.1", c: "EdgeSonicWeb",
     });
     for (const [key, value] of Object.entries(extra ?? {})) {
       if (Array.isArray(value)) {
@@ -277,7 +331,7 @@ export function useAuth() {
     return new Promise<string>((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       xhr.open("POST", `${STORAGE_BASE}/files/upload?${qs.toString()}`);
-      xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+      xhr.setRequestHeader("Content-Type", file.type || audioMimeFromName(file.name) || "application/octet-stream");
       if (opts?.onProgress) {
         xhr.upload.onprogress = (e) => {
           if (e.lengthComputable) opts.onProgress!(e.loaded, e.total);
