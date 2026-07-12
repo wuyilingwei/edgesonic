@@ -114,11 +114,20 @@ export function mapSong(
 }
 
 // Child.path — clients (DSub cache layout, Symfonium dedup) want a stable
-// file-ish path. Strip the scheme + source-id prefix off the storage URI
+// file-ish path. For non-R2 URIs strip the scheme + source-id prefix
 // (`webdav://<sourceId>/a/b.flac` → `a/b.flac`); the remainder is opaque but
 // stable, which is all the spec asks for.
+//
+// r2:// URIs have no authority part — everything after the scheme is the
+// object key (`r2://music/A/B/x.flac`), so return the key verbatim. The old
+// authority regex used to eat the leading `music/` segment, which corrupted
+// round-trips when another instance clones us: a key like
+// `music/Music/Album/x.flac` came back as `Music/Album/x.flac` and the clone
+// side re-rooted it outside the canonical lowercase music/ prefix.
 function pathFromStorageUri(uri: string | null | undefined): string | undefined {
   if (!uri) return undefined;
+  const r2 = /^r2:\/\/(.+)$/i.exec(uri);
+  if (r2) return r2[1];
   const m = /^[a-z0-9+.-]+:\/\/[^/]+\/(.+)$/i.exec(uri);
   return m ? m[1] : undefined;
 }
