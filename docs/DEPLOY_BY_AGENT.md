@@ -1,0 +1,165 @@
+# Deploy EdgeSonic — Agent Runbook
+
+> **If you are an AI coding agent** reading this repository in order to
+> deploy EdgeSonic, this document is written for you. Treat each numbered section below as an
+> executable procedure, not background reading. Do not skip the clarification step — guessing an
+> account, project name, or domain on the operator's behalf is the most common way this goes
+> wrong.
+>
+> This is the **agent-run, local `wrangler`** deployment path. It downloads a precompiled package
+> from GitHub Releases so you never need to run `npm ci` / `npm run build:web` yourself. If you
+> want the alternative human/CI-driven path instead, see [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
+## 0. What you'll produce
+
+By the end of this runbook: a live EdgeSonic Worker on the operator's Cloudflare account, D1
+schema applied, R2 bucket bound, one working superadmin login, and a clear list of optional
+secrets left for the operator to configure themselves.
+
+## 1. Ensure `wrangler` is available
+
+```bash
+command -v wrangler || npm install -g wrangler
+wrangler --version
+```
+
+If the install fails (no npm, no network, permission error), stop and report the exact error to
+the operator — do not attempt sudo escalation without asking first.
+
+## 2. Authenticate and clarify the deployment target
+
+```bash
+wrangler whoami
+```
+
+If this fails or shows no login, run `wrangler login` and wait — this opens a browser OAuth flow
+that only the operator can complete. Do not attempt to script around it.
+
+Once logged in, `wrangler whoami` prints a table of every Cloudflare account the token can act
+on. **Before creating anything**, use an interactive clarification tool (e.g. `AskUserQuestion`)
+— or, if none is available, ask in plain text and wait for a reply — to confirm:
+
+1. **Which Cloudflare account** to deploy to, if `wrangler whoami` lists more than one. Never pick
+   one silently.
+2. **The project/Worker name** (this becomes the D1/R2 resource name prefix too). Default
+   suggestion: `edgesonic`.
+3. **The domain to bind**, if any. Either a custom domain the operator already controls in that
+   account's Cloudflare zone, or explicitly "none" to fall back to
+   `<worker-name>.<account>.workers.dev`. Do not try to enumerate zones yourself — `wrangler` has
+   no zone-listing command; just ask.
+
+Hold onto the three answers — they're used throughout step 3.
+
+## 3. Download the precompiled release and deploy
+
+### 3.1 Fetch the latest package
+
+```bash
+curl -s https://api.github.com/repos/wuyilingwei/edgesonic/releases/latest \
+  | grep -o '"browser_download_url": *"[^"]*edgesonic-release.tar.gz"' \
+  | cut -d'"' -f4 > /tmp/edgesonic-release-url.txt
+
+curl -L -o edgesonic-release.tar.gz "$(cat /tmp/edgesonic-release-url.txt)"
+tar xzf edgesonic-release.tar.gz
+cd edgesonic-release
+```
+
+This package (built by `.github/workflows/release.yml`) already contains a built `web/dist` and
+an isolated `worker/node_modules` (just `hono` + `@cloudflare/sandbox`) — there is nothing left to
+compile. If no release exists yet, tell the operator the release pipeline hasn't been run and
+stop (do not fall back to cloning the source repo and building locally without asking first —
+that changes the trust/tooling assumptions of this runbook).
+
+### 3.2 Create Cloudflare resources
+
+Use names derived from the project name confirmed in step 2 (default `edgesonic-db` /
+`edgesonic-music` if the operator kept the `edgesonic` default):
+
+```bash
+cd worker
+wrangler d1 create <project-name>-db          # note the printed database_id
+wrangler r2 bucket create <project-name>-music
+```
+
+D1/R2 are the only resources that need explicit creation. The Durable Object binding (Sandbox
+transcoder container) is declarative — it's already in `wrangler.toml.example`'s
+`[[durable_objects.bindings]]` / `[[migrations]]` blocks and activates automatically on first
+`wrangler deploy`, no separate step needed.
+
+### 3.3 Fill in `wrangler.toml`
+
+```bash
+cp wrangler.toml.example wrangler.toml
+```
+
+Replace these placeholders in `wrangler.toml` with the values gathered above:
+
+| Placeholder | Value |
+|---|---|
+| `name = "edgesonic"` | project name from step 2 |
+| `<YOUR_CLOUDFLARE_ACCOUNT_ID>` | account id from step 2's `wrangler whoami` |
+| `<YOUR_D1_DATABASE_ID>` | `database_id` printed by `wrangler d1 create` |
+| `<YOUR_R2_BUCKET_NAME>` | the R2 bucket name you just created |
+| `<GENERATE_A_UUID>` | a fresh UUID, e.g. `uuidgen` (this is `INSTANCE_ID`, the anti-loop marker) |
+| `<your-domain.example.com>` in the `routes` block | the domain from step 2, **or delete the entire `routes = [...]` block** if the operator chose no custom domain |
+
+### 3.4 Apply the schema and required secret
+
+```bash
+wrangler d1 execute <project-name>-db --remote --config wrangler.toml --file migrations/Schema.sql
+
+openssl rand -base64 48 | wrangler secret put WORK_UPLOAD_HMAC_KEY --config wrangler.toml
+```
+
+`WORK_UPLOAD_HMAC_KEY` is the one secret this runbook can safely generate itself (no operator
+input needed) — see `SECRETS.md` for what it's for. Leave the rest (`CF_API_TOKEN`,
+`CF_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`) for the operator; they each require a
+credential only the operator can create (see step 5).
+
+### 3.5 Deploy
+
+```bash
+VERSION=$(date +%s)
+wrangler deploy --config wrangler.toml --containers-rollout=none --var WORKER_VERSION:"$VERSION"
+```
+
+`--containers-rollout=none` skips building the Sandbox transcoder's Docker image (server-side
+ffmpeg transcoding) — most agent environments don't have Docker available. If the operator
+specifically wants that feature and has Docker running, this flag can be dropped, but default to
+including it.
+
+`wrangler deploy` clears any existing cron schedule on the Worker. Restoring it requires a
+`CF_API_TOKEN`, which the operator hasn't provided yet at this point in the runbook — don't try to
+work around that. Just tell them in step 5 to visit **Settings → Cloudflare → "Ensure default
+cron"** once they've set that secret (see `CF_CRON.md`).
+
+## 4. Create the superadmin account
+
+Generate a random 10-character password and write it straight into D1 — there is no
+auto-provisioned first-run admin in this codebase, this INSERT is the only way an account exists:
+
+```bash
+ADMIN_PASSWORD="$(openssl rand -base64 32 | tr -dc 'A-Za-z0-9' | head -c 10)"
+
+wrangler d1 execute <project-name>-db --remote --config wrangler.toml --command \
+  "INSERT INTO users (username, master_password, level, enabled) VALUES ('admin', hex(sha256('${ADMIN_PASSWORD}')), 3, 1)"
+```
+
+`level = 3` is the superadmin tier (full permission matrix, the only level that can manage other
+admins). Keep `$ADMIN_PASSWORD` in your final report to the operator only — never write it into a
+committed file, a log an operator didn't ask for, or anywhere else it could persist.
+
+## 5. Report completion to the operator
+
+Tell the operator, in English:
+
+- The Worker is live at `https://<name>.<account>.workers.dev` (or their custom domain).
+- Superadmin login: username `admin`, password `<the generated 10-character password>` — shown
+  once, save it now.
+- Deployment used the minimum secret set (`WORK_UPLOAD_HMAC_KEY` only). To finish setup, they
+  should configure the remaining optional keys themselves, per `worker/SECRETS.md`:
+  - `CF_API_TOKEN` + `CF_ACCOUNT_ID` — enables the in-app Cloudflare integration (cron management,
+    analytics) via Settings UI. Also needed to restore the cron schedule that this deploy cleared
+    — after setting it, visit **Settings → Cloudflare → "Ensure default cron"**.
+  - `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY` — optional, enables R2 presigned direct streaming
+    (bypasses Worker bandwidth limits).

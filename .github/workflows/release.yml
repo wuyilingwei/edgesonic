@@ -1,0 +1,101 @@
+name: Release EdgeSonic (precompiled package)
+
+# Builds a self-contained, ready-to-deploy package and publishes it as a
+# GitHub Release asset. Unlike deploy.yml, this workflow needs NO Cloudflare
+# credentials — it only builds and packages. Deployment happens later,
+# wherever the package is downloaded to, via `wrangler`.
+#
+# The package contains a prebuilt web/dist and an isolated worker/node_modules
+# (worker's own runtime deps only — hono + @cloudflare/sandbox), so consuming
+# it never requires `npm ci` / `npm run build:web` again. See
+# docs/DEPLOY_BY_AGENT.md for the consumer-side deploy steps.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish under (e.g. v1.2.3) — required for manual runs"
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: Build & Publish Package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install monorepo dependencies (build tooling)
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build:web
+
+      - name: Install isolated worker runtime dependencies
+        # Deliberately NOT `npm ci` at the repo root — that would also drag in
+        # web's build-time deps (vite/vue/ffmpeg-wasm/...) which the deployed
+        # Worker never touches (web is already compiled to static dist).
+        # A standalone install scoped to worker/package.json keeps the
+        # package minimal and self-contained under worker/node_modules,
+        # matching where wrangler's bundler will look for `hono` /
+        # `@cloudflare/sandbox` when it bundles worker/src/index.ts.
+        working-directory: worker
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Assemble release package
+        run: |
+          set -euo pipefail
+          STAGE="edgesonic-release"
+          rm -rf "$STAGE" "${STAGE}.tar.gz"
+          mkdir -p "$STAGE/web" "$STAGE/worker"
+
+          cp -r web/dist "$STAGE/web/dist"
+
+          cp -r worker/src "$STAGE/worker/src"
+          cp -r worker/migrations "$STAGE/worker/migrations"
+          cp -r worker/transcoder-image "$STAGE/worker/transcoder-image"
+          cp -r worker/node_modules "$STAGE/worker/node_modules"
+          cp worker/wrangler.toml.example "$STAGE/worker/"
+          cp worker/package.json "$STAGE/worker/"
+          cp worker/tsconfig.json "$STAGE/worker/"
+          cp worker/SECRETS.md "$STAGE/worker/"
+          cp worker/CF_CRON.md "$STAGE/worker/"
+
+          cp docs/DEPLOY_BY_AGENT.md "$STAGE/" 2>/dev/null || true
+
+          tar czf "${STAGE}.tar.gz" "$STAGE"
+          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          gh release create "$TAG" \
+            edgesonic-release.tar.gz \
+            edgesonic-release.tar.gz.sha256 \
+            --repo "${{ github.repository }}" \
+            --title "EdgeSonic $TAG" \
+            --generate-notes \
+            --notes "Precompiled deploy package (prebuilt web/dist + isolated worker/node_modules — no npm ci / build needed). See docs/DEPLOY_BY_AGENT.md for how to deploy it."
