@@ -595,7 +595,8 @@ cloneRoutes.post("/clone/upsertUser", permissionMiddleware("manage_users"), asyn
 //      &artist=<...>&album=<...>&filename=<...>&size=<bytes>&originalPath=<...>
 //
 // Writes R2 key from upstream originalPath when available, otherwise falls
-// back to `music/{artist}/{album}/{filename}`, and creates a
+// back to `music/{artist}/{album}/{stem}.{masterIdHash}.{ext}` (see
+// fallbackR2Key for why the hash is needed), and creates a
 // song_instances row (source_type='original', source_id='r2-local',
 // storage_uri=r2://music/...). Idempotent: if a song_instance with the
 // same storage_uri already exists, the R2 put still happens (overwrite)
@@ -643,7 +644,7 @@ async function registerAudioInstance(
     return { ok: false, error: "song_master not found — upsertMaster first", status: 404 };
   }
 
-  const r2Key = originalPathToR2Key(originalPath) || `music/${artistDir}/${albumDir}/${filename}`;
+  const r2Key = originalPathToR2Key(originalPath) || fallbackR2Key(artistDir, albumDir, filename, masterId);
   const r2Object = await env.MUSIC_BUCKET.put(r2Key, body, {
     httpMetadata: { contentType },
   });
@@ -792,7 +793,40 @@ function extToSuffix(filename: string): string {
   return idx > 0 ? filename.substring(idx + 1).toLowerCase() : "";
 }
 
-function originalPathToR2Key(path: string | null | undefined): string | null {
+// Fallback keys are synthesized from artist/album/title, which two distinct
+// songs can legitimately share (same title across discs, remaster vs
+// original, ...). A bare `music/{artist}/{album}/{filename}` would then let
+// the second R2 put silently overwrite the first upload's bytes while both
+// song_instances keep pointing at the single surviving object. Inject a
+// short stable hash of the *local* master id before the extension: distinct
+// masters can never collide, while a re-run of the same master (resume,
+// re-clone after wiping R2) still lands on the same key so the idempotent
+// instance check keeps working. Keys derived from originalPath are exempt —
+// the upstream path itself is the uniqueness source there.
+export function fallbackR2Key(artistDir: string, albumDir: string, filename: string, masterId: string): string {
+  const dot = filename.lastIndexOf(".");
+  const stem = dot > 0 ? filename.substring(0, dot) : filename;
+  const ext = dot > 0 ? filename.substring(dot) : "";
+  return `music/${artistDir}/${albumDir}/${stem}.${fnv1aHex8(masterId)}${ext}`;
+}
+
+// Tiny non-cryptographic FNV-1a (32-bit, hex) — collision-resistant enough
+// to disambiguate same-titled siblings within one album directory.
+function fnv1aHex8(input: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    h ^= input.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+// R2 keys max out at 1024 bytes (UTF-8). Reject well before that so a
+// pathological upstream path falls back to the synthesized key instead of
+// failing the R2 put mid-clone.
+const MAX_R2_KEY_BYTES = 900;
+
+export function originalPathToR2Key(path: string | null | undefined): string | null {
   let clean = (path || "").replace(/\\+/g, "/").replace(/^\s+|\s+$/g, "");
   if (!clean) return null;
   clean = clean.replace(/^[A-Za-z]:\/+/, "").replace(/^\/+/, "");
@@ -802,5 +836,11 @@ function originalPathToR2Key(path: string | null | undefined): string | null {
   const relative = musicIdx >= 0 ? parts.slice(musicIdx) : ["music", ...parts];
   const safe = relative.map((part) => part.replace(/[\u0000-\u001f\u007f]/g, "").trim()).filter(Boolean);
   if (safe.length < 2) return null;
-  return safe.join("/");
+  // Canonicalize the root segment: the case-insensitive match above accepts
+  // "Music"/"MUSIC" but every other subsystem (scan, file browser) treats the
+  // lowercase music/ prefix as the library root — keep the key under it.
+  safe[0] = "music";
+  const key = safe.join("/");
+  if (new TextEncoder().encode(key).byteLength > MAX_R2_KEY_BYTES) return null;
+  return key;
 }
