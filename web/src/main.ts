@@ -42,7 +42,7 @@ router.beforeEach((to) => {
   // first authenticated fetch will 401/403 and handleAuthError redirects
   // to /login anyway, so this guard is purely to avoid a half-loaded SPA
   // flash on a tab that opened after the cookie expired.
-  const loggedIn = !!localStorage.getItem("edgesonic_logged_in") || !!localStorage.getItem("edgesonic_user");
+  const loggedIn = !!localStorage.getItem("edgesonic_logged_in");
   if (!to.meta.public && !loggedIn) return "/login";
   if (to.path === "/login" && loggedIn) return "/";
   return true;

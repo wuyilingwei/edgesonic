@@ -11,6 +11,16 @@ export interface Track {
   duration: number;
 }
 
+interface IncrementalFallbackState {
+  trackId: string;
+  sourceUrl: string;
+  chunks: Blob[];
+  downloaded: number;
+  stepIndex: number;
+  contentType: string;
+  shouldPlay: boolean;
+}
+
 /**
  * Player store — owns two <audio> elements (double buffering) and the queue.
  *
@@ -92,6 +102,189 @@ export const usePlayerStore = defineStore("player", () => {
   let preloaded: { el: HTMLAudioElement; index: number } | null = null;
   // Pending seek position to restore after loadedmetadata fires (page-reload resume).
   let _pendingRestoreTime: number | null = null;
+  const FALLBACK_RANGE_STEPS = [1_200_000, 2_400_000, 4_800_000, 9_600_000];
+  const blobSrcByElement = new WeakMap<HTMLAudioElement, string>();
+  const fallbackAttemptByElement = new WeakMap<HTMLAudioElement, string>();
+  const fallbackStateByElement = new WeakMap<HTMLAudioElement, IncrementalFallbackState>();
+  const fallbackInFlight = new WeakSet<HTMLAudioElement>();
+
+  function revokeBlobSrc(el: HTMLAudioElement) {
+    const blobSrc = blobSrcByElement.get(el);
+    if (blobSrc) {
+      URL.revokeObjectURL(blobSrc);
+      blobSrcByElement.delete(el);
+    }
+  }
+
+  function resetFallbackState(el: HTMLAudioElement) {
+    revokeBlobSrc(el);
+    fallbackAttemptByElement.delete(el);
+    fallbackStateByElement.delete(el);
+  }
+
+  async function blobHeadHex(blob: Blob): Promise<string> {
+    const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(" ");
+  }
+
+  async function logFallbackBlob(label: string, resp: Response, blob: Blob) {
+    console.info("[Player] fallback fetch", {
+      label,
+      status: resp.status,
+      contentType: resp.headers.get("Content-Type") || blob.type || "",
+      contentRange: resp.headers.get("Content-Range") || "",
+      contentLength: resp.headers.get("Content-Length") || "",
+      blobSize: blob.size,
+      headHex: await blobHeadHex(blob),
+    });
+  }
+
+  async function normalizePlayableBlob(blob: Blob): Promise<Blob> {
+    const type = blob.type.toLowerCase();
+    if (!type.includes("flac")) return blob;
+
+    const probe = new Uint8Array(await blob.slice(0, Math.min(blob.size, 1024 * 1024)).arrayBuffer());
+    if (probe.length >= 4 && probe[0] === 0x66 && probe[1] === 0x4c && probe[2] === 0x61 && probe[3] === 0x43) {
+      return blob;
+    }
+
+    let flacOffset = -1;
+    for (let i = 0; i <= probe.length - 4; i++) {
+      if (probe[i] === 0x66 && probe[i + 1] === 0x4c && probe[i + 2] === 0x61 && probe[i + 3] === 0x43) {
+        flacOffset = i;
+        break;
+      }
+    }
+    if (flacOffset <= 0) return blob;
+
+    console.info("[Player] normalized FLAC blob", {
+      removedPrefixBytes: flacOffset,
+      originalSize: blob.size,
+      normalizedSize: blob.size - flacOffset,
+    });
+    return blob.slice(flacOffset, blob.size, blob.type || "audio/flac");
+  }
+
+  async function fetchFullBlob(trackId: string): Promise<Blob> {
+    const { streamUrl, downloadUrl } = useAuth();
+    let lastError: unknown = null;
+    for (const [label, url] of [["download-full", downloadUrl(trackId)], ["stream-full", streamUrl(trackId)]] as const) {
+      try {
+        const resp = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+        if (!resp.ok) throw new Error(`fallback fetch failed: ${resp.status}`);
+        const blob = await resp.blob();
+        await logFallbackBlob(label, resp, blob);
+        return blob;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    throw lastError ?? new Error("fallback fetch failed");
+  }
+
+  async function playFallbackBlob(el: HTMLAudioElement, blob: Blob, resumeAt: number, shouldPlay: boolean) {
+    revokeBlobSrc(el);
+    const playableBlob = await normalizePlayableBlob(blob);
+    const blobSrc = URL.createObjectURL(playableBlob);
+    blobSrcByElement.set(el, blobSrc);
+    el.src = blobSrc;
+    el.load();
+    if (resumeAt > 0) {
+      const onMeta = () => {
+        el.currentTime = Math.min(resumeAt, Number.isFinite(el.duration) ? el.duration : resumeAt);
+        el.removeEventListener("loadedmetadata", onMeta);
+      };
+      el.addEventListener("loadedmetadata", onMeta);
+    }
+    if (shouldPlay) void el.play().catch(() => { playing.value = false; });
+  }
+
+  async function fallbackToFullBlob(el: HTMLAudioElement, trackId: string, resumeAt: number, shouldPlay: boolean) {
+    try {
+      const blob = await fetchFullBlob(trackId);
+      if (el !== active || current.value?.id !== trackId) return;
+      fallbackStateByElement.delete(el);
+      await playFallbackBlob(el, blob, resumeAt, shouldPlay);
+    } catch (e) {
+      console.error("[Player] full-file fallback failed:", e);
+    }
+  }
+
+  async function continueIncrementalFallback(el: HTMLAudioElement, state: IncrementalFallbackState, resumeAt: number, shouldPlay: boolean) {
+    if (el !== active || fallbackInFlight.has(el)) return;
+    const track = current.value;
+    if (!track || track.id !== state.trackId) return;
+
+    fallbackInFlight.add(el);
+    try {
+      while (state.stepIndex < FALLBACK_RANGE_STEPS.length) {
+        const target = FALLBACK_RANGE_STEPS[state.stepIndex++];
+        if (target <= state.downloaded) continue;
+        const resp = await fetch(state.sourceUrl, {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { Range: `bytes=${state.downloaded}-${target - 1}` },
+        });
+        if (!resp.ok) throw new Error(`range fallback fetch failed: ${resp.status}`);
+
+        const chunk = await resp.blob();
+        await logFallbackBlob(`stream-range-${state.downloaded}-${target - 1}`, resp, chunk);
+        if (resp.status === 206) {
+          state.chunks.push(chunk);
+          state.downloaded += chunk.size;
+          state.contentType = state.contentType || chunk.type || resp.headers.get("Content-Type") || "";
+          if (chunk.size < target - (state.downloaded - chunk.size)) state.stepIndex = FALLBACK_RANGE_STEPS.length;
+        } else {
+          state.chunks = [chunk];
+          state.downloaded = chunk.size;
+          state.contentType = chunk.type || resp.headers.get("Content-Type") || state.contentType;
+          state.stepIndex = FALLBACK_RANGE_STEPS.length;
+        }
+
+        if (el !== active || current.value?.id !== state.trackId) return;
+        const blob = new Blob(state.chunks, { type: state.contentType || undefined });
+        await playFallbackBlob(el, blob, resumeAt, state.shouldPlay || shouldPlay);
+        return;
+      }
+    } catch (e) {
+      console.warn("[Player] incremental fallback failed, trying full file:", e);
+      fallbackStateByElement.delete(el);
+    } finally {
+      fallbackInFlight.delete(el);
+    }
+
+    if (el === active && current.value?.id === state.trackId) {
+      await fallbackToFullBlob(el, state.trackId, resumeAt, state.shouldPlay || shouldPlay);
+    }
+  }
+
+  function fallbackAfterDemuxError(el: HTMLAudioElement, failedSrc: string, shouldPlay: boolean) {
+    if (el !== active || !failedSrc) return;
+    const track = current.value;
+    if (!track) return;
+    const resumeAt = Number.isFinite(el.currentTime) ? el.currentTime : currentTime.value;
+
+    if (failedSrc.startsWith("blob:")) {
+      const state = fallbackStateByElement.get(el);
+      if (state) void continueIncrementalFallback(el, state, resumeAt, shouldPlay);
+      return;
+    }
+
+    if (fallbackAttemptByElement.get(el) === failedSrc) return;
+    fallbackAttemptByElement.set(el, failedSrc);
+    const { streamUrl } = useAuth();
+    const state: IncrementalFallbackState = {
+      trackId: track.id,
+      sourceUrl: streamUrl(track.id),
+      chunks: [],
+      downloaded: 0,
+      stepIndex: 0,
+      contentType: "",
+      shouldPlay,
+    };
+    fallbackStateByElement.set(el, state);
+    void continueIncrementalFallback(el, state, resumeAt, shouldPlay);
+  }
 
   function syncBuffered(el: HTMLAudioElement) {
     if (el !== active) return;
@@ -169,11 +362,18 @@ export const usePlayerStore = defineStore("player", () => {
       if (el === active) next();
     });
     el.addEventListener("error", (e) => {
+      const failedSrc = el.currentSrc || el.src;
+      const shouldPlay = playing.value || !el.paused;
       console.error("[Player] audio error event:", el.error ? {
         code: el.error.code,
         message: el.error.message
       } : e, "src =", el.src);
-      if (el === active) playing.value = false;
+      if (el === active) {
+        playing.value = false;
+        if (el.error?.code === 4 && failedSrc) {
+          fallbackAfterDemuxError(el, failedSrc, shouldPlay);
+        }
+      }
     });
     el.addEventListener("stalled", () => {
       console.warn("[Player] stalled event (buffering stalled)");
@@ -203,6 +403,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   function invalidatePreload() {
     if (preloaded) {
+      resetFallbackState(preloaded.el);
       preloaded.el.removeAttribute("src");
       preloaded.el.preload = "auto";
       preloaded.el.load();
@@ -241,6 +442,7 @@ export const usePlayerStore = defineStore("player", () => {
       const next = preloaded.el;
       preloaded = null;
       active!.pause();
+      resetFallbackState(active!);
       active!.removeAttribute("src");
       active!.load();
       active = next;
@@ -248,6 +450,7 @@ export const usePlayerStore = defineStore("player", () => {
       invalidatePreload();
       const { streamUrl } = useAuth();
       active!.pause();
+      resetFallbackState(active!);
       active!.src = streamUrl(track.id);
     }
     active!.volume = volume.value;
@@ -378,7 +581,7 @@ export const usePlayerStore = defineStore("player", () => {
     _pendingRestoreTime = null;
     invalidatePreload();
     for (const el of [elA, elB]) {
-      if (el) { el.pause(); el.removeAttribute("src"); el.load(); }
+      if (el) { el.pause(); resetFallbackState(el); el.removeAttribute("src"); el.load(); }
     }
     queue.value = [];
     index.value = -1;
