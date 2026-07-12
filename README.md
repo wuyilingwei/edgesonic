@@ -120,7 +120,7 @@ The technical reference lives under [`docs/`](docs/):
 |-----|--------|
 | [`DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) | Self-contained deploy runbook for AI coding agents — precompiled release package, no local build |
 | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Monorepo layout, storage backend model, adding an S3-compatible source |
-| [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Dev servers, type-checking, running tests, applying a DB migration |
+| [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Dev servers, type-checking, running tests, applying the DB schema |
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | GitHub Actions CI/CD, Cloudflare resource requirements / free-tier limits |
 | [`SECURITY.md`](docs/SECURITY.md) | What never to commit, where secrets live, anti-loop chain |
 | [`DESIGN.md`](docs/DESIGN.md) | Full backend/frontend design: auth model, capability matrix, adapter interfaces (Chinese) |

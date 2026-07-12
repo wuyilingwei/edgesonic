@@ -120,7 +120,7 @@ npx wrangler d1 execute edgesonic-db --remote --command \
 |-----|--------|
 | [`DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) | 面向 AI agent 的自包含部署手册——用预编译 release 包，无需本地构建 |
 | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Monorepo 目录结构、存储后端模型、如何添加 S3 兼容存储源 |
-| [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发服务器、类型检查、运行测试、应用数据库迁移 |
+| [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发服务器、类型检查、运行测试、应用数据库 Schema |
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | GitHub Actions CI/CD、Cloudflare 资源需求与免费额度 |
 | [`SECURITY.md`](docs/SECURITY.md) | 哪些文件绝不能提交、Secrets 存放位置、防循环链机制 |
 | [`DESIGN.md`](docs/DESIGN.md) | 完整前后端设计文档：鉴权模型、能力矩阵、适配器接口（中文） |

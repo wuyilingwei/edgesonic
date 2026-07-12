@@ -9,11 +9,13 @@
 --  Sources: R2 (primary), WebDAV (external), Subsonic (proxied), URL (direct)
 --           R2 acts as transcode cache for WebDAV/Subsonic sources
 --
--- This file is the complete, idempotent schema. All CREATE statements use
--- IF NOT EXISTS and all seeds use INSERT OR IGNORE / INSERT OR REPLACE so
--- re-running on an existing DB is safe. The individual migration files
--- (0001_initial.sql … 0030_webdav_presign_flag.sql) have been removed; their
--- content is folded into this file.
+-- This file is the complete, idempotent schema and the single source of
+-- truth. All CREATE statements use IF NOT EXISTS and all seeds use
+-- INSERT OR IGNORE / INSERT OR REPLACE so re-running on an existing DB is
+-- safe. The individual migration files (0001_initial.sql …
+-- 0039_clone_id_map.sql) have been removed; their content is folded into
+-- this file. Fresh deployments execute this file once; no incremental
+-- patches are shipped.
 -- ============================================================================
 
 -- ============================================================================
@@ -729,6 +731,12 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
 INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
   ('enable_webdav_presign', '0', 'WebDAV presigned URL direct stream (0=off, 1=on; leaks creds to clients — see 108)', unixepoch());
 
+-- 0033: 101 R2 cost estimation — free-tier allocation setting
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('r2_free_allocation_gb', '10',
+   'GB of R2 free tier (10 GB total) allocated to EdgeSonic for monthly cost estimation',
+   unixepoch());
+
 -- 0034: 103 WebDAV play-through hot cache (default OFF — consumes R2 storage)
 INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
   ('enable_webdav_hotcache', '0',
@@ -805,6 +813,20 @@ CREATE TABLE IF NOT EXISTS lastfm_cache (
   expires_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_lastfm_cache_expires ON lastfm_cache(expires_at);
+
+-- ============================================================================
+-- 25. User Settings (0037)
+-- ============================================================================
+-- Per-user settings (e.g. a personal Last.fm API key that takes precedence
+-- over the system-level feature_strings.lastfm_api_key fallback). General
+-- key/value store for future per-user configuration.
+CREATE TABLE IF NOT EXISTS user_settings (
+  username  TEXT NOT NULL,
+  key       TEXT NOT NULL,
+  value     TEXT NOT NULL DEFAULT '',
+  updated_at INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (username, key)
+);
 
 -- ============================================================================
 -- Auth Flow Summary
