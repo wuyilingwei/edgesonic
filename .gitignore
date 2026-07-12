@@ -21,5 +21,5 @@ dist/
 .DS_Store
 
 # --- 原有 ---
-/docs
+!/docs
 !/test
