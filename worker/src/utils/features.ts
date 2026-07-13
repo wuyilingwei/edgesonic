@@ -75,6 +75,20 @@ export function invalidateFeatureString(env: Env, _key?: string): void {
   envCache(env).str = undefined;
 }
 
+export type RelayPolicy = "allow" | "deny" | "no-cache";
+
+// 178 — the declarative S2S relay policy advertised via getOpenSubsonicExtensions
+// (OpenSubsonic discussion #254). An explicit `server_relay_policy`
+// feature_string wins; otherwise it derives from the `allow_being_proxied`
+// boolean gate so operators who only ever toggled that keep a consistent
+// advertised policy (allow ↔ being-proxied on, deny ↔ off). "no-cache" has no
+// boolean equivalent and must be set explicitly.
+export async function getServerRelayPolicy(env: Env): Promise<RelayPolicy> {
+  const explicit = (await getFeatureString(env, "server_relay_policy", "")).trim();
+  if (explicit === "allow" || explicit === "deny" || explicit === "no-cache") return explicit;
+  return (await getFeature(env, "allow_being_proxied")) ? "allow" : "deny";
+}
+
 // Proxy chain helpers (anti-loop). Chain is a comma-separated list of
 // EdgeSonic INSTANCE_IDs accumulated across proxy hops.
 export function parseChain(raw: string | undefined | null): string[] {

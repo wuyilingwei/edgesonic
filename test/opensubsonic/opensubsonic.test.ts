@@ -74,6 +74,9 @@ async function buildDb() {
       max_rph INTEGER DEFAULT 0,
       PRIMARY KEY (level, permission)
     );
+    CREATE TABLE features (key TEXT PRIMARY KEY, value INTEGER NOT NULL DEFAULT 0, description TEXT, updated_at INTEGER DEFAULT 0);
+    CREATE TABLE feature_strings (key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', description TEXT, updated_at INTEGER DEFAULT 0);
+    INSERT INTO features (key, value) VALUES ('allow_being_proxied', 1);
   `);
 
   // alice = regular user (level 2); bob = admin (level 3); carol = guest (level 1)
@@ -108,7 +111,7 @@ function makeApp(sqlite: DatabaseSync, asUsername: string, asLevel: number, moun
   });
   app.route("/rest", openSubsonicRoutes);
   if (mountAdmin) app.route("/rest", accountRoutes);
-  const env: any = { DB: makeD1(sqlite), KV: { get: async () => null, put: async () => {}, delete: async () => {} } };
+  const env: any = { DB: makeD1(sqlite), INSTANCE_ID: "inst-uuid-1234", KV: { get: async () => null, put: async () => {}, delete: async () => {} } };
   return {
     async hit(method: "GET" | "POST", url: string, body?: any) {
       const init: RequestInit = { method };
@@ -156,6 +159,9 @@ async function main() {
     // shape), so the JSON conversion yields "versions":[1] as a number array.
     assert(xmlHas(body, "<versions>1</versions>"), "versions emitted as child elements");
     assert(!xmlHas(body, 'versions="'), "no legacy versions attribute");
+    // 178 (#254): S2S relay policy + loop-prevention UUID at the response root.
+    assert(xmlHas(body, 'server_relay_policy="allow"'), "advertises server_relay_policy=allow (derived from allow_being_proxied=1)");
+    assert(xmlHas(body, 'server_uuid="inst-uuid-1234"'), "advertises server_uuid = INSTANCE_ID");
 
     // .view alias works
     const r2 = await hit("GET", "/rest/getOpenSubsonicExtensions.view");

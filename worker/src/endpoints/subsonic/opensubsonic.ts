@@ -25,6 +25,7 @@
 
 import { Hono } from "hono";
 import { subsonicOK } from "../../utils/xml";
+import { getServerRelayPolicy } from "../../utils/features";
 import type { User } from "../../types/entities";
 
 export const openSubsonicRoutes = new Hono<{
@@ -57,14 +58,24 @@ const EXTENSIONS: Array<{ name: string; versions: number[]; attrs?: Record<strin
   },
 ];
 
-const extensionsHandler = (c: import("hono").Context) => {
+const extensionsHandler = async (c: import("hono").Context) => {
+  // 178 (OpenSubsonic #254): advertise the declarative S2S relay policy and
+  // this server's loop-prevention UUID at the response root. server_uuid is our
+  // persistent INSTANCE_ID (the same id used in the X-OpenSubsonic-Path /
+  // X-EdgeSonic-Chain loop guard).
+  const env = c.env as Env;
+  const policy = await getServerRelayPolicy(env);
   return c.text(
-    subsonicOK({
-      openSubsonicExtensions: EXTENSIONS.map((ext) => ({
-        _attributes: { name: ext.name, ...(ext.attrs || {}) },
-        versions: ext.versions,
-      })),
-    }),
+    subsonicOK(
+      {
+        openSubsonicExtensions: EXTENSIONS.map((ext) => ({
+          _attributes: { name: ext.name, ...(ext.attrs || {}) },
+          versions: ext.versions,
+        })),
+      },
+      "1.16.1",
+      { server_relay_policy: policy, server_uuid: env.INSTANCE_ID },
+    ),
     200, XML,
   );
 };

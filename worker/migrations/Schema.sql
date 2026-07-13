@@ -696,6 +696,12 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
 INSERT OR IGNORE INTO feature_strings (key, value, description) VALUES
   ('lastfm_api_key', '', 'Last.fm API key for metadata proxy (empty = disabled)');
 
+-- 178: declarative S2S relay policy advertised via getOpenSubsonicExtensions
+-- (OpenSubsonic #254). Empty → derived from allow_being_proxied (allow/deny);
+-- set explicitly to allow|deny|no-cache to override.
+INSERT OR IGNORE INTO feature_strings (key, value, description) VALUES
+  ('server_relay_policy', '', 'S2S 中继策略 (allow|deny|no-cache；空=依 allow_being_proxied 推导)');
+
 -- 0020: 051 incremental scan tunables
 INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
   ('scan_interval_hours', '6', 'WebDAV auto-scan interval in hours; 0 = disabled', unixepoch()),
