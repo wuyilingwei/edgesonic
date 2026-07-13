@@ -1,8 +1,15 @@
 name: Deploy EdgeSonic
 
 # Manual-only trigger — no automatic runs on push.
-# All Cloudflare credentials and resource identifiers are supplied as
-# workflow inputs each time. D1 / KV / R2 are auto-created if absent.
+#
+# Recommended flow: fork this repo, create a Cloudflare API token, then run this
+# workflow from your fork's Actions tab. It deploys a PRECOMPILED release package
+# (prebuilt web/dist + isolated worker/node_modules) — it does NOT build from
+# source. Pick the `stable` or `prerelease` channel, or pin an exact tag.
+#
+# All Cloudflare credentials and resource identifiers are supplied as workflow
+# inputs each time; the repository itself stores nothing. D1 / KV / R2 are
+# auto-created if absent.
 on:
   workflow_dispatch:
     inputs:
@@ -13,6 +20,24 @@ on:
       cf_account_id:
         description: 'Cloudflare Account ID'
         required: true
+        type: string
+      release_channel:
+        description: 'Which release to deploy'
+        required: true
+        default: 'stable'
+        type: choice
+        options:
+          - stable
+          - prerelease
+      release_tag:
+        description: 'Pin an exact release tag (e.g. v1.0.0) — overrides release_channel when set'
+        required: false
+        default: ''
+        type: string
+      source_repo:
+        description: 'Repo to download the release package from. Leave as-is to pull the upstream release; change it only if your fork publishes its own releases.'
+        required: false
+        default: 'wuyilingwei/edgesonic'
         type: string
       worker_name:
         description: 'Worker script name (default: edgesonic)'
@@ -47,15 +72,12 @@ on:
 
 jobs:
   deploy:
-    name: Build & Deploy
+    name: Deploy precompiled release
     runs-on: ubuntu-latest
     permissions:
       contents: read
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       # Mask before any step that could echo the values.
       - name: Mask sensitive inputs
         run: |
@@ -67,11 +89,48 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        run: npm ci
+      # wrangler is the deploy tool, not part of the app — install it directly
+      # instead of `npm ci`-ing the whole monorepo (which would pull in web's
+      # build-time deps). The precompiled package below already contains a
+      # prebuilt web/dist and worker/node_modules, so nothing gets built here.
+      - name: Install wrangler
+        run: npm install -g wrangler@4.94.0
 
-      - name: Build frontend
-        run: npm run build:web
+      - name: Download & extract release package
+        id: pkg
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SRC: ${{ inputs.source_repo }}
+          CHANNEL: ${{ inputs.release_channel }}
+          PIN: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -n "$PIN" ]; then
+            TAG="$PIN"
+          elif [ "$CHANNEL" = "prerelease" ]; then
+            # Newest release flagged as a prerelease (excluding drafts).
+            TAG=$(gh release list --repo "$SRC" --limit 50 \
+              --json tagName,isPrerelease,isDraft \
+              --jq 'map(select(.isPrerelease and (.isDraft | not)))[0].tagName // ""')
+            if [ -z "$TAG" ]; then
+              echo "::error::No prerelease found in $SRC"; exit 1
+            fi
+          else
+            # stable = GitHub "latest" (newest non-prerelease, non-draft).
+            TAG=$(gh release view --repo "$SRC" --json tagName --jq .tagName)
+          fi
+
+          echo "Deploying release '$TAG' from '$SRC'"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          gh release download "$TAG" --repo "$SRC" \
+            --pattern 'edgesonic-release.tar.gz' \
+            --pattern 'edgesonic-release.tar.gz.sha256'
+          sha256sum -c edgesonic-release.tar.gz.sha256
+          tar xzf edgesonic-release.tar.gz
+          test -d edgesonic-release/worker
+          test -d edgesonic-release/web/dist
 
       - name: Provision Cloudflare resources
         id: provision
@@ -85,38 +144,38 @@ jobs:
           set -euo pipefail
 
           # D1: get or create
-          DB_LIST=$(npx wrangler d1 list --json 2>/dev/null || echo "[]")
+          DB_LIST=$(wrangler d1 list --json 2>/dev/null || echo "[]")
           DB_ID=$(echo "$DB_LIST" | jq -r --arg n "$DB_NAME" \
             '.[] | select(.name==$n) | (.uuid // .database_id // "") | select(length>0)' \
             2>/dev/null || echo "")
           if [ -z "$DB_ID" ]; then
             echo "Creating D1 database '$DB_NAME'..."
-            npx wrangler d1 create "$DB_NAME"
-            DB_ID=$(npx wrangler d1 list --json | jq -r --arg n "$DB_NAME" \
+            wrangler d1 create "$DB_NAME"
+            DB_ID=$(wrangler d1 list --json | jq -r --arg n "$DB_NAME" \
               '.[] | select(.name==$n) | (.uuid // .database_id)')
           fi
           echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
 
           # KV: get or create
-          KV_LIST=$(npx wrangler kv namespace list --json 2>/dev/null || echo "[]")
+          KV_LIST=$(wrangler kv namespace list --json 2>/dev/null || echo "[]")
           KV_ID=$(echo "$KV_LIST" | jq -r --arg t "$KV_NAME" \
             '.[] | select(.title==$t) | .id | select(length>0)' \
             2>/dev/null || echo "")
           if [ -z "$KV_ID" ]; then
             echo "Creating KV namespace '$KV_NAME'..."
-            npx wrangler kv namespace create "$KV_NAME"
-            KV_ID=$(npx wrangler kv namespace list --json | jq -r --arg t "$KV_NAME" \
+            wrangler kv namespace create "$KV_NAME"
+            KV_ID=$(wrangler kv namespace list --json | jq -r --arg t "$KV_NAME" \
               '.[] | select(.title==$t) | .id')
           fi
           echo "kv_id=$KV_ID" >> "$GITHUB_OUTPUT"
 
           # R2: create bucket if missing
-          R2_LIST=$(npx wrangler r2 bucket list --json 2>/dev/null || echo "[]")
+          R2_LIST=$(wrangler r2 bucket list --json 2>/dev/null || echo "[]")
           R2_EXISTS=$(echo "$R2_LIST" | jq -r --arg n "$R2_NAME" \
             '.[] | select(.name==$n) | .name' 2>/dev/null || echo "")
           if [ -z "$R2_EXISTS" ]; then
             echo "Creating R2 bucket '$R2_NAME'..."
-            npx wrangler r2 bucket create "$R2_NAME"
+            wrangler r2 bucket create "$R2_NAME"
           fi
 
           # Instance ID: use provided or generate
@@ -146,11 +205,11 @@ jobs:
             -e "s|<GENERATE_A_UUID>|${INST}|g" \
             -e "s|<your-domain.example.com>|${DOMAIN}|g" \
             -e "s|^name = \"edgesonic\"|name = \"${WORKER}\"|" \
-            worker/wrangler.toml.example > worker/wrangler.toml
+            edgesonic-release/worker/wrangler.toml.example > edgesonic-release/worker/wrangler.toml
 
           # No custom domain → remove routes block; worker uses <name>.workers.dev
           if [ -z "$DOMAIN" ]; then
-            sed -i '/^routes/,/^\]/d' worker/wrangler.toml
+            sed -i '/^routes/,/^\]/d' edgesonic-release/worker/wrangler.toml
           fi
 
       - name: Deploy
@@ -158,8 +217,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
         run: |
           VERSION=$(date +%s)
-          npx wrangler deploy \
-            --config worker/wrangler.toml \
+          # [assets] directory = "../web/dist" resolves relative to the config
+          # file, i.e. edgesonic-release/web/dist — the prebuilt frontend.
+          wrangler deploy \
+            --config edgesonic-release/worker/wrangler.toml \
             --containers-rollout=none \
             --var WORKER_VERSION:"${VERSION}"
 
