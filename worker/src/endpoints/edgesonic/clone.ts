@@ -5,9 +5,17 @@
 // locally. Keeping the loop client-side avoids Worker CPU-time timeouts
 // when the upstream library is large.
 //
-// All endpoints live under /edgesonic/clone/* and require:
-//  1. authMiddleware (path prefix /edgesonic/ → web session only)
-//  2. permissionMiddleware("manage_users") — super-admin only
+// All endpoints live under /edgesonic/clone/* behind authMiddleware (path
+// prefix /edgesonic/ → web session only). Per-endpoint authorisation is
+// graded (176):
+//  * upsertMaster / ingestAudio / fetchAudioToR2 — manage_users (writes to the
+//    shared library / R2).
+//  * upsertUser — super admin only (clone-all-users provisions accounts).
+//  * upsertStarred / upsertPlaylist — any authenticated user MAY write to their
+//    OWN account; writing to a different target user requires manage_users
+//    (enforced in-handler via resolveTargetUser).
+//  * proxy — any authenticated user (server-side upstream fetch; SSRF surface
+//    accepted by design so non-admins can read the upstream they clone from).
 //
 // Persistence is INSERT OR IGNORE for entity tables (artists/albums/
 // song_masters) so a re-clone is a no-op; annotations / playlists /
@@ -16,7 +24,9 @@
 import { Hono } from "hono";
 import { md5 } from "../../utils/md5";
 import { permissionMiddleware, sha256 } from "../../auth";
+import { hasPermission } from "../../utils/permissions";
 import type { User } from "../../types/entities";
+import type { Context } from "hono";
 
 export const cloneRoutes = new Hono<{
   Bindings: Env;
@@ -109,6 +119,55 @@ async function resolveCloneId(db: D1Database, sourceKey: string, itemType: "song
   return row?.local_id || remoteId;
 }
 
+// Bulk variant of resolveCloneId: one clone_id_map query per 80 ids instead of
+// one per item. Returns remoteId → localId (unmapped ids map to themselves).
+// Keeps upsertStarred/upsertPlaylist within the subrequest budget on large
+// lists (176).
+async function resolveCloneIds(
+  db: D1Database,
+  sourceKey: string,
+  itemType: "song" | "album" | "artist",
+  remoteIds: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const ids = [...new Set(remoteIds.filter(Boolean))];
+  if (ids.length === 0) return out;
+  await ensureCloneMapTable(db);
+  const key = sourceKey || DEFAULT_CLONE_SOURCE_KEY;
+  const BATCH = 80;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    const batch = ids.slice(i, i + BATCH);
+    const ph = batch.map(() => "?").join(",");
+    const rows = await db.prepare(
+      `SELECT remote_id, local_id FROM clone_id_map WHERE source_key = ? AND item_type = ? AND remote_id IN (${ph})`,
+    ).bind(key, itemType, ...batch).all<{ remote_id: string; local_id: string }>();
+    for (const r of rows.results) out.set(r.remote_id, r.local_id);
+  }
+  return out;
+}
+
+// Resolve the local target user for a starred/playlist clone and enforce the
+// graded permission model (176): writing to your own account needs no extra
+// permission; writing to a different user requires manage_users.
+async function resolveTargetUser(
+  c: Context<{ Bindings: Env; Variables: { user: User } }>,
+  requested: string | null | undefined,
+): Promise<{ ok: true; userId: string } | { ok: false }> {
+  const sessionUser = c.var.user.username;
+  const target = (requested || "").trim() || sessionUser;
+  if (target === sessionUser) return { ok: true, userId: target };
+  // An unknown target user falls back to the caller's own account (writing to
+  // self needs no extra permission) — this keeps a clone from failing when the
+  // upstream owner has no local counterpart, matching the pre-176 fallback.
+  const exists = await c.env.DB.prepare("SELECT username FROM users WHERE username = ?")
+    .bind(target).first<{ username: string }>();
+  if (!exists) return { ok: true, userId: sessionUser };
+  // Writing to a DIFFERENT existing user requires manage_users.
+  const allowed = await hasPermission(c.env, c.var.user, "manage_users");
+  if (!allowed) return { ok: false };
+  return { ok: true, userId: target };
+}
+
 async function resolveExistingSongMaster(
   db: D1Database,
   song: { id: string; title: string; duration?: number | null },
@@ -185,7 +244,10 @@ function signedUpstreamUrl(baseUrl: string, username: string, password: string, 
 // EdgeSonic worker; the worker performs the upstream fetch server-side and
 // returns the raw response. This avoids browser CORS restrictions when the
 // upstream Subsonic server doesn't emit Access-Control-Allow-Origin.
-cloneRoutes.post("/clone/proxy", permissionMiddleware("manage_users"), async (c) => {
+// 176: session-only (any authenticated user). Non-admins need this to read the
+// upstream they clone favourites/playlists from. The SSRF surface (server-side
+// fetch of a user-supplied URL) is an accepted trade-off for that flow.
+cloneRoutes.post("/clone/proxy", async (c) => {
   const body = await c.req.json<{
     upstreamUrl?: string;
     username?: string;
@@ -365,100 +427,99 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
 // Replaces local playlist rows + entries on each call (mirrors the
 // replacePlaylistSongs query semantics). INSERT OR REPLACE the playlist
 // header so re-cloning refreshes name/public/comment atomically.
-cloneRoutes.post("/clone/upsertPlaylist", permissionMiddleware("manage_users"), async (c) => {
+// 176: `owner` is the target local user. Writing to your own account needs no
+// extra permission; a different owner requires manage_users. `append` lets the
+// browser stream a large playlist in bounded chunks — the first call (append
+// false) (re)creates the header and clears entries, each subsequent append
+// chunk tacks its entries on at the current tail. This keeps a single upstream
+// playlist from being cloned in one oversized request (subrequest budget).
+cloneRoutes.post("/clone/upsertPlaylist", async (c) => {
   const db = c.env.DB;
   const body = await c.req.json<{
     playlist?: {
-      id: string; name: string; owner: string;
+      id: string; name: string; owner?: string;
       public?: boolean | null; comment?: string | null;
     };
     entries?: string[];
+    append?: boolean;
     sourceKey?: string;
-  }>();
+  }>().catch(() => ({} as { playlist?: { id: string; name: string; owner?: string; public?: boolean | null; comment?: string | null }; entries?: string[]; append?: boolean; sourceKey?: string }));
 
   const { playlist, entries } = body;
-  if (!playlist || !playlist.id || !playlist.name || !playlist.owner) {
+  if (!playlist || !playlist.id || !playlist.name) {
     return c.json({ ok: false, error: "Missing playlist fields" }, 400);
   }
+  const target = await resolveTargetUser(c, playlist.owner);
+  if (!target.ok) {
+    return c.json({ ok: false, error: "manage_users required to clone into another user" }, 403);
+  }
+  const owner = target.userId;
   const sourceKey = body.sourceKey || DEFAULT_CLONE_SOURCE_KEY;
-  const remoteSongIds = Array.isArray(entries) ? entries.filter((s) => typeof s === "string") : [];
-  const songIds: string[] = [];
-  for (const sid of remoteSongIds) songIds.push(await resolveCloneId(db, sourceKey, "song", sid));
-
+  const append = body.append === true;
   const now = Math.floor(Date.now() / 1000);
-  const ownerExists = await db.prepare("SELECT username FROM users WHERE username = ?")
-    .bind(playlist.owner).first<{ username: string }>();
-  const owner = ownerExists?.username || c.var.user.username;
-  // Compute totals from existing song_masters so playlist headers stay
-  // consistent (only entries that actually resolve locally are counted).
-  let count = 0;
-  let duration = 0;
-  if (songIds.length > 0) {
-    const BATCH = 80;
-    const rows: { duration: number | null }[] = [];
-    for (let i = 0; i < songIds.length; i += BATCH) {
-      const batch = songIds.slice(i, i + BATCH);
-      const placeholders = batch.map(() => "?").join(",");
-      const result = await db.prepare(
-        `SELECT duration FROM song_masters WHERE id IN (${placeholders})`,
-      ).bind(...batch).all<{ duration: number | null }>();
-      rows.push(...result.results);
+
+  const remoteSongIds = Array.isArray(entries) ? entries.filter((s) => typeof s === "string" && s) : [];
+  const idMap = await resolveCloneIds(db, sourceKey, "song", remoteSongIds);
+  const songIds = remoteSongIds.map((sid) => idMap.get(sid) || sid);
+
+  if (!append) {
+    await db.batch([
+      db.prepare(
+        `INSERT OR REPLACE INTO playlists
+           (id, name, owner, public, song_count, duration, comment, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)`,
+      ).bind(playlist.id, playlist.name, owner, playlist.public ? 1 : 0, playlist.comment ?? null, now, now),
+      db.prepare("DELETE FROM playlist_songs WHERE playlist_id = ?").bind(playlist.id),
+    ]);
+  } else {
+    const exists = await db.prepare("SELECT id FROM playlists WHERE id = ?").bind(playlist.id).first<{ id: string }>();
+    if (!exists) {
+      return c.json({ ok: false, error: "append to a playlist that was never created (send the first chunk without append)" }, 400);
     }
-    count = rows.length;
-    for (const r of rows) duration += r.duration ?? 0;
   }
 
-  await db.batch([
-    db.prepare(
-      `INSERT OR REPLACE INTO playlists
-         (id, name, owner, public, song_count, duration, comment, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(
-      playlist.id,
-      playlist.name,
-      owner,
-      playlist.public ? 1 : 0,
-      count,
-      duration,
-      playlist.comment ?? null,
-      now,
-      now,
-    ),
-    db.prepare("DELETE FROM playlist_songs WHERE playlist_id = ?").bind(playlist.id),
-  ]);
+  // Position base = current tail (0 on the replace path since we just cleared).
+  let base = 0;
+  if (append) {
+    const cnt = await db.prepare("SELECT COUNT(*) AS c FROM playlist_songs WHERE playlist_id = ?")
+      .bind(playlist.id).first<{ c: number }>();
+    base = cnt?.c ?? 0;
+  }
 
   if (songIds.length > 0) {
-    // Re-INSERT only the entries that have a matching song_master so a FK
-    // failure doesn't abort the whole batch. Position is the index in the
-    // upstream `entries` array (so the local order matches upstream even
-    // when some songs were skipped).
-    const insertStmts: D1PreparedStatement[] = [];
+    // Only insert entries with a matching song_master so a FK failure can't
+    // abort the batch.
     const known = new Set<string>();
     const BATCH = 80;
     for (let i = 0; i < songIds.length; i += BATCH) {
       const batch = songIds.slice(i, i + BATCH);
-      const placeholders = batch.map(() => "?").join(",");
-      const result = await db.prepare(
-        `SELECT id FROM song_masters WHERE id IN (${placeholders})`,
-      ).bind(...batch).all<{ id: string }>();
-      for (const r of result.results) known.add(r.id);
+      const ph = batch.map(() => "?").join(",");
+      const rows = await db.prepare(`SELECT id FROM song_masters WHERE id IN (${ph})`).bind(...batch).all<{ id: string }>();
+      for (const r of rows.results) known.add(r.id);
     }
-    songIds.forEach((sid, i) => {
-      if (!known.has(sid)) return;
+    const insertStmts: D1PreparedStatement[] = [];
+    let pos = base;
+    for (const sid of songIds) {
+      if (!known.has(sid)) continue;
       insertStmts.push(
-        db.prepare(
-          "INSERT INTO playlist_songs (playlist_id, song_master_id, position, added_at) VALUES (?, ?, ?, ?)",
-        ).bind(playlist.id, sid, i, now),
+        db.prepare("INSERT INTO playlist_songs (playlist_id, song_master_id, position, added_at) VALUES (?, ?, ?, ?)")
+          .bind(playlist.id, sid, pos, now),
       );
-    });
+      pos++;
+    }
     if (insertStmts.length > 0) await db.batch(insertStmts);
-    // Resync the header count to the rows we actually inserted.
-    await db.prepare(
-      "UPDATE playlists SET song_count = (SELECT COUNT(*) FROM playlist_songs WHERE playlist_id = ?), updated_at = ? WHERE id = ?",
-    ).bind(playlist.id, now, playlist.id).run();
   }
 
-  return c.json({ ok: true, playlistId: playlist.id, inserted: count, owner });
+  // Resync header count + duration from the actual rows (covers replace + append).
+  const totals = await db.prepare(
+    `SELECT COUNT(*) AS c, COALESCE(SUM(sm.duration), 0) AS d
+       FROM playlist_songs ps JOIN song_masters sm ON sm.id = ps.song_master_id
+      WHERE ps.playlist_id = ?`,
+  ).bind(playlist.id).first<{ c: number; d: number }>();
+  await db.prepare("UPDATE playlists SET song_count = ?, duration = ?, updated_at = ? WHERE id = ?")
+    .bind(totals?.c ?? 0, totals?.d ?? 0, now, playlist.id).run();
+
+  return c.json({ ok: true, playlistId: playlist.id, inserted: songIds.length, owner, append });
 });
 
 // ---------------------------------------------------------------------------
@@ -471,38 +532,55 @@ cloneRoutes.post("/clone/upsertPlaylist", permissionMiddleware("manage_users"), 
 // Uses starItem() semantics: UPSERT annotations, set starred=1 + starred_at.
 // We don't unstar items that are absent from the upstream list — a clone is
 // additive by design so local-only stars survive.
-cloneRoutes.post("/clone/upsertStarred", permissionMiddleware("manage_users"), async (c) => {
+// 176: `userId` is optional; omitted (or equal to the session user) → the stars
+// land on the caller's own account (no extra permission). A different target
+// requires manage_users. Ids are resolved in bulk and inserted with one
+// db.batch so a chunk is a bounded number of subrequests; the browser sends
+// items in bounded chunks (cloneStarredStage) so a huge list never overflows.
+cloneRoutes.post("/clone/upsertStarred", async (c) => {
   const db = c.env.DB;
   const body = await c.req.json<{
     userId?: string;
     items?: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }>;
     sourceKey?: string;
-  }>();
+  }>().catch(() => ({} as { userId?: string; items?: unknown[]; sourceKey?: string }));
 
-  const userId = body.userId;
-  const items = Array.isArray(body.items) ? body.items : [];
-  if (!userId) {
-    return c.json({ ok: false, error: "Missing userId" }, 400);
+  const target = await resolveTargetUser(c, body.userId);
+  if (!target.ok) {
+    return c.json({ ok: false, error: "manage_users required to clone into another user" }, 403);
   }
-
-  let applied = 0;
+  const userId = target.userId;
+  const items = Array.isArray(body.items) ? body.items : [];
   const sourceKey = body.sourceKey || DEFAULT_CLONE_SOURCE_KEY;
-  for (const it of items) {
-    if (!it.id || !it.type) continue;
-    if (it.type !== "song" && it.type !== "album" && it.type !== "artist") continue;
-    const localId = await resolveCloneId(db, sourceKey, it.type, it.id);
-    const now = it.starredAt ?? Math.floor(Date.now() / 1000);
-    await db.prepare(
+
+  const valid = (items as unknown[]).filter(
+    (it): it is { id: string; type: "song" | "album" | "artist"; starredAt?: number | null } => {
+      const o = it as { id?: unknown; type?: unknown };
+      return !!o && typeof o.id === "string" && o.id.length > 0 &&
+        (o.type === "song" || o.type === "album" || o.type === "artist");
+    },
+  );
+  const maps = {
+    song: await resolveCloneIds(db, sourceKey, "song", valid.filter((v) => v.type === "song").map((v) => v.id)),
+    album: await resolveCloneIds(db, sourceKey, "album", valid.filter((v) => v.type === "album").map((v) => v.id)),
+    artist: await resolveCloneIds(db, sourceKey, "artist", valid.filter((v) => v.type === "artist").map((v) => v.id)),
+  };
+
+  const nowDefault = Math.floor(Date.now() / 1000);
+  const stmts: D1PreparedStatement[] = valid.map((it) => {
+    const localId = maps[it.type].get(it.id) || it.id;
+    const starredAt = it.starredAt ?? nowDefault;
+    return db.prepare(
       `INSERT INTO annotations (user_id, item_id, item_type, play_count, starred, starred_at)
        VALUES (?, ?, ?, 0, 1, ?)
        ON CONFLICT(user_id, item_id, item_type) DO UPDATE SET
          starred = 1,
          starred_at = excluded.starred_at`,
-    ).bind(userId, localId, it.type, now).run();
-    applied++;
-  }
+    ).bind(userId, localId, it.type, starredAt);
+  });
+  if (stmts.length > 0) await db.batch(stmts);
 
-  return c.json({ ok: true, applied });
+  return c.json({ ok: true, applied: stmts.length, userId });
 });
 
 // ---------------------------------------------------------------------------
@@ -518,7 +596,13 @@ cloneRoutes.post("/clone/upsertStarred", permissionMiddleware("manage_users"), a
 // getStarred/getUsers responses expose the password as plaintext (Subsonic
 // spec requires it for token auth), so we hash here before INSERT. If the
 // caller already hashed, set `passwordHashed: true` to skip hashing.
+// 176: super admin only — the clone-all-users flow provisions local accounts
+// (and their login passwords), a strictly higher-privilege operation than the
+// per-account favourite/playlist clone.
 cloneRoutes.post("/clone/upsertUser", permissionMiddleware("manage_users"), async (c) => {
+  if (c.var.user.level !== 3) {
+    return c.json({ ok: false, error: "Super admin required" }, 403);
+  }
   const db = c.env.DB;
   const body = await c.req.json<{
     user?: {
