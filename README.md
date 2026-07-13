@@ -34,6 +34,20 @@ EdgeSonic serves two roles simultaneously:
 
 ## Quick start
 
+### Deploy (recommended): fork + GitHub Action
+
+No local toolchain required — deploy straight from a fork using the precompiled release:
+
+1. **Fork** this repository to your own GitHub account.
+2. **Create a Cloudflare API token** ([dash.cloudflare.com → API Tokens](https://dash.cloudflare.com/profile/api-tokens) → *Create Token*) with `Workers Scripts:Edit`, `D1:Edit`, and `Workers R2 Storage:Edit`, and note your **Account ID**.
+3. In your fork, open **Actions → Deploy EdgeSonic → Run workflow**, paste the token and account ID, choose the **`stable`** or **`prerelease`** channel, and run it.
+
+The workflow downloads the latest precompiled release (prebuilt frontend + Worker — **no build step**), auto-creates any missing D1/KV/R2 resources, and deploys. Full input reference: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
+
+### Local CLI deploy (development)
+
+Prefer to build and deploy from your own machine (e.g. while developing)? Use the Wrangler CLI flow below.
+
 ### Prerequisites
 
 - Node.js 20+
@@ -101,9 +115,7 @@ The script builds the Vue frontend, bundles it with the Worker via `[assets]`, a
 
 (Wrangler deploy clears dynamic cron schedules — see `worker/CF_CRON.md`.)
 
-Prefer GitHub Actions over the local CLI? See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the manual-dispatch workflow (no stored credentials, auto-creates missing D1/KV/R2 resources).
-
-### 5. First login
+### First login
 
 Navigate to your Worker domain. The default admin account is created on first access — see the login page for instructions, or create one directly:
 
@@ -121,7 +133,7 @@ The technical reference lives under [`docs/`](docs/):
 | [`DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) | Self-contained deploy runbook for AI coding agents — precompiled release package, no local build |
 | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Monorepo layout, storage backend model, adding an S3-compatible source |
 | [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Dev servers, type-checking, running tests, applying the DB schema |
-| [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | GitHub Actions CI/CD, Cloudflare resource requirements / free-tier limits |
+| [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Recommended fork + GitHub Action deploy (downloads a precompiled release, no build), Cloudflare resource requirements / free-tier limits |
 | [`SECURITY.md`](docs/SECURITY.md) | What never to commit, where secrets live, anti-loop chain |
 | [`DESIGN.md`](docs/DESIGN.md) | Full backend/frontend design: auth model, capability matrix, adapter interfaces (Chinese) |
 | [`cf-integration.md`](docs/cf-integration.md) | Cloudflare API integration internals (token/cron/analytics without redeploying) |

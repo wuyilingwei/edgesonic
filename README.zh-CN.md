@@ -34,6 +34,20 @@ EdgeSonic 同时承担两个角色：
 
 ## 快速开始
 
+### 部署（推荐）：fork 仓库 + GitHub Action
+
+无需任何本地工具链——直接从一个 fork 用预编译 release 部署：
+
+1. **Fork** 本仓库到你自己的 GitHub 账号。
+2. **在 Cloudflare 注册一个 API Token**（[dash.cloudflare.com → API Tokens](https://dash.cloudflare.com/profile/api-tokens) → *Create Token*），勾选 `Workers Scripts:Edit`、`D1:Edit`、`Workers R2 Storage:Edit`，并记下你的 **Account ID**。
+3. 在你的 fork 里打开 **Actions → Deploy EdgeSonic → Run workflow**，粘贴 token 和 account ID，选择 **`stable`**（稳定版）或 **`prerelease`**（预发布）通道，运行。
+
+该工作流会下载最新的预编译 release（已构建好的前端 + Worker——**不再本地 build**），自动创建缺失的 D1/KV/R2 资源并部署。完整输入项说明见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)（英文）。
+
+### 本地 CLI 部署（开发用）
+
+想在本机自行构建并部署（例如开发时）？用下面的 Wrangler CLI 流程。
+
 ### 前置条件
 
 - Node.js 20+
@@ -101,9 +115,7 @@ npx wrangler secret put CF_ACCOUNT_ID
 
 （`wrangler deploy` 会清空动态 Cron 计划——详见 `worker/CF_CRON.md`。）
 
-想用 GitHub Actions 而不是本地 CLI 部署？参见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)（手动触发的工作流，不存储任何凭据，会自动创建缺失的 D1/KV/R2 资源；该文档目前仅有英文版）。
-
-### 5. 首次登录
+### 首次登录
 
 访问你的 Worker 域名。默认管理员账号会在首次访问时创建——登录页会有说明，你也可以直接手动创建：
 
@@ -121,7 +133,7 @@ npx wrangler d1 execute edgesonic-db --remote --command \
 | [`DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) | 面向 AI agent 的自包含部署手册——用预编译 release 包，无需本地构建 |
 | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Monorepo 目录结构、存储后端模型、如何添加 S3 兼容存储源 |
 | [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发服务器、类型检查、运行测试、应用数据库 Schema |
-| [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | GitHub Actions CI/CD、Cloudflare 资源需求与免费额度 |
+| [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 推荐的 fork + GitHub Action 部署（下载预编译 release，不 build）、Cloudflare 资源需求与免费额度 |
 | [`SECURITY.md`](docs/SECURITY.md) | 哪些文件绝不能提交、Secrets 存放位置、防循环链机制 |
 | [`DESIGN.md`](docs/DESIGN.md) | 完整前后端设计文档：鉴权模型、能力矩阵、适配器接口（中文） |
 | [`cf-integration.md`](docs/cf-integration.md) | Cloudflare API 集成实现细节（无需重新部署即可管理 token/cron/分析数据） |
