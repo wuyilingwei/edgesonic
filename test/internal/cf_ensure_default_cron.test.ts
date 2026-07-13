@@ -94,10 +94,20 @@ function jsonResp(body: unknown, status = 200): Response {
 // App builder — mirrors the cf_integration.test.ts harness so the test
 // surface (`/edgesonic/cf/...`) matches what router.ts produces in prod.
 // ---------------------------------------------------------------------------
-function makeApp(env: Record<string, string | undefined>, level = 3) {
+function makeApp(env: Record<string, unknown>, level = 3) {
   const app = new Hono();
+  const fullEnv: Record<string, unknown> = {
+    // Unblock permissionMiddleware("manage_cloudflare") without a D1 round-trip:
+    // grant L3 / deny L2 via the PERMISSIONS_OVERRIDE fast path (permissions.ts
+    // returns the boolean before falling back to env.DB).
+    PERMISSIONS_OVERRIDE: JSON.stringify({ "3": { manage_cloudflare: true }, "2": { manage_cloudflare: false } }),
+    // No-op D1 so persistCronState's kv_store write is a silent no-op here; the
+    // D1 persistence path is covered by cron_recovery.test.ts.
+    DB: { prepare: () => ({ bind: () => ({ run: async () => ({ meta: {} }), first: async () => null }) }) },
+    ...env,
+  };
   app.use("*", async (c, next) => {
-    (c as unknown as { env: Record<string, unknown> }).env = env;
+    (c as unknown as { env: Record<string, unknown> }).env = fullEnv;
     c.set("user", { username: "tester", level });
     await next();
   });
@@ -106,6 +116,17 @@ function makeApp(env: Record<string, string | undefined>, level = 3) {
 }
 
 const SCHEDULES_PATH = "/workers/scripts/edgesonic/schedules";
+const SECRETS_PATH = "/workers/scripts/edgesonic/secrets";
+
+// After applying a schedule, cf.ts now mirrors the recovery state into the
+// CRON_STATE Workers Secret (persistCronState). Register a matcher so the mock
+// treats that PUT as expected.
+function expectCronStateSecret() {
+  expectations.push({
+    match: (r, url) => r.method === "PUT" && url.endsWith(SECRETS_PATH),
+    reply: () => jsonResp({ success: true, result: { name: "CRON_STATE" } }),
+  });
+}
 
 async function run() {
   console.log("ensureDefaultCron — empty schedules path:");
@@ -127,6 +148,8 @@ async function run() {
       }),
       capture: putCapture,
     });
+    // 3) persistCronState mirrors the applied schedule into the CRON_STATE Secret.
+    expectCronStateSecret();
 
     const app = makeApp({ CF_API_TOKEN: "tok", CF_ACCOUNT_ID: "acc-1" });
     const r = await app.request("/edgesonic/cf/ensureDefaultCron");
@@ -141,7 +164,7 @@ async function run() {
     const echo = body.schedules as Array<{ cron: string }>;
     assert(Array.isArray(echo) && echo[0].cron === "0 */1 * * *",
       "response.schedules echoes the CF PUT response");
-    assert(expectations.length === 0, "both expected fetches were consumed");
+    assert(expectations.length === 0, "GET + PUT schedules + CRON_STATE secret all consumed");
     assert(unexpectedCount === 0, "no unexpected fetches");
     uninstallMock();
   }
@@ -171,6 +194,9 @@ async function run() {
       reply: () => jsonResp({ success: true, result: [] }),
       capture: putCapture,
     });
+    // Non-empty path still records the live cadence under the current build, so
+    // a CRON_STATE secret write is expected (but NOT a schedules PUT).
+    expectCronStateSecret();
 
     const app = makeApp({ CF_API_TOKEN: "tok", CF_ACCOUNT_ID: "acc-2" });
     const r = await app.request("/edgesonic/cf/ensureDefaultCron");
@@ -183,9 +209,9 @@ async function run() {
       "schedules array preserved");
     assert(body.schedules[0].cron === "*/15 * * * *",
       "existing custom cron echoed verbatim");
-    assert(putCapture.body === undefined, "no PUT fetch issued (tripwire untouched)");
-    // The PUT tripwire is still in expectations; the GET should be consumed.
-    assert(expectations.length === 1, "only PUT tripwire remains (GET consumed)");
+    assert(putCapture.body === undefined, "no schedules PUT issued (tripwire untouched)");
+    // The schedules-PUT tripwire is still in expectations; GET + secret consumed.
+    assert(expectations.length === 1, "only schedules-PUT tripwire remains (GET + secret consumed)");
     uninstallMock();
   }
 

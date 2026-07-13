@@ -40,6 +40,7 @@
 import { Hono } from "hono";
 import type { User } from "../../types/entities";
 import { permissionMiddleware } from "../../auth";
+import { persistCronState } from "../../utils/cronRecovery";
 
 export const cfRoutes = new Hono<{
   Bindings: Env;
@@ -261,6 +262,9 @@ cfRoutes.post("/cf/setCron", async (c) => {
         body: JSON.stringify(crons.map((cron) => ({ cron }))),
       },
     );
+    // Keep the recovery record fresh so a post-deploy auto-restore re-applies
+    // exactly this schedule under the current build (see cronRecovery.ts).
+    await persistCronState(c.env, { crons, build: c.env.WORKER_VERSION || "0" });
     return c.json({ ok: true, schedules: result });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -337,6 +341,12 @@ cfRoutes.get("/cf/ensureDefaultCron", async (c) => {
 
   // Step 2: non-empty list → respect the admin's existing config.
   if (existing.length > 0) {
+    // Record the live cadence under the current build so a later post-deploy
+    // auto-restore re-applies the admin's actual schedule, not just the default.
+    await persistCronState(c.env, {
+      crons: existing.map((e) => e.cron).filter(Boolean),
+      build: c.env.WORKER_VERSION || "0",
+    });
     return c.json({
       ok: true,
       applied: false,
@@ -354,6 +364,7 @@ cfRoutes.get("/cf/ensureDefaultCron", async (c) => {
         body: JSON.stringify([{ cron: DEFAULT_CRON }]),
       },
     );
+    await persistCronState(c.env, { crons: [DEFAULT_CRON], build: c.env.WORKER_VERSION || "0" });
     return c.json({
       ok: true,
       applied: true,

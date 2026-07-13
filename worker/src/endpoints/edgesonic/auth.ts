@@ -19,6 +19,7 @@
 import { Hono } from "hono";
 import { permissionMiddleware, subsonicError, sha256 } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
+import { recoverCronIfStale } from "../../utils/cronRecovery";
 import type { User } from "../../types/entities";
 
 // only request that legitimately arrives without a session) and is exported
@@ -86,6 +87,23 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
     )
     .bind(sessionId, username, sessionToken, userAgent, expiresAt, Math.floor(Date.now() / 1000))
     .run();
+
+  // Post-deploy cron auto-recovery. A `wrangler deploy` clears the Worker's
+  // cron triggers; this restores them from the recorded state when the running
+  // WORKER_VERSION differs from the build cron was last applied under. A super
+  // admin (level 3) login is the trigger point. Gated on level 3 — NOT the
+  // delegatable manage_cloudflare permission — because it touches the CF API
+  // token, which only the super admin may. Runs detached so it never delays
+  // the login response.
+  if (user.level >= 3) {
+    const recovery = recoverCronIfStale(c.env).catch(() => {});
+    try {
+      c.executionCtx.waitUntil(recovery);
+    } catch {
+      // No execution context (e.g. unit tests) — let it run detached.
+      void recovery;
+    }
+  }
 
   // Plant an HttpOnly cookie alongside the JSON response so the SPA can
   // stop persisting the session token in localStorage; the browser now

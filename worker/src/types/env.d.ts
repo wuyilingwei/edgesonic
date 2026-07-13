@@ -59,4 +59,11 @@ interface Env {
   // don't expose their own bucket name at runtime. Used only for the
   // read-only R2 detail card in Sources.vue.
   R2_BUCKET_NAME?: string;
+  // Post-deploy cron auto-recovery state, pushed dynamically as a Workers
+  // Secret via the CF API (same mechanism as CF_API_TOKEN / PERMISSIONS_OVERRIDE
+  // — no redeploy needed). JSON shape: `{ "crons": string[], "build": string }`
+  // where `build` is the WORKER_VERSION cron was last applied under. Read as the
+  // fast primary (a Secret survives `wrangler deploy`); the kv_store D1 row
+  // `cron_recovery_state` is the durable backup. See utils/cronRecovery.ts.
+  CRON_STATE?: string;
 }
