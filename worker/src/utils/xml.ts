@@ -93,7 +93,14 @@ export function esc(s: string): string {
 export const SERVER_TYPE = "edgeSonic";
 export const SERVER_VERSION = "1.0.0";
 
-export function subsonicOK(inner: Record<string, unknown>, version = "1.16.1"): string {
+export function subsonicOK(
+  inner: Record<string, unknown>,
+  version = "1.16.1",
+  // 178 — extra root attributes on <subsonic-response> (e.g. server_relay_policy
+  // / server_uuid for the S2S extension). They flatten to top-level JSON keys
+  // via the JSON serializer, matching status/version/openSubsonic.
+  rootAttrs?: Record<string, string | number | boolean | undefined>,
+): string {
   return toXML({
     "subsonic-response": {
       _attributes: {
@@ -103,6 +110,7 @@ export function subsonicOK(inner: Record<string, unknown>, version = "1.16.1"): 
         type: SERVER_TYPE,
         serverVersion: SERVER_VERSION,
         openSubsonic: "true",
+        ...(rootAttrs || {}),
       },
       ...inner,
     },

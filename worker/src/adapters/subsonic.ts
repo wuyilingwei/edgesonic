@@ -54,7 +54,13 @@ export function createSubsonicAdapter(
 
       const headers: Record<string, string> = {};
       if (range) headers["Range"] = range;
-      if (chain.length > 0) headers["X-EdgeSonic-Chain"] = chain.join(",");
+      if (chain.length > 0) {
+        headers["X-EdgeSonic-Chain"] = chain.join(",");
+        // 178 (OpenSubsonic #254): also emit the standard loop-prevention header
+        // (chronological UUID path incl. our own INSTANCE_ID appended above) so
+        // upstreams implementing the spec can break loops without EdgeSonic.
+        headers["X-OpenSubsonic-Path"] = chain.join(",");
+      }
 
       const resp = await fetch(fullUrl, { headers });
       return {

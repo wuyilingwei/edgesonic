@@ -16,7 +16,7 @@
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
 import { md5 } from "./utils/md5";
-import { getFeature, parseChain } from "./utils/features";
+import { getServerRelayPolicy, parseChain } from "./utils/features";
 import { hasPermission } from "./utils/permissions";
 import { SERVER_TYPE, SERVER_VERSION } from "./utils/xml";
 import type { User } from "./types/entities";
@@ -298,18 +298,27 @@ export const authMiddleware = createMiddleware<{
   // Another EdgeSonic proxying us appends its INSTANCE_ID to esChain. The
   // chain guard only ever fires on /rest/* (proxied Subsonic calls), so we
   // keep the XML shape there; a management path would never carry esChain.
-  const chain = parseChain(c.req.query("esChain") || c.req.header("X-EdgeSonic-Chain"));
+  // 178 (OpenSubsonic #254): the standard X-OpenSubsonic-Path header carries the
+  // same comma-separated UUID chain as our proprietary esChain / X-EdgeSonic-Chain
+  // (both use INSTANCE_ID as the server_uuid), so we accept any of the three.
+  const chain = parseChain(
+    c.req.query("esChain") || c.req.header("X-EdgeSonic-Chain") || c.req.header("X-OpenSubsonic-Path"),
+  );
   if (chain.length > 0) {
     const xmlHeaders = { "Content-Type": "application/xml; charset=UTF-8" };
     if (chain.includes(c.env.INSTANCE_ID)) {
-      return c.text(subsonicError(50, "Proxy loop detected"), 403, xmlHeaders);
+      // Our own server_uuid already in the path → routing loop; abort per #254.
+      return c.text(subsonicError(50, "Loop detected"), 403, xmlHeaders);
     }
     const maxDepth = parseInt(c.env.MAX_PROXY_DEPTH || "3", 10);
     if (chain.length > maxDepth) {
       return c.text(subsonicError(50, "Proxy chain too deep"), 403, xmlHeaders);
     }
-    if (!(await getFeature(c.env, "allow_being_proxied"))) {
-      return c.text(subsonicError(50, "This server does not accept proxied requests"), 403, xmlHeaders);
+    // Honour the declarative relay policy: a `deny` server refuses S2S relay.
+    // Default derives from allow_being_proxied, so existing deployments are
+    // unchanged (proxied-off ⇒ deny ⇒ rejected here).
+    if ((await getServerRelayPolicy(c.env)) === "deny") {
+      return c.text(subsonicError(50, "S2S relay denied (server_relay_policy=deny)"), 403, xmlHeaders);
     }
   }
 
