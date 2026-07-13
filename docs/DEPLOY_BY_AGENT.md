@@ -52,8 +52,14 @@ on. **Before creating anything**, use an interactive clarification tool (e.g. `A
    account's Cloudflare zone, or explicitly "none" to fall back to
    `<worker-name>.<account>.workers.dev`. Do not try to enumerate zones yourself — `wrangler` has
    no zone-listing command; just ask.
+4. **Whether to configure the optional Cloudflare API token now** (`CF_API_TOKEN` + the R2
+   presign key pair, step 3.5). This unlocks the in-app Cloudflare integration (cron management,
+   analytics panel) and R2 presigned direct streaming (advanced redirect / bandwidth
+   optimization) — but every base feature (streaming, library management, tag editing, ...) works
+   fully without it, and setting it up means extra manual clicking in the Cloudflare dashboard.
+   "No, skip it for now" is a completely valid answer — it can be added later per `SECRETS.md`.
 
-Hold onto the three answers — they're used throughout step 3.
+Hold onto all four answers — they're used throughout step 3.
 
 ## 3. Download the precompiled release and deploy
 
@@ -123,9 +129,12 @@ printf '%s' "<account-id-from-step-2>" | wrangler secret put CF_ACCOUNT_ID --con
 reuse it — don't ask the operator for it again.
 
 `CF_API_TOKEN` and the R2 S3 key pair (`R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`) are different —
-they require a credential only the operator can mint in the dashboard. See step 3.6.
+they require a credential only the operator can mint in the dashboard. Only proceed to step 3.5 if
+the operator opted in when you asked in step 2; otherwise skip straight to step 3.6.
 
-### 3.6 Optional: `CF_API_TOKEN` + R2 presign keys
+### 3.5 Optional: `CF_API_TOKEN` + R2 presign keys
+
+Skip this section entirely if the operator declined in step 2.
 
 These three secrets all come from **one** combined API token, created in the dashboard. Give the
 operator this exact walkthrough (you cannot do the clicking yourself):
@@ -142,7 +151,24 @@ operator this exact walkthrough (you cannot do the clicking yourself):
 4. Continue to summary → **Create Token**. Copy all three values shown (Bearer token, Access Key
    ID, Secret Access Key) — the secret values are shown once.
 
-Once the operator pastes those three values back to you, push them:
+Once the operator pastes those three values back to you, **verify them before pushing anything** —
+a typo'd paste silently breaks cron/analytics/presign until someone notices:
+
+```bash
+# Verify the Bearer token
+curl -s "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+  -H "Authorization: Bearer $CF_API_TOKEN" | grep -q '"success":true' \
+  && echo "CF_API_TOKEN OK" || echo "CF_API_TOKEN INVALID — ask the operator to recheck/re-paste"
+
+# Verify the R2 key pair (curl's built-in SigV4 signer, curl >=7.75)
+curl -s -o /dev/null -w '%{http_code}\n' \
+  --user "$R2_ACCESS_KEY_ID:$R2_SECRET_ACCESS_KEY" \
+  --aws-sigv4 "aws:amz:auto:s3" \
+  "https://<account-id>.r2.cloudflarestorage.com/<project-name>-music"
+# expect 200 — anything else means the key pair or bucket name is wrong
+```
+
+Only once both checks pass, push the three secrets:
 
 ```bash
 wrangler secret put CF_API_TOKEN --config wrangler.toml
@@ -151,9 +177,9 @@ wrangler secret put R2_SECRET_ACCESS_KEY --config wrangler.toml
 ```
 
 After `CF_API_TOKEN` is set, also flip `enable_r2_presign` on (see `SECRETS.md` §3) and restore the
-cron schedule the deploy in step 3.5 cleared — see step 5.
+cron schedule the deploy in step 3.6 clears — see step 5.
 
-### 3.5 Deploy
+### 3.6 Deploy
 
 ```bash
 VERSION=$(date +%s)
@@ -196,10 +222,10 @@ if unclear):
   once, save it now.
 - This runbook already pushed `WORK_UPLOAD_HMAC_KEY` and `CF_ACCOUNT_ID` automatically — nothing
   to do there.
-- One optional step remains, covered in 3.6: create a single Cloudflare API token (dashboard link
-  + exact click-through given there) to get `CF_API_TOKEN` + `R2_ACCESS_KEY_ID` +
-  `R2_SECRET_ACCESS_KEY`. This enables the in-app Cloudflare integration (cron management,
-  analytics) and R2 presigned direct streaming (bypasses Worker bandwidth limits). If they want
-  this, walk them through 3.6 now and push the three secrets once they hand you the values.
+- If the operator opted into the optional API token in step 2, it's already handled (step 3.5). If
+  they declined, remind them it's still available any time — a single Cloudflare API token
+  (dashboard link + exact click-through in step 3.5) yields `CF_API_TOKEN` + `R2_ACCESS_KEY_ID` +
+  `R2_SECRET_ACCESS_KEY`, enabling the in-app Cloudflare integration (cron management, analytics)
+  and R2 presigned direct streaming (bypasses Worker bandwidth limits) — see `SECRETS.md`.
 - Once `CF_API_TOKEN` is set, the cron schedule this deploy cleared needs restoring — visit
   **Settings → Cloudflare → "Ensure default cron"** in the app.
