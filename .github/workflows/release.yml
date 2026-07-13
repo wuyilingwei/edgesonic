@@ -78,14 +78,28 @@ jobs:
 
           cp docs/DEPLOY_BY_AGENT.md "$STAGE/" 2>/dev/null || true
 
-          # Install the Worker's own runtime deps (hono + @cloudflare/sandbox)
-          # into the staged dir — not `npm ci` at the repo root, which would
-          # also drag in web's build-time deps the deployed Worker never uses.
+          # Install the Worker's own runtime deps into the staged dir — not
+          # `npm ci` at the repo root, which would also drag in web's build-time
+          # deps the deployed Worker never uses.
+          #
+          # Pin to the EXACT versions the repo's root lockfile resolves, so a
+          # given tag always produces the same bytes and ships what CI /
+          # deploy.sh actually test with. A bare `npm install` floats
+          # `hono@^4.12.22` to the latest caret-compatible version at build time
+          # (potentially a new minor) — a versioned release must not do that.
+          # (worker/package-lock.json is a stale standalone lock that predates
+          # @cloudflare/sandbox, so the root lock is the only trustworthy source.)
+          #
           # --legacy-peer-deps: worker/package.json's *dev* deps (wrangler vs
           # @cloudflare/workers-types) have a peer-range conflict; --omit=dev
           # skips installing them, but a fresh resolve still evaluates the tree
-          # and would ERESOLVE without this. Only prod deps land in node_modules.
-          ( cd "$STAGE/worker" && npm install --omit=dev --legacy-peer-deps --no-audit --no-fund )
+          # and would ERESOLVE without this. --no-save keeps the shipped
+          # worker/package.json byte-identical to source.
+          HONO_VERSION=$(node -p "require('./package-lock.json').packages['node_modules/hono'].version")
+          SANDBOX_VERSION=$(node -p "require('./package-lock.json').packages['node_modules/@cloudflare/sandbox'].version")
+          echo "Pinning worker runtime deps: hono@${HONO_VERSION}, @cloudflare/sandbox@${SANDBOX_VERSION}"
+          ( cd "$STAGE/worker" && npm install --omit=dev --legacy-peer-deps --no-audit --no-fund --no-save \
+              "hono@${HONO_VERSION}" "@cloudflare/sandbox@${SANDBOX_VERSION}" )
           test -d "$STAGE/worker/node_modules/hono" || { echo "::error::worker runtime deps failed to install into the package"; exit 1; }
 
           tar czf edgesonic-release.tar.gz -C "$RUNNER_TEMP" edgesonic-release
@@ -97,10 +111,23 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.tag.outputs.tag }}"
-          gh release create "$TAG" \
-            edgesonic-release.tar.gz \
-            edgesonic-release.tar.gz.sha256 \
-            --repo "${{ github.repository }}" \
-            --title "EdgeSonic $TAG" \
-            --generate-notes \
-            --notes "Precompiled deploy package (prebuilt web/dist + isolated worker/node_modules — no npm ci / build needed). See docs/DEPLOY_BY_AGENT.md for how to deploy it."
+          NOTES="Precompiled deploy package (prebuilt web/dist + isolated worker/node_modules — no npm ci / build needed). See docs/DEPLOY_BY_AGENT.md for how to deploy it."
+          # Idempotent publish: `gh release create` 422s if the release already
+          # exists (workflow re-run, re-pushed tag, or a retried job). Replace
+          # its assets in place instead of failing the whole run.
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — replacing its assets."
+            gh release upload "$TAG" \
+              edgesonic-release.tar.gz \
+              edgesonic-release.tar.gz.sha256 \
+              --repo "${{ github.repository }}" \
+              --clobber
+          else
+            gh release create "$TAG" \
+              edgesonic-release.tar.gz \
+              edgesonic-release.tar.gz.sha256 \
+              --repo "${{ github.repository }}" \
+              --title "EdgeSonic $TAG" \
+              --generate-notes \
+              --notes "$NOTES"
+          fi
