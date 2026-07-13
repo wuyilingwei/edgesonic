@@ -51,22 +51,18 @@ jobs:
       - name: Build frontend
         run: npm run build:web
 
-      - name: Install isolated worker runtime dependencies
-        # Deliberately NOT `npm ci` at the repo root — that would also drag in
-        # web's build-time deps (vite/vue/ffmpeg-wasm/...) which the deployed
-        # Worker never touches (web is already compiled to static dist).
-        # A standalone install scoped to worker/package.json keeps the
-        # package minimal and self-contained under worker/node_modules,
-        # matching where wrangler's bundler will look for `hono` /
-        # `@cloudflare/sandbox` when it bundles worker/src/index.ts.
-        working-directory: worker
-        run: npm install --omit=dev --no-audit --no-fund
-
       - name: Assemble release package
         run: |
           set -euo pipefail
-          STAGE="edgesonic-release"
-          rm -rf "$STAGE" "${STAGE}.tar.gz"
+          # Stage OUTSIDE the repo checkout. This repo is an npm workspaces
+          # monorepo, so running `npm install` anywhere under the repo root
+          # makes npm walk up, find the root package.json `workspaces`, and
+          # hoist the worker's deps into the ROOT node_modules — leaving
+          # worker/node_modules empty. Staging under RUNNER_TEMP keeps the
+          # install self-contained in edgesonic-release/worker/node_modules,
+          # exactly where wrangler's bundler resolves hono / @cloudflare/sandbox.
+          STAGE="${RUNNER_TEMP}/edgesonic-release"
+          rm -rf "$STAGE" edgesonic-release.tar.gz edgesonic-release.tar.gz.sha256
           mkdir -p "$STAGE/web" "$STAGE/worker"
 
           cp -r web/dist "$STAGE/web/dist"
@@ -74,7 +70,6 @@ jobs:
           cp -r worker/src "$STAGE/worker/src"
           cp -r worker/migrations "$STAGE/worker/migrations"
           cp -r worker/transcoder-image "$STAGE/worker/transcoder-image"
-          cp -r worker/node_modules "$STAGE/worker/node_modules"
           cp worker/wrangler.toml.example "$STAGE/worker/"
           cp worker/package.json "$STAGE/worker/"
           cp worker/tsconfig.json "$STAGE/worker/"
@@ -83,8 +78,14 @@ jobs:
 
           cp docs/DEPLOY_BY_AGENT.md "$STAGE/" 2>/dev/null || true
 
-          tar czf "${STAGE}.tar.gz" "$STAGE"
-          sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256"
+          # Install the Worker's own runtime deps (hono + @cloudflare/sandbox)
+          # into the staged dir — not `npm ci` at the repo root, which would
+          # also drag in web's build-time deps the deployed Worker never uses.
+          ( cd "$STAGE/worker" && npm install --omit=dev --no-audit --no-fund )
+          test -d "$STAGE/worker/node_modules/hono" || { echo "::error::worker runtime deps failed to install into the package"; exit 1; }
+
+          tar czf edgesonic-release.tar.gz -C "$RUNNER_TEMP" edgesonic-release
+          sha256sum edgesonic-release.tar.gz > edgesonic-release.tar.gz.sha256
 
       - name: Publish GitHub Release
         env:
