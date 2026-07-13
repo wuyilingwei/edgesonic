@@ -25,7 +25,7 @@ import { mapConcurrent } from "../lib/concurrency";
 import { normalizeForMatch } from "../lib/trackMatch";
 
 const { t } = useI18n();
-const { isSuperAdmin, edgesonicPost, edgesonicFetch, rescanSongs, md5, signedParams, restUrl } = useAuth();
+const { isSuperAdmin, isAdmin, isUser, username: currentUsername, edgesonicPost, edgesonicFetch, rescanSongs, md5, signedParams, restUrl } = useAuth();
 const workerPool = useWorkerPool();
 
 // "auto-start in mm:ss" countdown next to the manual poll button.
@@ -305,10 +305,27 @@ const cloneAudioEnabled = ref(false);
 // entirely, at the cost of running through the Worker's own outbound
 // subrequest (less forgiving of a slow/unstable upstream).
 const cloneAudioMode = ref<"browser" | "worker">("browser");
-const cloneUsersEnabled = ref(false);
-const cloneProxyEnabled = ref(false);
+// 176: favourites (starred) and playlists are now independently selectable,
+// and land on a target chosen by cloneUserMode:
+//   current   — the caller's own account (any authenticated user)
+//   specified — a named local user (requires manage_users)
+//   all       — every upstream user, cloned into matching local accounts,
+//               provisioning the accounts too (super admin only)
+const cloneStarredEnabled = ref(true);
+const clonePlaylistsEnabled = ref(true);
+const cloneUserMode = ref<"current" | "specified" | "all">("current");
+const cloneTargetUsername = ref("");
+// 176: the Worker proxy is now always on (the opt-out checkbox was removed);
+// all upstream reads route through /clone/proxy so source-site CORS never
+// blocks a clone.
+const cloneProxyEnabled = ref(true);
 const clonePlaylistOnly = ref(false);
 const cloneStarredOnly = ref(false);
+// How many playlist entries / starred items per upsert request. Keeps a single
+// huge playlist or favourites list from exceeding the Worker subrequest budget
+// (176): the browser sends bounded chunks, the first replacing and the rest
+// appending.
+const CLONE_ENTRY_CHUNK = 300;
 const cloneRunning = ref(false);
 const cloneCancelRequested = ref(false);
 const cloneFilterSongIds = ref<Set<string> | null>(null);
@@ -634,7 +651,8 @@ async function buildCloneFilterSet(): Promise<Set<string> | null> {
 // then getAlbum per album, then POST /clone/upsertMaster per song.
 async function cloneMetadataStage() {
   const stage = cloneStages.value.metadata;
-  if (!cloneMetadataEnabled.value) {
+  // 176: writing metadata into the shared library is manage_users (admin) only.
+  if (!cloneMetadataEnabled.value || !isAdmin.value) {
     stage.status = "skipped";
     stage.message = "disabled";
     return;
@@ -790,7 +808,8 @@ async function cloneMetadataStage() {
 // /rest/stream bytes and POST them to /clone/ingestAudio.
 async function cloneAudioStage() {
   const stage = cloneStages.value.audio;
-  if (!cloneAudioEnabled.value) {
+  // 176: fetching audio bytes into R2 is manage_users (admin) only.
+  if (!cloneAudioEnabled.value || !isAdmin.value) {
     stage.status = "skipped";
     stage.message = "disabled";
     return;
@@ -990,8 +1009,54 @@ function suffixToMime(suffix: string): string {
 }
 
 // Stage 3 — playlists.
-async function clonePlaylistsStage() {
+// 176: send a playlist's entries in bounded chunks so a single huge playlist
+// can't blow the Worker subrequest budget. First chunk replaces, the rest
+// append. `owner` is the local target user the backend writes the playlist to.
+async function upsertPlaylistChunked(
+  playlist: { id: string; name: string; owner: string; public: boolean; comment: string | null },
+  entries: string[],
+): Promise<void> {
+  const chunks: string[][] = [];
+  for (let i = 0; i < entries.length; i += CLONE_ENTRY_CHUNK) {
+    chunks.push(entries.slice(i, i + CLONE_ENTRY_CHUNK));
+  }
+  // Always issue at least one call so an empty playlist still gets a header.
+  if (chunks.length === 0) chunks.push([]);
+  for (let ci = 0; ci < chunks.length; ci++) {
+    if (cloneCancelRequested.value) return;
+    const data = JSON.parse(await edgesonicPost("clone/upsertPlaylist", {
+      playlist,
+      entries: chunks[ci],
+      append: ci > 0,
+      sourceKey: cloneSourceKey(),
+    }));
+    if (!data.ok) throw new Error(data.error || "upsertPlaylist rejected");
+  }
+}
+
+// 176: send starred items in bounded chunks (same subrequest-budget reason).
+async function upsertStarredChunked(
+  userId: string,
+  items: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }>,
+): Promise<void> {
+  for (let i = 0; i < items.length; i += CLONE_ENTRY_CHUNK) {
+    if (cloneCancelRequested.value) return;
+    const chunk = items.slice(i, i + CLONE_ENTRY_CHUNK);
+    const data = JSON.parse(await edgesonicPost("clone/upsertStarred", {
+      userId,
+      items: chunk,
+      sourceKey: cloneSourceKey(),
+    }));
+    if (!data.ok) throw new Error(data.error || "upsertStarred rejected");
+  }
+}
+
+async function clonePlaylistsStage(targetUser: string) {
   const stage = cloneStages.value.playlists;
+  if (!clonePlaylistsEnabled.value || cloneUserMode.value === "all") {
+    stage.status = "skipped";
+    return;
+  }
   stage.status = "running";
   const resp = await cloneFetchJson("getPlaylists");
   let playlists: any[] = [];
@@ -1002,14 +1067,13 @@ async function clonePlaylistsStage() {
     playlists = Array.isArray(raw) ? raw : (raw ? [raw] : []);
   }
   stage.total = playlists.length;
-  cloneLogPush(`playlists: ${playlists.length} playlist(s)`);
+  cloneLogPush(`playlists: ${playlists.length} playlist(s) → ${targetUser}`);
 
   for (const p of playlists) {
     if (cloneCancelRequested.value) break;
     try {
       const id = jget(p, "id") || "";
       const name = jget(p, "name") || "Untitled";
-      const owner = jget(p, "owner") || cloneForm.value.username;
       const isPublic = jget(p, "public") === "true";
       const comment = jget(p, "comment") || null;
       // Fetch the full playlist to get entry ids.
@@ -1023,12 +1087,7 @@ async function clonePlaylistsStage() {
         const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
         entries = arr.map((s) => jget(s, "id") || "").filter(Boolean);
       }
-      const data = JSON.parse(await edgesonicPost("clone/upsertPlaylist", {
-        playlist: { id, name, owner, public: isPublic, comment },
-        entries,
-        sourceKey: cloneSourceKey(),
-      }));
-      if (!data.ok) throw new Error(data.error || "upsertPlaylist rejected");
+      await upsertPlaylistChunked({ id, name, owner: targetUser, public: isPublic, comment }, entries);
       stage.done++;
       cloneLogPush(`playlists: ✓ ${name} (${entries.length} entries)`);
     } catch (e: unknown) {
@@ -1040,8 +1099,12 @@ async function clonePlaylistsStage() {
 }
 
 // Stage 4 — starred.
-async function cloneStarredStage() {
+async function cloneStarredStage(targetUser: string) {
   const stage = cloneStages.value.starred;
+  if (!cloneStarredEnabled.value || cloneUserMode.value === "all") {
+    stage.status = "skipped";
+    return;
+  }
   stage.status = "running";
   const resp = await cloneFetchJson("getStarred2");
   const items: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }> = [];
@@ -1061,16 +1124,11 @@ async function cloneStarredStage() {
     }
   }
   stage.total = items.length;
-  cloneLogPush(`starred: ${items.length} item(s)`);
+  cloneLogPush(`starred: ${items.length} item(s) → ${targetUser}`);
 
   if (items.length > 0) {
     try {
-      const data = JSON.parse(await edgesonicPost("clone/upsertStarred", {
-        userId: cloneForm.value.username,
-        items,
-        sourceKey: cloneSourceKey(),
-      }));
-      if (!data.ok) throw new Error(data.error || "upsertStarred rejected");
+      await upsertStarredChunked(targetUser, items);
       stage.done = items.length;
       cloneLogPush(`starred: ✓ ${items.length} applied`);
     } catch (e: unknown) {
@@ -1093,7 +1151,7 @@ async function cloneStarredStage() {
 // actually authenticate as them — which upstream getUsers's password field
 // (the same one that unlocks the account clone at all) already lets us do.
 async function cloneUserStarredAndPlaylists(username: string, password: string): Promise<void> {
-  try {
+  if (cloneStarredEnabled.value) try {
     const resp = await cloneFetchJsonAs(username, password, "getStarred2");
     const items: Array<{ id: string; type: "song" | "album" | "artist" }> = [];
     if (resp?._xml) {
@@ -1112,8 +1170,7 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
       }
     }
     if (items.length > 0) {
-      const data = JSON.parse(await edgesonicPost("clone/upsertStarred", { userId: username, items, sourceKey: cloneSourceKey() }));
-      if (!data.ok) throw new Error(data.error || "upsertStarred rejected");
+      await upsertStarredChunked(username, items);
       cloneLogPush(`users: ✓ ${username} — ${items.length} starred item(s)`);
     }
   } catch (e: unknown) {
@@ -1124,7 +1181,7 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
   // someone else but visible to them would otherwise get reprocessed once
   // per user who can see it; it gets handled on its real owner's own turn
   // through this same loop instead.
-  try {
+  if (clonePlaylistsEnabled.value) try {
     const resp = await cloneFetchJsonAs(username, password, "getPlaylists");
     let playlists: any[] = [];
     if (resp?._xml) {
@@ -1152,12 +1209,7 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
         const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
         entries = arr.map((s) => jget(s, "id") || "").filter(Boolean);
       }
-      const data = JSON.parse(await edgesonicPost("clone/upsertPlaylist", {
-        playlist: { id, name, owner, public: isPublic, comment },
-        entries,
-        sourceKey: cloneSourceKey(),
-      }));
-      if (!data.ok) throw new Error(data.error || "upsertPlaylist rejected");
+      await upsertPlaylistChunked({ id, name, owner: username, public: isPublic, comment }, entries);
       count++;
     }
     if (count > 0) cloneLogPush(`users: ✓ ${username} — ${count} playlist(s)`);
@@ -1168,7 +1220,9 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
 
 async function cloneUsersStage() {
   const stage = cloneStages.value.users;
-  if (!cloneUsersEnabled.value) {
+  // 176: the all-users flow (provision every upstream account + their data) is
+  // super-admin only and only runs in the "all" target mode.
+  if (cloneUserMode.value !== "all" || !isSuperAdmin.value) {
     stage.status = "skipped";
     stage.message = "disabled";
     return;
@@ -1220,9 +1274,18 @@ async function cloneUsersStage() {
 }
 
 async function runClone() {
-  if (!isSuperAdmin.value || cloneRunning.value) return;
+  if (!isUser.value || cloneRunning.value) return;
   if (!cloneForm.value.url || !cloneForm.value.username || !cloneForm.value.password) {
     showToast(t("settings.common.clone.missingFields"), "error");
+    return;
+  }
+  // Mode permission guards — early UX feedback; the backend enforces the same.
+  if (cloneUserMode.value === "specified") {
+    if (!isAdmin.value) { showToast(t("settings.common.clone.needManageUsers"), "error"); return; }
+    if (!cloneTargetUsername.value.trim()) { showToast(t("settings.common.clone.needTargetUser"), "error"); return; }
+  }
+  if (cloneUserMode.value === "all" && !isSuperAdmin.value) {
+    showToast(t("settings.common.clone.needSuperAdmin"), "error");
     return;
   }
   cloneRunning.value = true;
@@ -1243,10 +1306,11 @@ async function runClone() {
     if (cloneFilterSongIds.value) {
       cloneLogPush(`filter: enabled, ${cloneFilterSongIds.value.size} song id(s) allowed by playlists/starred rules`);
     }
+    const target = cloneUserMode.value === "specified" ? cloneTargetUsername.value.trim() : currentUsername.value;
     await cloneMetadataStage();
     await cloneAudioStage();
-    await clonePlaylistsStage();
-    await cloneStarredStage();
+    await clonePlaylistsStage(target);
+    await cloneStarredStage(target);
     await cloneUsersStage();
     showToast(t("settings.common.clone.done"));
   } catch (e: unknown) {
@@ -1497,9 +1561,9 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
       </div>
     </div>
 
-    <div v-if="!isSuperAdmin" class="empty-state">
+    <div v-if="!isUser" class="empty-state">
       <div class="empty-state-icon">⚿</div>
-      <div>{{ t("tools.superAdminOnly") }}</div>
+      <div>{{ t("tools.signInRequired") }}</div>
     </div>
 
     <template v-else>
@@ -1516,7 +1580,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
         <div v-show="open.migrate" class="section-body">
           <div class="seg">
             <button type="button" :class="['seg-btn', { active: migrateMode === 'clone' }]" @click="migrateMode = 'clone'">克隆（拉取）</button>
-            <button type="button" :class="['seg-btn', { active: migrateMode === 'push' }]" @click="migrateMode = 'push'">推送（写回）</button>
+            <button v-if="isSuperAdmin" type="button" :class="['seg-btn', { active: migrateMode === 'push' }]" @click="migrateMode = 'push'">推送（写回）</button>
           </div>
 
           <!-- Shared upstream credentials — both directions talk to the same server -->
@@ -1558,11 +1622,6 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                 />
               </label>
 
-              <label class="tc-row">
-                <input type="checkbox" v-model="cloneProxyEnabled" />
-                <span class="tc-key">使用 Worker 代理（防止 CORS）</span>
-              </label>
-              <p class="feature-desc tc-desc" style="margin-left:0">开启后，所有上游 Subsonic 读取（歌单/收藏/元数据/音频）都经 EdgeSonic Worker 转发，适用于源站未配置 CORS 的场景。</p>
             </div>
           </div>
 
@@ -1571,59 +1630,99 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
             <p class="feature-desc" style="margin: 0 0 0.6rem 0">
               {{ t("settings.common.clone.desc") }}
             </p>
-            <div class="clone-options">
-              <label class="tc-row">
-                <input type="checkbox" v-model="clonePlaylistOnly" />
-                <span class="tc-key">仅克隆处于歌单的歌曲</span>
-              </label>
-              <label class="tc-row">
-                <input type="checkbox" v-model="cloneStarredOnly" />
-                <span class="tc-key">仅克隆收藏的歌曲</span>
-              </label>
-              <p class="feature-desc tc-desc" style="margin-left:0">上面两个过滤条件是并集关系：勾选任一项即纳入；两项都勾选时，克隆“歌单中的歌曲 ∪ 收藏的歌曲”。</p>
-            </div>
             <div class="transcode-grid">
+              <!-- 176: favourites / playlists are independently selectable and
+                   available to any user; they land on the target chosen below. -->
               <label class="tc-row">
-                <span class="tc-key">{{ t("settings.common.clone.metadataToggle") }}</span>
+                <span class="tc-key">{{ t("settings.common.clone.starredToggle") }}</span>
                 <span class="scan-toggle">
-                  <input type="checkbox" v-model="cloneMetadataEnabled" :disabled="cloneRunning" />
-                  <span>{{ cloneMetadataEnabled ? t("common.on") : t("common.off") }}</span>
+                  <input type="checkbox" v-model="cloneStarredEnabled" :disabled="cloneRunning" />
+                  <span>{{ cloneStarredEnabled ? t("common.on") : t("common.off") }}</span>
                 </span>
               </label>
-              <p class="feature-desc tc-desc">{{ t("settings.common.clone.metadataToggleDesc") }}</p>
-
               <label class="tc-row">
-                <span class="tc-key">{{ t("settings.common.clone.audioToggle") }}</span>
+                <span class="tc-key">{{ t("settings.common.clone.playlistsToggle") }}</span>
                 <span class="scan-toggle">
-                  <input type="checkbox" v-model="cloneAudioEnabled" :disabled="cloneRunning" />
-                  <span>{{ cloneAudioEnabled ? t("common.on") : t("common.off") }}</span>
+                  <input type="checkbox" v-model="clonePlaylistsEnabled" :disabled="cloneRunning" />
+                  <span>{{ clonePlaylistsEnabled ? t("common.on") : t("common.off") }}</span>
                 </span>
               </label>
-              <p class="feature-desc tc-desc">{{ t("settings.common.clone.audioToggleDesc") }}</p>
 
-              <label v-if="cloneAudioEnabled" class="tc-row">
-                <span class="tc-key">{{ t("settings.common.clone.audioMode") }}</span>
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.userMode.label") }}</span>
                 <span class="seg">
-                  <button type="button" :class="['seg-btn', { active: cloneAudioMode === 'browser' }]" :disabled="cloneRunning" @click="cloneAudioMode = 'browser'">
-                    {{ t("settings.common.clone.audioModeBrowser") }}
+                  <button type="button" :class="['seg-btn', { active: cloneUserMode === 'current' }]" :disabled="cloneRunning" @click="cloneUserMode = 'current'">
+                    {{ t("settings.common.clone.userMode.current") }}
                   </button>
-                  <button type="button" :class="['seg-btn', { active: cloneAudioMode === 'worker' }]" :disabled="cloneRunning" @click="cloneAudioMode = 'worker'">
-                    {{ t("settings.common.clone.audioModeWorker") }}
+                  <button v-if="isAdmin" type="button" :class="['seg-btn', { active: cloneUserMode === 'specified' }]" :disabled="cloneRunning" @click="cloneUserMode = 'specified'">
+                    {{ t("settings.common.clone.userMode.specified") }}
+                  </button>
+                  <button v-if="isSuperAdmin" type="button" :class="['seg-btn', { active: cloneUserMode === 'all' }]" :disabled="cloneRunning" @click="cloneUserMode = 'all'">
+                    {{ t("settings.common.clone.userMode.all") }}
                   </button>
                 </span>
               </label>
-              <p v-if="cloneAudioEnabled" class="feature-desc tc-desc">
-                {{ cloneAudioMode === "worker" ? t("settings.common.clone.audioModeWorkerDesc") : t("settings.common.clone.audioModeBrowserDesc") }}
-              </p>
+              <label v-if="cloneUserMode === 'specified'" class="tc-row">
+                <span class="tc-key">{{ t("settings.common.clone.targetUser") }}</span>
+                <input
+                  v-model="cloneTargetUsername"
+                  type="text"
+                  class="form-input"
+                  :placeholder="t('settings.common.clone.targetUserPlaceholder')"
+                  :disabled="cloneRunning"
+                  autocomplete="off"
+                />
+              </label>
+              <p class="feature-desc tc-desc">{{ t(`settings.common.clone.userMode.${cloneUserMode}Desc`) }}</p>
 
-              <label class="tc-row">
-                <span class="tc-key">{{ t("settings.common.clone.usersToggle") }}</span>
-                <span class="scan-toggle">
-                  <input type="checkbox" v-model="cloneUsersEnabled" :disabled="cloneRunning" />
-                  <span>{{ cloneUsersEnabled ? t("common.on") : t("common.off") }}</span>
-                </span>
-              </label>
-              <p class="feature-desc tc-desc">{{ t("settings.common.clone.usersToggleDesc") }}</p>
+              <!-- 176: metadata / audio write into the shared library — admin only. -->
+              <template v-if="isAdmin">
+                <label class="tc-row">
+                  <span class="tc-key">{{ t("settings.common.clone.metadataToggle") }}</span>
+                  <span class="scan-toggle">
+                    <input type="checkbox" v-model="cloneMetadataEnabled" :disabled="cloneRunning" />
+                    <span>{{ cloneMetadataEnabled ? t("common.on") : t("common.off") }}</span>
+                  </span>
+                </label>
+                <p class="feature-desc tc-desc">{{ t("settings.common.clone.metadataToggleDesc") }}</p>
+
+                <label class="tc-row">
+                  <span class="tc-key">{{ t("settings.common.clone.audioToggle") }}</span>
+                  <span class="scan-toggle">
+                    <input type="checkbox" v-model="cloneAudioEnabled" :disabled="cloneRunning" />
+                    <span>{{ cloneAudioEnabled ? t("common.on") : t("common.off") }}</span>
+                  </span>
+                </label>
+                <p class="feature-desc tc-desc">{{ t("settings.common.clone.audioToggleDesc") }}</p>
+
+                <label v-if="cloneAudioEnabled" class="tc-row">
+                  <span class="tc-key">{{ t("settings.common.clone.audioMode") }}</span>
+                  <span class="seg">
+                    <button type="button" :class="['seg-btn', { active: cloneAudioMode === 'browser' }]" :disabled="cloneRunning" @click="cloneAudioMode = 'browser'">
+                      {{ t("settings.common.clone.audioModeBrowser") }}
+                    </button>
+                    <button type="button" :class="['seg-btn', { active: cloneAudioMode === 'worker' }]" :disabled="cloneRunning" @click="cloneAudioMode = 'worker'">
+                      {{ t("settings.common.clone.audioModeWorker") }}
+                    </button>
+                  </span>
+                </label>
+                <p v-if="cloneAudioEnabled" class="feature-desc tc-desc">
+                  {{ cloneAudioMode === "worker" ? t("settings.common.clone.audioModeWorkerDesc") : t("settings.common.clone.audioModeBrowserDesc") }}
+                </p>
+
+                <!-- 176: filters only appear once metadata or audio is enabled. -->
+                <div v-if="cloneMetadataEnabled || cloneAudioEnabled" class="clone-options">
+                  <label class="tc-row">
+                    <input type="checkbox" v-model="clonePlaylistOnly" />
+                    <span class="tc-key">{{ t("settings.common.clone.filterPlaylistOnly") }}</span>
+                  </label>
+                  <label class="tc-row">
+                    <input type="checkbox" v-model="cloneStarredOnly" />
+                    <span class="tc-key">{{ t("settings.common.clone.filterStarredOnly") }}</span>
+                  </label>
+                  <p class="feature-desc tc-desc" style="margin-left:0">{{ t("settings.common.clone.filterDesc") }}</p>
+                </div>
+              </template>
 
               <p v-if="!cloneRunning && cloneForm.url && (cloneCacheCounts.metadata || cloneCacheCounts.audio)" class="feature-desc tc-desc">
                 {{ t("settings.common.clone.cacheHint", { metadata: cloneCacheCounts.metadata, audio: cloneCacheCounts.audio }) }}
@@ -1690,6 +1789,9 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
         </div>
       </section>
 
+      <!-- 176: the migrate tool above is available to any signed-in user; the
+           remaining maintenance sections stay super-admin only. -->
+      <template v-if="isSuperAdmin">
       <!-- ============ 工作池 ============ -->
       <section class="settings-section card" :class="{ open: open.workPool }">
         <button class="section-header" @click="toggleSection('workPool')">
@@ -1901,6 +2003,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
       </div>
         </div>
       </section>
+      </template>
     </template>
   </div>
 </template>
