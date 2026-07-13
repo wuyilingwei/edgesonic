@@ -129,27 +129,33 @@ printf '%s' "<account-id-from-step-2>" | wrangler secret put CF_ACCOUNT_ID --con
 reuse it — don't ask the operator for it again.
 
 `CF_API_TOKEN` and the R2 S3 key pair (`R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`) are different —
-they require a credential only the operator can mint in the dashboard. Only proceed to step 3.5 if
+they require credentials only the operator can mint in the dashboard. Only proceed to step 3.5 if
 the operator opted in when you asked in step 2; otherwise skip straight to step 3.6.
 
-### 3.5 Optional: `CF_API_TOKEN` + R2 presign keys
+### 3.5 Optional: `CF_API_TOKEN` + R2 keys
 
 Skip this section entirely if the operator declined in step 2.
 
-These three secrets all come from **one** combined API token, created in the dashboard. Give the
-operator this exact walkthrough (you cannot do the clicking yourself):
+These come from **two separate** credentials the operator creates in the dashboard (you cannot do
+the clicking yourself). Give them this exact walkthrough:
+
+**Token 1 — Workers API token → `CF_API_TOKEN`**
 
 1. Open `https://dash.cloudflare.com/<account-id>/api-tokens/create` (use the account id from
-   step 2).
-2. In the permissions search box, type **worker** and select every permission group that appears
-   **except R2** (these cover Workers Scripts edit + analytics read, needed for the app's cron
-   management and analytics integration).
-3. Add a second permission row and switch its resource scope from **all accounts** to
-   **R2 bucket**, then pick the bucket created in step 3.2. Cloudflare treats any token that
-   includes an R2 permission as R2-S3-compatible: on creation it shows you **both** the normal
-   Bearer token string **and** a separate Access Key ID / Secret Access Key pair for that bucket.
-4. Continue to summary → **Create Token**. Copy all three values shown (Bearer token, Access Key
-   ID, Secret Access Key) — the secret values are shown once.
+   step 2) and start a **Custom Token**.
+2. In the permissions search box, add the Workers permission groups — **Workers CI**, **Workers
+   Containers**, **Workers Observability**, and **Workers Scripts** (choose *Edit* where offered).
+   Do **not** add R2 here.
+3. Continue to summary → **Create Token** and copy the Bearer token string (shown once). That value
+   is `CF_API_TOKEN`.
+
+**Token 2 — R2 API token → `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY`**
+
+1. Open **R2 → Manage R2 API Tokens** (`https://dash.cloudflare.com/<account-id>/r2/api-tokens`) and
+   create a token scoped to the bucket from step 3.2 with **Object Read & Write**.
+2. On creation Cloudflare shows an **Access Key ID** and a **Secret Access Key** for the
+   S3-compatible endpoint — copy both (shown once). Those are `R2_ACCESS_KEY_ID` and
+   `R2_SECRET_ACCESS_KEY`.
 
 Once the operator pastes those three values back to you, **verify them before pushing anything** —
 a typo'd paste silently breaks cron/analytics/presign until someone notices:
@@ -222,10 +228,12 @@ if unclear):
   once, save it now.
 - This runbook already pushed `WORK_UPLOAD_HMAC_KEY` and `CF_ACCOUNT_ID` automatically — nothing
   to do there.
-- If the operator opted into the optional API token in step 2, it's already handled (step 3.5). If
-  they declined, remind them it's still available any time — a single Cloudflare API token
-  (dashboard link + exact click-through in step 3.5) yields `CF_API_TOKEN` + `R2_ACCESS_KEY_ID` +
-  `R2_SECRET_ACCESS_KEY`, enabling the in-app Cloudflare integration (cron management, analytics)
-  and R2 presigned direct streaming (bypasses Worker bandwidth limits) — see `SECRETS.md`.
+- If the operator opted into the optional API tokens in step 2, it's already handled (step 3.5). If
+  they declined, remind them it's still available any time — two Cloudflare tokens (a Workers API
+  token for `CF_API_TOKEN`, plus a separate R2 API token for `R2_ACCESS_KEY_ID` +
+  `R2_SECRET_ACCESS_KEY`; dashboard links + exact click-through in step 3.5) enable the in-app
+  Cloudflare integration (cron management, analytics) and R2 presigned direct streaming (bypasses
+  Worker bandwidth limits) — see `SECRETS.md`.
 - Once `CF_API_TOKEN` is set, the cron schedule this deploy cleared needs restoring — visit
-  **Settings → Cloudflare → "Ensure default cron"** in the app.
+  **Settings → Cloudflare → "Ensure default cron"** in the app (the default schedule is
+  `0 */1 * * *`, hourly).

@@ -81,7 +81,11 @@ jobs:
           # Install the Worker's own runtime deps (hono + @cloudflare/sandbox)
           # into the staged dir — not `npm ci` at the repo root, which would
           # also drag in web's build-time deps the deployed Worker never uses.
-          ( cd "$STAGE/worker" && npm install --omit=dev --no-audit --no-fund )
+          # --legacy-peer-deps: worker/package.json's *dev* deps (wrangler vs
+          # @cloudflare/workers-types) have a peer-range conflict; --omit=dev
+          # skips installing them, but a fresh resolve still evaluates the tree
+          # and would ERESOLVE without this. Only prod deps land in node_modules.
+          ( cd "$STAGE/worker" && npm install --omit=dev --legacy-peer-deps --no-audit --no-fund )
           test -d "$STAGE/worker/node_modules/hono" || { echo "::error::worker runtime deps failed to install into the package"; exit 1; }
 
           tar czf edgesonic-release.tar.gz -C "$RUNNER_TEMP" edgesonic-release
