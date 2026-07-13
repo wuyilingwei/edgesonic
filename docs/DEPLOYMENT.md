@@ -54,6 +54,5 @@ The deploy action consumes releases produced by `.github/workflows/release.yml`.
 | Workers | Runtime | 100k req/day |
 | D1 | Database (all state) | 5 GB storage, 25M row reads/day |
 | R2 | Primary music storage | 10 GB storage, free egress |
-| KV | Legacy binding (no active reads/writes) | — |
 
-All state uses D1 only (KV writes were removed in task 090). Feature flags, sessions, API keys, rate limits, last.fm cache, now playing, and cron timestamps all live in D1 with a 60-second per-isolate memory cache.
+All state uses D1 only. Feature flags, sessions, API keys, rate limits, last.fm cache, now playing, and cron timestamps all live in D1 with a 60-second per-isolate memory cache.
