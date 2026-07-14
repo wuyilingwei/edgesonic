@@ -1,0 +1,92 @@
+{
+  "sqlInjection": [
+    "' OR '1'='1",
+    "' OR 1=1 --",
+    "'; DROP TABLE users; --",
+    "' UNION SELECT * FROM users --",
+    "1'; UPDATE users SET level=3; --",
+    "1' AND 1=1 --",
+    "1 OR 1=1",
+    "admin' --",
+    "' OR 'a'='a"
+  ],
+  "pathTraversal": [
+    "../../../etc/passwd",
+    "..\\..\\..\\windows\\system32",
+    "....//....//....//etc/passwd",
+    "%2e%2e%2f%2e%2e%2fetc%2fpasswd",
+    "..%252f..%252fetc%252fpasswd",
+    "..;/..;/etc/passwd",
+    "...\\...\\...\\windows\\system32"
+  ],
+  "xssPayloads": [
+    "<script>alert('XSS')</script>",
+    "<img src=x onerror=\"alert('XSS')\">",
+    "<svg onload=\"alert('XSS')\">",
+    "javascript:alert('XSS')",
+    "<iframe src=\"javascript:alert('XSS')\"></iframe>",
+    "<body onload=\"alert('XSS')\">",
+    "<input onfocus=\"alert('XSS')\" autofocus>",
+    "<marquee onstart=\"alert('XSS')\"></marquee>",
+    "<img src=x onerror=alert(1)>",
+    "\"><script>alert(1)</script>",
+    "'><script>alert(1)</script>",
+    "<svg/onload=alert(1)>",
+    "data:text/html,<script>alert('XSS')</script>"
+  ],
+  "booleanBypass": [
+    "1",
+    "true",
+    "yes",
+    "True",
+    "TRUE",
+    "on",
+    "0",
+    "false",
+    "no",
+    "False",
+    "FALSE",
+    "off"
+  ],
+  "nullBypass": [
+    null,
+    "null",
+    "NULL",
+    "Null",
+    "",
+    "0",
+    "undefined"
+  ],
+  "largeInputs": {
+    "longString": "A".repeat(10000),
+    "deepNesting": "{'a': {'b': {'c': {'d': {'e': {'f': 'test'}}}}}}",
+    "largeArray": "[" + Array(1000).fill("1").join(",") + "]",
+    "longUsername": "user_" + "x".repeat(1000),
+    "longPassword": "P@ss" + "w".repeat(1000)
+  },
+  "timeBasedPayloads": [
+    "1' AND SLEEP(5) --",
+    "1' OR SLEEP(5) --",
+    "1; WAITFOR DELAY '00:00:05'; --"
+  ],
+  "commandInjection": [
+    "; ls -la",
+    "| cat /etc/passwd",
+    "`whoami`",
+    "$(whoami)",
+    "; rm -rf /",
+    "& ipconfig",
+    "| powershell Get-Process"
+  ],
+  "ldapInjection": [
+    "*",
+    "*)(objectClass=*",
+    "admin)(&(password=*))",
+    "*)(|(uid=*"
+  ],
+  "headerInjection": [
+    "\r\nSet-Cookie: admin=true",
+    "\r\nX-Admin: true",
+    "%0ASet-Cookie:%20admin=true"
+  ]
+}

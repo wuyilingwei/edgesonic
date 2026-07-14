@@ -1,0 +1,49 @@
+{
+  "testUsers": [
+    {
+      "id": 1,
+      "username": "admin",
+      "password": "admin123456",
+      "level": 3,
+      "email": "admin@test.local",
+      "description": "Super admin user for testing"
+    },
+    {
+      "id": 2,
+      "username": "user1",
+      "password": "user123456",
+      "level": 0,
+      "email": "user1@test.local",
+      "description": "Regular user"
+    },
+    {
+      "id": 3,
+      "username": "user2",
+      "password": "user2pass123",
+      "level": 0,
+      "email": "user2@test.local",
+      "description": "Another regular user for IDOR tests"
+    },
+    {
+      "id": 4,
+      "username": "moderator",
+      "password": "moderator123",
+      "level": 2,
+      "email": "mod@test.local",
+      "description": "Moderator with higher privileges"
+    }
+  ],
+  "testCredentials": {
+    "validUsername": "admin",
+    "validPassword": "admin123456",
+    "invalidUsername": "nonexistent",
+    "invalidPassword": "wrongpassword",
+    "emptyUsername": "",
+    "emptyPassword": ""
+  },
+  "testTokens": {
+    "expiredToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjAsImlhdCI6MH0.invalid",
+    "malformedToken": "not.a.valid.token",
+    "emptyToken": ""
+  }
+}
