@@ -30,6 +30,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Resolve tag
         id: tag
@@ -100,10 +102,31 @@ jobs:
           echo "Pinning worker runtime deps: hono@${HONO_VERSION}, @cloudflare/sandbox@${SANDBOX_VERSION}"
           ( cd "$STAGE/worker" && npm install --omit=dev --legacy-peer-deps --no-audit --no-fund --no-save \
               "hono@${HONO_VERSION}" "@cloudflare/sandbox@${SANDBOX_VERSION}" )
-          test -d "$STAGE/worker/node_modules/hono" || { echo "::error::worker runtime deps failed to install into the package"; exit 1; }
+           test -d "$STAGE/worker/node_modules/hono" || { echo "::error::worker runtime deps failed to install into the package"; exit 1; }
 
-          tar czf edgesonic-release.tar.gz -C "$RUNNER_TEMP" edgesonic-release
-          sha256sum edgesonic-release.tar.gz > edgesonic-release.tar.gz.sha256
+           tar czf edgesonic-release.tar.gz -C "$RUNNER_TEMP" edgesonic-release
+           sha256sum edgesonic-release.tar.gz > edgesonic-release.tar.gz.sha256
+
+      - name: Generate commit summary
+        id: notes
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          PREVIOUS_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          {
+            echo "Precompiled deploy package (prebuilt web/dist + isolated worker/node_modules — no npm ci / build needed)."
+            echo
+            echo "## Changes"
+            if [ -n "$PREVIOUS_TAG" ]; then
+              git log --no-merges --format='- %s' "${PREVIOUS_TAG}..${TAG}"
+              echo
+              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}"
+            else
+              echo "- Initial release"
+            fi
+          } > release-notes.md
+          printf 'Generated release notes:\n'
+          cat release-notes.md
 
       - name: Publish GitHub Release
         env:
@@ -111,12 +134,14 @@ jobs:
         run: |
           set -euo pipefail
           TAG="${{ steps.tag.outputs.tag }}"
-          NOTES="Precompiled deploy package (prebuilt web/dist + isolated worker/node_modules — no npm ci / build needed). See docs/DEPLOY_BY_AGENT.md for how to deploy it."
-          # Idempotent publish: `gh release create` 422s if the release already
-          # exists (workflow re-run, re-pushed tag, or a retried job). Replace
-          # its assets in place instead of failing the whole run.
+          # Idempotent publish: update both notes and assets when a release
+          # already exists (workflow re-run, re-pushed tag, or retry).
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release $TAG already exists — replacing its assets."
+            echo "Release $TAG already exists — replacing notes and assets."
+            gh release edit "$TAG" \
+              --repo "${{ github.repository }}" \
+              --title "EdgeSonic $TAG" \
+              --notes-file release-notes.md
             gh release upload "$TAG" \
               edgesonic-release.tar.gz \
               edgesonic-release.tar.gz.sha256 \
@@ -128,6 +153,5 @@ jobs:
               edgesonic-release.tar.gz.sha256 \
               --repo "${{ github.repository }}" \
               --title "EdgeSonic $TAG" \
-              --generate-notes \
-              --notes "$NOTES"
+              --notes-file release-notes.md
           fi
