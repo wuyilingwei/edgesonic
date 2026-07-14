@@ -42,6 +42,8 @@ assert(/"oldestStarred"/.test(source), "liked supports oldest-liked sorting");
 assert(/"newestAdded"/.test(source) && /"oldestAdded"/.test(source), "library supports newest/oldest-added sorting");
 assert(/value="oldestStarred"/.test(source) && /value="oldestAdded"/.test(source), "sort selector exposes the time-order options");
 assert(/<StarButton/.test(source) && /kind="artist"/.test(source) && /kind="album"/.test(source) && /kind="song"/.test(source), "all liked entity types expose a star button");
+assert(/v-if="currentArtist && !currentAlbum"[\s\S]*?kind="artist"/.test(source), "artist detail keeps its favorite action");
+assert(/v-if="currentAlbum"[\s\S]*?kind="album"/.test(source), "album detail keeps its favorite action");
 assert(/authFetch\("getArtistInfo"/.test(source), "artist details trigger automatic lookup");
 assert(/artistInfoLoading/.test(source) && /artistInfoUnavailable/.test(source), "artist lookup has loading and failure states");
 

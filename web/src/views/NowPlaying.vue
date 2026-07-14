@@ -1,7 +1,7 @@
 
 <script setup lang="ts">
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ref, computed, watch, nextTick } from "vue";
+import { ref, computed, watch, nextTick, onBeforeUnmount } from "vue";
 import { usePlayerStore } from "../stores/player";
 import { useAuth } from "../api";
 import { getTrackLyrics } from "../lib/trackPrefetch";
@@ -19,6 +19,7 @@ const lyricsScrollEl = ref<HTMLElement | null>(null);
 const suppressScrollUntil = ref(0);
 const autoScrolling = ref(false);
 const ACTIVE_CENTER_TOLERANCE_PX = 24;
+let lyricsReturnTimer: ReturnType<typeof setTimeout> | null = null;
 
 function parseLrcDual(text: string): LyricLine[] {
   const re = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)/g;
@@ -155,10 +156,11 @@ const activeIdx = computed(() => {
   return idx;
 });
 
-watch(activeIdx, async (idx) => {
+async function centerActiveLyric(idx = activeIdx.value) {
   if (idx < 0 || userScrolled.value || !lyricsScrollEl.value) return;
   await nextTick();
   const container = lyricsScrollEl.value;
+  if (!container) return;
   const el = container.querySelectorAll(".np-lyric-line")[idx] as HTMLElement | undefined;
   if (!el) return;
   const target = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
@@ -166,12 +168,24 @@ watch(activeIdx, async (idx) => {
   autoScrolling.value = true;
   container.scrollTo({ top: target, behavior: "smooth" });
   setTimeout(() => { autoScrolling.value = false; }, 600);
+}
+
+watch(activeIdx, (idx) => {
+  void centerActiveLyric(idx);
 });
 
 function onLyricsScroll() {
   if (Date.now() < suppressScrollUntil.value) return;
   userScrolled.value = !activeLineIsCentered();
+  if (!userScrolled.value) return;
+  if (lyricsReturnTimer) clearTimeout(lyricsReturnTimer);
+  lyricsReturnTimer = setTimeout(() => {
+    userScrolled.value = false;
+    void centerActiveLyric();
+  }, 1200);
 }
+
+onBeforeUnmount(() => { if (lyricsReturnTimer) clearTimeout(lyricsReturnTimer); });
 
 function activeLineIsCentered(): boolean {
   const idx = activeIdx.value;
@@ -242,6 +256,7 @@ watch(coverSrc, () => { coverFailed.value = false; });
 
 <style scoped>
 .nowplaying {
+  position: relative;
   display: flex;
   height: calc(100vh - var(--nav-h) - var(--player-h));
   padding: 1.5rem 1.5rem 0.5rem;
@@ -337,7 +352,7 @@ watch(coverSrc, () => { coverFailed.value = false; });
 @media (max-width: 768px) {
   .nowplaying { flex-direction: column; padding: 0.5rem; gap: 0.5rem; }
   .np-left { flex: none; }
-  .np-cover-wrap { width: 180px; height: 180px; }
-  .np-right { flex: 1; min-height: 200px; }
+  .np-cover-wrap { width: min(180px, 28vh); height: min(180px, 28vh); }
+  .np-right { flex: 1; min-height: 0; }
 }
 </style>

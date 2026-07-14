@@ -28,6 +28,8 @@ export interface Track {
   starred?: boolean;
   starredAt?: string;
   createdAt?: string;
+  artistId?: string;
+  albumId?: string;
 }
 
 interface IncrementalFallbackState {
@@ -725,10 +727,10 @@ export const usePlayerStore = defineStore("player", () => {
     else playing.value = false;
   }
 
-  function prev() {
+  function prev(force = false) {
     if (!active) return;
     // Restart current track if more than 3s in, like most players.
-    if (active.currentTime > 3) { active.currentTime = 0; return; }
+    if (!force && active.currentTime > 3) { active.currentTime = 0; return; }
     if (playMode.value === "shuffle") {
       const pos = _shuffleOrder.indexOf(index.value);
       if (pos > 0) { playAt(_shuffleOrder[pos - 1]); return; }

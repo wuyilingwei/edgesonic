@@ -218,8 +218,10 @@ async function cleanupOrphanMaster(db: D1Database, masterId: string) {
   if (master) {
     await db.prepare("DELETE FROM albums WHERE id = ? AND NOT EXISTS (SELECT 1 FROM song_masters WHERE album_id = ?)")
       .bind(master.album_id, master.album_id).run();
-    await db.prepare("DELETE FROM artists WHERE id = ? AND NOT EXISTS (SELECT 1 FROM song_masters WHERE artist_id = ? OR album_artist_id = ?)")
-      .bind(master.artist_id, master.artist_id, master.artist_id).run();
+    await db.prepare(`DELETE FROM artists WHERE id = ?
+      AND NOT EXISTS (SELECT 1 FROM song_masters WHERE artist_id = ? OR album_artist_id = ?)
+      AND NOT EXISTS (SELECT 1 FROM song_artists WHERE artist_id = ?)`)
+      .bind(master.artist_id, master.artist_id, master.artist_id, master.artist_id).run();
   }
 }
 

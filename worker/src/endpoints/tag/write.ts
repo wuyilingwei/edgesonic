@@ -16,6 +16,12 @@
 import { Hono } from "hono";
 import { permissionMiddleware } from "../../auth";
 import { md5 } from "../../utils/md5";
+import {
+  artistInsertStatements,
+  parseArtistCredits,
+  songArtistStatements,
+  UNUSED_ARTIST_CLEANUP_SQL,
+} from "../../utils/artistCredits";
 import { createQueries } from "../../db/queries";
 
 type Queries = ReturnType<typeof createQueries>;
@@ -347,10 +353,15 @@ async function applyTagsToSong(
   // them through as keywords (only lyrics is keyword-enabled in cleanInput).
   const title = tags.title === KW_NULL ? "" : (tags.title || master.title);
   const artistName = tags.artist === KW_NULL ? "Unknown Artist" : (tags.artist || curArtist?.name || "Unknown Artist");
-  const linkArtistName = tags.albumArtist === KW_NULL ? artistName : (tags.albumArtist || artistName);
+  const artistCredits = parseArtistCredits(artistName);
+  const albumArtistName = tags.albumArtist === KW_NULL ? "" : tags.albumArtist;
+  const albumArtistCredits = albumArtistName ? parseArtistCredits(albumArtistName) : [];
+  const primaryArtist = artistCredits[0];
+  const albumArtist = albumArtistCredits[0];
+  const linkArtistName = albumArtistName || primaryArtist.name;
   const albumName = tags.album === KW_NULL ? "Unknown Album" : (tags.album || curAlbum?.name || "Unknown Album");
   const genreValue = tags.genre === KW_NULL ? "" : tags.genre;
-  const artistId = "ar-" + md5(linkArtistName).substring(0, 10);
+  const artistId = primaryArtist.id;
   const albumId = "al-" + md5(linkArtistName + " " + albumName).substring(0, 10);
   const now = Math.floor(Date.now() / 1000);
   const oldAlbumId = master.album_id;
@@ -363,17 +374,19 @@ async function applyTagsToSong(
   const lyricsNull = lyricsKeyword === KW_NULL;
 
   await db.batch([
-    db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(artistId, linkArtistName, linkArtistName.toLowerCase(), now, now),
+    ...artistInsertStatements(db, [...artistCredits, ...albumArtistCredits], now),
     db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name, year, genre, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(albumId, albumName, albumName.toLowerCase(), tags.year ?? null, genreValue ?? null, now, now),
     db.prepare(
       `UPDATE song_masters SET
-         album_id = ?, artist_id = ?, title = ?, sort_title = ?,
+         album_id = ?, artist_id = ?,
+         album_artist_id = CASE WHEN ? THEN ? ELSE album_artist_id END,
+         title = ?, sort_title = ?,
          track = COALESCE(?, track), genre = COALESCE(?, genre),
          lyrics = COALESCE(?, lyrics), updated_at = ?
        WHERE id = ?`
-    ).bind(albumId, artistId, title, title.toLowerCase(), tags.track ?? null, genreValue ?? null, tags.lyrics ?? null, now, master.id),
+    ).bind(albumId, artistId, tags.albumArtist !== undefined, albumArtist?.id ?? null, title, title.toLowerCase(), tags.track ?? null, genreValue ?? null, tags.lyrics ?? null, now, master.id),
+    ...songArtistStatements(db, master.id, artistCredits),
     // manual edits win over future scans
     db.prepare("UPDATE song_instances SET tag_scanned = 1 WHERE master_id = ?").bind(master.id),
   ]);
@@ -400,9 +413,7 @@ async function applyTagsToSong(
     ).bind(aid, aid, now, aid).run();
   }
   await db.prepare("DELETE FROM albums WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE album_id = albums.id)").run();
-  await db.prepare(
-    "DELETE FROM artists WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE artist_id = artists.id OR album_artist_id = artists.id)"
-  ).run();
+  await db.prepare(UNUSED_ARTIST_CLEANUP_SQL).run();
 
   // --- file write-back per instance ---
   const instances = await queries.getSongInstances(master.id);

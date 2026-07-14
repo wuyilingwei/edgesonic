@@ -36,6 +36,7 @@
       "about": "About"
     },
     "logout": "LOGOUT",
+    "openNavigation": "Open navigation",
     "levels": {
       "guest": "GUEST",
       "user": "USER",
@@ -1063,5 +1064,29 @@
     "message": "Refresh to load the latest features and fixes",
     "refresh": "Refresh now",
     "later": "Later"
+  },
+  "about": {
+    "tagline": "Subsonic-compatible music streaming server on Cloudflare Workers",
+    "about_title": "About",
+    "about_desc": "EdgeSonic is an open-source, self-hosted music streaming server built on Cloudflare Workers.",
+    "source_code": "All source code is available on",
+    "license_title": "License",
+    "license_text": "EdgeSonic is licensed under the",
+    "license_desc": "This means that if you modify and use EdgeSonic over a network, you must make your modifications available to other users under the same license.",
+    "read_license": "Read the full AGPL-3.0 license →",
+    "copyright_title": "Copyright",
+    "copyright_text": "Copyright © 2022-2026 EdgeSonic Contributors",
+    "credits_title": "Credits & References",
+    "credits_desc": "EdgeSonic is inspired by these excellent open-source projects:",
+    "compatibility_title": "Compatibility",
+    "subsonic_compatible": "Subsonic API v1.16.1 compatible",
+    "compatibility_desc": "EdgeSonic implements the Subsonic REST API (v1.16.1) and extends it with",
+    "protocol_enhancements": "protocol enhancements.",
+    "opensource_projects": "Open Source Projects",
+    "powered_by": "EdgeSonic is built with these excellent open-source projects:",
+    "project": "Project",
+    "version": "Version",
+    "license": "License",
+    "more_info": "For more information, visit"
   }
 }

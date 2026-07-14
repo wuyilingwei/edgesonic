@@ -19,15 +19,44 @@ const activeThemeDef = computed(() => getTheme(activeTheme.value));
 
 let lastRoute = "/library";
 watch(() => route.path, (p) => { if (p !== "/now-playing") lastRoute = p; }, { immediate: true });
+const detailsOpen = computed(() => route.path === "/now-playing");
+
+let trackTouchStart: { x: number; y: number } | null = null;
+let suppressTrackClickUntil = 0;
+
+function onTrackTouchStart(e: TouchEvent) {
+  const touch = e.changedTouches[0];
+  if (!touch) return;
+  trackTouchStart = { x: touch.clientX, y: touch.clientY };
+}
+
+function onTrackTouchEnd(e: TouchEvent) {
+  const start = trackTouchStart;
+  trackTouchStart = null;
+  if (!start || detailsOpen.value || !player.hasTrack) return;
+  const touch = e.changedTouches[0];
+  if (!touch) return;
+  const dx = touch.clientX - start.x;
+  const dy = touch.clientY - start.y;
+  if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.2) return;
+  suppressTrackClickUntil = Date.now() + 400;
+  if (dx < 0) player.next();
+  else player.prev(true);
+}
+
+function onTrackTouchCancel() {
+  trackTouchStart = null;
+}
 
 function goNowPlaying() {
+  if (Date.now() < suppressTrackClickUntil) return;
   if (!player.hasTrack) return;
   if (route.path === "/now-playing") router.push(lastRoute);
   else router.push("/now-playing");
 }
 
 const playModeTitle = computed(() => t(`player.playMode.${player.playMode}`));
-const expandTitle = computed(() => t(route.path === "/now-playing" ? "player.collapse" : "player.expand"));
+const expandTitle = computed(() => t(detailsOpen.value ? "player.collapse" : "player.expand"));
 
 const coverFailed = ref(false);
 const coverSrc = computed(() => {
@@ -52,6 +81,7 @@ const displayTime = computed(() => dragTime.value ?? player.currentTime);
 const progressPct = computed(() =>
   player.duration > 0 ? (displayTime.value / player.duration) * 100 : 0,
 );
+const coverProgressPct = computed(() => Math.min(Math.max(progressPct.value, 0), 100));
 
 function fmtPrecise(sec: number): string {
   if (!isFinite(sec) || sec < 0) return "0:00.00";
@@ -61,7 +91,7 @@ function fmtPrecise(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
-function seekFromEvent(e: MouseEvent): number | null {
+function seekFromEvent(e: PointerEvent): number | null {
   const el = progressEl.value;
   if (!el || player.duration <= 0) return null;
   const rect = el.getBoundingClientRect();
@@ -80,19 +110,22 @@ function stopProgressDrag(commit: boolean) {
   if (commit && target !== null) player.seek(target);
 }
 
-function onProgressDown(e: MouseEvent) {
+function onProgressPointerDown(e: PointerEvent) {
   if (!player.hasTrack) return;
   e.preventDefault();
   stopProgressDrag(false);
+  progressEl.value?.setPointerCapture?.(e.pointerId);
   dragging.value = true;
   dragTime.value = seekFromEvent(e);
-  const move = (ev: MouseEvent) => { dragTime.value = seekFromEvent(ev); };
+  const move = (ev: PointerEvent) => { dragTime.value = seekFromEvent(ev); };
   const up = () => stopProgressDrag(true);
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+  window.addEventListener("pointercancel", up, { once: true });
   removeDragListeners = () => {
-    window.removeEventListener("mousemove", move);
-    window.removeEventListener("mouseup", up);
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    window.removeEventListener("pointercancel", up);
   };
 }
 
@@ -103,6 +136,7 @@ function onVolume(e: Event) {
 }
 
 const queueOpen = ref(false);
+watch(detailsOpen, (open) => { if (!open) queueOpen.value = false; });
 function playFromQueue(i: number) { player.playAt(i); }
 function removeFromQueue(i: number) {
   if (i === player.index) return;
@@ -112,14 +146,25 @@ function removeFromQueue(i: number) {
 </script>
 
 <template>
-  <footer class="player-bar">
+  <footer class="player-bar" :class="{ 'details-open': detailsOpen }">
     <!-- Track info -->
-    <div class="pb-track">
-      <div class="pb-cover" @click="goNowPlaying" :class="{ clickable: player.hasTrack }" :title="player.hasTrack ? expandTitle : ''">
+    <div
+      class="pb-track"
+      :class="{ clickable: player.hasTrack }"
+      @click="goNowPlaying"
+      @touchstart="onTrackTouchStart"
+      @touchend="onTrackTouchEnd"
+      @touchcancel="onTrackTouchCancel"
+    >
+      <div class="pb-cover" :class="{ clickable: player.hasTrack }" :title="player.hasTrack ? expandTitle : ''">
         <img v-if="coverSrc && !coverFailed" :src="coverSrc" alt="" @error="coverFailed = true" />
         <svg v-else viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
+        <svg v-if="player.hasTrack" class="pb-cover-ring" viewBox="0 0 48 48" aria-hidden="true">
+          <rect class="pb-cover-ring-track" x="2" y="2" width="44" height="44" pathLength="100" />
+          <rect class="pb-cover-ring-fill" x="2" y="2" width="44" height="44" pathLength="100" :style="{ strokeDashoffset: 100 - coverProgressPct }" />
+        </svg>
       </div>
-      <div v-if="player.current" class="pb-meta" @click="goNowPlaying" :class="{ clickable: player.hasTrack }" :title="expandTitle">
+      <div v-if="player.current" class="pb-meta" :class="{ clickable: player.hasTrack }" :title="expandTitle">
         <div class="pb-title" :title="player.current.title">{{ player.current.title }}</div>
         <div class="pb-artist">{{ player.current.artist || t("player.unknownArtist") }}</div>
       </div>
@@ -154,7 +199,7 @@ function removeFromQueue(i: number) {
       </div>
       <div class="pb-progress-row">
         <span class="pb-time">{{ formatDuration(Math.floor(displayTime)) }}</span>
-        <div ref="progressEl" class="pb-progress" :class="{ disabled: !player.hasTrack }" @mousedown="onProgressDown">
+        <div ref="progressEl" class="pb-progress" :class="{ disabled: !player.hasTrack }" @pointerdown="onProgressPointerDown">
           <div
             v-for="(seg, i) in bufferedSegments"
             :key="i"
@@ -249,6 +294,28 @@ function removeFromQueue(i: number) {
 .pb-cover.clickable:hover { border-color: var(--color-accent-dim); }
 .pb-meta.clickable:hover .pb-title { color: var(--color-accent-primary); }
 .pb-cover img { width: 100%; height: 100%; object-fit: cover; }
+.pb-cover-ring {
+  display: none;
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  overflow: visible;
+  pointer-events: none;
+}
+.pb-cover-ring-track,
+.pb-cover-ring-fill {
+  fill: none;
+  stroke-width: 2;
+}
+.pb-cover-ring-track { stroke: var(--color-border-subtle); }
+.pb-cover-ring-fill {
+  stroke: var(--color-accent-primary);
+  stroke-dasharray: 100 100;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke-dashoffset 0.15s linear;
+}
 .pb-meta { min-width: 0; }
 .pb-title {
   font-size: var(--fs-md); color: var(--color-text-primary); font-weight: 700;
@@ -302,9 +369,15 @@ function removeFromQueue(i: number) {
   width: 34px; height: 34px;
   border: 1px solid var(--color-border-strong);
   border-radius: 2px;
-  color: var(--color-text-primary);
+  background: var(--color-bg-elevated);
+  color: var(--color-accent-primary);
+  transition: background-color 0.15s, border-color 0.15s;
 }
-.pb-play:hover:not(:disabled) { background: var(--color-accent-dim); }
+.pb-play:hover:not(:disabled) {
+  background: var(--color-accent-primary);
+  color: var(--color-text-inverse);
+  border-color: var(--color-accent-primary);
+}
 
 .pb-progress-row { display: flex; align-items: center; gap: 0.6rem; width: 100%; max-width: 560px; }
 .pb-time {
@@ -313,7 +386,7 @@ function removeFromQueue(i: number) {
 }
 .pb-progress {
   position: relative; flex: 1; height: 14px;
-  display: flex; align-items: center; cursor: pointer;
+  display: flex; align-items: center; cursor: pointer; touch-action: none;
 }
 .pb-progress.disabled { cursor: default; }
 .pb-progress::before {
@@ -459,8 +532,43 @@ function removeFromQueue(i: number) {
   .pb-track { width: auto; flex: 1; }
   .pb-right { width: auto; gap: 0.3rem; }
   .pb-volume { display: none; }
-  .pb-progress-row { display: none; }
+  .player-bar:not(.details-open) .pb-progress-row { display: none; }
   .pb-center { flex: 0 0 auto; }
   .pb-queue-panel { width: calc(100vw - 1rem); }
+
+  .player-bar:not(.details-open) .pb-center,
+  .player-bar.details-open .pb-track { display: none; }
+  .player-bar:not(.details-open) .pb-track {
+    width: 100%;
+    padding-left: 0.35rem;
+    padding-right: 3.25rem;
+    touch-action: pan-y;
+    user-select: none;
+  }
+  .player-bar:not(.details-open) .pb-cover {
+    position: relative;
+    overflow: visible;
+  }
+  .player-bar:not(.details-open) .pb-cover-ring { display: block; }
+  .player-bar:not(.details-open) .pb-right,
+  .player-bar.details-open .pb-right {
+    display: flex;
+    position: absolute;
+    right: 1.25rem;
+    width: auto;
+    z-index: 2;
+  }
+  .player-bar:not(.details-open) .pb-right {
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .player-bar.details-open { justify-content: center; }
+  .player-bar.details-open .pb-track { display: none; }
+  .player-bar.details-open .pb-center { width: 100%; flex: 1; }
+  .player-bar.details-open .pb-progress-row { max-width: none; }
+  .player-bar.details-open .pb-right {
+    top: 50%;
+    transform: translateY(-8px);
+  }
 }
 </style>

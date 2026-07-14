@@ -37,8 +37,13 @@
 :root[data-theme^="sp-"] .pb-play {
   border-color: transparent;
   color: var(--color-text-inverse);
-  background: linear-gradient(135deg, var(--color-accent-primary), color-mix(in srgb, var(--color-accent-primary) 55%, var(--deco-b)));
-  box-shadow: 0 0 18px color-mix(in srgb, var(--deco-a) 40%, transparent);
+  background: var(--color-accent-primary);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--color-accent-primary) 60%, transparent);
+  transition: box-shadow 0.15s, filter 0.15s;
+}
+:root[data-theme^="sp-"] .pb-play:hover:not(:disabled) {
+  filter: brightness(1.15);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--color-accent-primary) 80%, transparent);
 }
 :root[data-theme^="sp-"] .pb-progress { height: 22px; overflow: visible; }
 :root[data-theme^="sp-"] .pb-progress::before { height: 9px; border-radius: 999px; background: color-mix(in srgb, var(--color-accent-primary) 14%, #ffffff); border: 1px solid color-mix(in srgb, var(--color-accent-primary) 34%, transparent); }

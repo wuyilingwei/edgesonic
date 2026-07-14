@@ -32,6 +32,15 @@ watch(isLoggedIn, (now) => {
 const menuOpen = ref(false);
 watch(() => route.path, () => { menuOpen.value = false; });
 
+function openMenuFromLogo() {
+  menuOpen.value = true;
+}
+
+function collapseNowPlaying() {
+  if (window.history.length > 1) router.back();
+  else void router.push("/library");
+}
+
 const pageTransitionName = ref("page");
 router.beforeEach((to, from) => {
   if (to.path === "/now-playing") pageTransitionName.value = "expand";
@@ -126,15 +135,24 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   <router-view v-if="!isLoggedIn" />
 
   <!-- 登录后框架：NavBar + Sidebar + Main + PlayerBar -->
-  <div v-else class="shell">
+  <div v-else class="shell" :class="{ 'now-playing-shell': route.path === '/now-playing' }">
     <nav class="navbar">
-      <!-- left: logo + hamburger -->
+      <!-- left: logo; on mobile it toggles the sidebar -->
       <div class="nav-left">
-        <router-link to="/" class="nav-logo">
+        <button
+          class="nav-logo nav-logo-menu"
+          aria-controls="main-sidebar"
+          :aria-expanded="menuOpen"
+          :aria-label="t('app.openNavigation')"
+          @click="openMenuFromLogo"
+        >
+          <img src="/logo.svg" alt="EdgeSonic" class="nav-logo-img" />
+          <span class="logo-text">EDGESONIC</span>
+        </button>
+        <router-link to="/" class="nav-logo nav-logo-home">
           <img src="/logo.svg" alt="EdgeSonic" class="nav-logo-img" />
           <span class="logo-text">EDGESONIC</span>
         </router-link>
-        <button class="hamburger" @click="menuOpen = !menuOpen">☰</button>
       </div>
 
       <!-- right: user -->
@@ -147,9 +165,20 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
       <div class="nav-scanline"></div>
     </nav>
 
+    <button
+      v-if="route.path === '/now-playing'"
+      class="now-playing-collapse"
+      type="button"
+      :title="t('player.collapse')"
+      :aria-label="t('player.collapse')"
+      @click="collapseNowPlaying"
+    >
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="m7.41 8.59 4.59 4.58 4.59-4.58L18 10l-6 6-6-6z"/></svg>
+    </button>
+
     <div class="sidebar-overlay" :class="{ open: menuOpen }" @click="menuOpen = false"></div>
 
-    <aside class="sidebar" :class="{ open: menuOpen }">
+    <aside id="main-sidebar" class="sidebar" :class="{ open: menuOpen }">
       <div class="sidebar-scroll">
         <div v-for="g in groups" :key="g.label" class="nav-group">
           <div class="nav-group-label">{{ g.label }}</div>
@@ -195,6 +224,12 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   z-index: 1;
 }
 .shell { min-height: 100vh; }
+.shell.now-playing-shell {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
 
 /* --- NavBar (fixed, 60px) --- */
 .navbar {
@@ -235,6 +270,7 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   white-space: nowrap;
   text-decoration: none;
 }
+.nav-logo-menu { display: none; }
 .nav-logo-img {
   height: 38px;
   width: 38px;
@@ -261,13 +297,29 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   max-width: 140px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.hamburger {
+.now-playing-collapse {
+  position: fixed;
+  top: calc(var(--nav-h) + 0.75rem);
+  left: calc(var(--sidebar-w) + 1.75rem);
+  z-index: 220;
   display: none;
-  color: var(--color-text-primary);
-  font-size: 1.1rem;
-  width: 32px; height: 32px;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--color-border-subtle);
+  background: color-mix(in srgb, var(--color-bg-secondary) 78%, transparent);
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
 }
-
+.now-playing-collapse:hover {
+  color: var(--color-accent-primary);
+  border-color: var(--color-border-strong);
+  background: var(--color-bg-tertiary);
+}
 /* --- Sidebar (240px) ---
  * .sidebar is the fixed flex host; only .sidebar-scroll (the nav-group
  * list) scrolls. .sidebar-footer-spacer is an empty reserved spacer below
@@ -354,6 +406,19 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   padding: calc(var(--nav-h) + 1.5rem) 1.75rem calc(var(--player-h) + 1.5rem);
   min-height: 100vh;
 }
+.now-playing-shell .main {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.now-playing-shell .nowplaying {
+  height: auto;
+  flex: 1;
+  min-height: 0;
+}
 
 /* --- Page transitions ---
  * "page": plain navigation between regular views.
@@ -375,14 +440,16 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
 .collapse-leave-active { transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.4, 0, 1, 1); }
 .collapse-leave-to { opacity: 0; transform: translateY(48px) scale(0.97); }
 
-/* --- Responsive: ≤960px 侧栏收起为汉堡 --- */
+/* --- Responsive: ≤960px 侧栏由 Logo 展开 --- */
 @media (max-width: 960px) {
-  .hamburger { display: inline-flex; align-items: center; justify-content: center; }
+  .nav-logo-home { display: none; }
+  .nav-logo-menu { display: flex; }
   .nav-links { display: none; }
   .nav-username { display: none; }
   .sidebar { transform: translateX(-100%); bottom: 0; box-shadow: 8px 0 40px rgba(0, 0, 0, 0.6); }
   .sidebar.open { transform: translateX(0); }
   .sidebar-overlay.open { display: block; }
   .main { margin-left: 0; padding-left: 1rem; padding-right: 1rem; }
+  .now-playing-collapse { display: inline-flex; left: 1rem; }
 }
 </style>

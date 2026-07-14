@@ -38,6 +38,12 @@
 //   "seen" so a future scan does not re-queue the work forever.
 
 import { md5 } from "./md5";
+import {
+  artistInsertStatements,
+  parseArtistCredits,
+  songArtistStatements,
+  UNUSED_ARTIST_CLEANUP_SQL,
+} from "./artistCredits";
 
 // ---------------------------------------------------------------------------
 // SubmittedMetadata — the 041 wire shape, also reused as the merged form that
@@ -222,30 +228,34 @@ export async function relinkArtistAlbum(
 
   const title = tags.title || master.title;
   const artistName = tags.artist || curArtist?.name || "Unknown Artist";
-  const linkArtistName = tags.albumArtist || artistName;
+  const artistCredits = parseArtistCredits(artistName);
+  const albumArtistCredits = tags.albumArtist ? parseArtistCredits(tags.albumArtist) : [];
+  const primaryArtist = artistCredits[0];
+  const albumArtist = albumArtistCredits[0];
+  const linkArtistName = tags.albumArtist || primaryArtist.name;
   const albumName = tags.album || curAlbum?.name || "Unknown Album";
-  const artistId = "ar-" + md5(linkArtistName).substring(0, 10);
+  const artistId = primaryArtist.id;
   const albumId = "al-" + md5(linkArtistName + " " + albumName).substring(0, 10);
   const oldAlbumId = master.album_id;
 
   await db.batch([
-    db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(artistId, linkArtistName, linkArtistName.toLowerCase(), now, now),
+    ...artistInsertStatements(db, [...artistCredits, ...albumArtistCredits], now),
     db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name, year, genre, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .bind(albumId, albumName, albumName.toLowerCase(), tags.year ?? null, tags.genre ?? null, now, now),
     db.prepare(
       `UPDATE song_masters SET
-         album_id = ?, artist_id = ?, title = ?, sort_title = ?,
+         album_id = ?, artist_id = ?, album_artist_id = COALESCE(?, album_artist_id), title = ?, sort_title = ?,
          track = COALESCE(?, track), disc = COALESCE(?, disc),
          genre = COALESCE(?, genre), duration = COALESCE(?, duration),
          updated_at = ?
        WHERE id = ?`,
     ).bind(
-      albumId, artistId, title, title.toLowerCase(),
+      albumId, artistId, albumArtist?.id ?? null, title, title.toLowerCase(),
       tags.track ?? null, tags.disc ?? null,
       tags.genre ?? null, tags.duration ?? null,
       now, master.id,
     ),
+    ...songArtistStatements(db, master.id, artistCredits),
   ]);
 
   // Backfill year / genre onto the freshly anchored album row (INSERT OR IGNORE
@@ -267,9 +277,7 @@ export async function relinkArtistAlbum(
     ).bind(aid, aid, now, aid).run();
   }
   await db.prepare("DELETE FROM albums WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE album_id = albums.id)").run();
-  await db.prepare(
-    "DELETE FROM artists WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE artist_id = artists.id OR album_artist_id = artists.id)",
-  ).run();
+  await db.prepare(UNUSED_ARTIST_CLEANUP_SQL).run();
 
   return { albumId, artistId };
 }

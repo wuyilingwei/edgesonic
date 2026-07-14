@@ -128,6 +128,12 @@ function buildDb() {
       created_at INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT 0
     );
+    CREATE TABLE song_artists (
+      song_id TEXT NOT NULL,
+      artist_id TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (song_id, artist_id)
+    );
     CREATE TABLE song_instances (
       id TEXT PRIMARY KEY,
       master_id TEXT NOT NULL,
@@ -224,7 +230,7 @@ console.log("work/submit (metadata, success) → tag_scanned=1 + relink + physic
       instanceId: "inst-1",
       tags: {
         title: "Cosmic Drift",
-        artist: "Nebula",
+        artist: "Nebula, Stardust",
         album: "Arc",
         albumArtist: "Nebula",
         genre: "ambient",
@@ -267,6 +273,10 @@ console.log("work/submit (metadata, success) → tag_scanned=1 + relink + physic
   const ar = sqlite.prepare("SELECT name FROM artists WHERE id=?").get(sm.artist_id) as any;
   const al = sqlite.prepare("SELECT name, year, genre FROM albums WHERE id=?").get(sm.album_id) as any;
   assert(ar?.name === "Nebula", `artist row created (got ${ar?.name})`);
+  const credits = sqlite.prepare(
+    "SELECT ar.name FROM song_artists sa JOIN artists ar ON ar.id = sa.artist_id WHERE sa.song_id = ? ORDER BY sa.position"
+  ).all("sg-1") as Array<{ name: string }>;
+  assert(credits.map((credit) => credit.name).join(", ") === "Nebula, Stardust", `artist credits split and ordered (got ${credits.map((credit) => credit.name).join(", ")})`);
   assert(al?.name === "Arc", `album row created (got ${al?.name})`);
   assert(al?.year === 2025, `album year populated (got ${al?.year})`);
 

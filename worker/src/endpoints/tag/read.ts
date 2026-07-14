@@ -20,6 +20,12 @@ import { permissionMiddleware } from "../../auth";
 import { md5 } from "../../utils/md5";
 import { parseTags } from "../../utils/tags";
 import { fetchSlices, type SourceRow } from "../../utils/slices";
+import {
+  artistInsertStatements,
+  parseArtistCredits,
+  songArtistStatements,
+  UNUSED_ARTIST_CLEANUP_SQL,
+} from "../../utils/artistCredits";
 
 export const tagReadRoutes = new Hono();
 
@@ -60,16 +66,20 @@ tagReadRoutes.get("/read", permissionMiddleware("manage_sources"), async (c) => 
           // and the browser-pool path (relinkArtistAlbum) both use it. Only
           // set it when the file actually declared TPE2/ALBUMARTIST — leaving
           // it NULL for ordinary (non-compilation) rips, same as relinkArtistAlbum.
-          const artistName = tags.albumArtist || tags.artist || "Unknown Artist";
+          const artistName = tags.artist || "Unknown Artist";
+          const artistCredits = parseArtistCredits(artistName);
+          const albumArtistCredits = tags.albumArtist ? parseArtistCredits(tags.albumArtist) : [];
+          const primaryArtist = artistCredits[0];
+          const albumArtist = albumArtistCredits[0];
+          const linkArtistName = tags.albumArtist || primaryArtist.name;
           const albumName = tags.album || "Unknown Album";
-          const artistId = "ar-" + md5(artistName).substring(0, 10);
-          const albumId = "al-" + md5(artistName + " " + albumName).substring(0, 10);
-          const albumArtistId = tags.albumArtist ? artistId : null;
+          const artistId = primaryArtist.id;
+          const albumId = "al-" + md5(linkArtistName + " " + albumName).substring(0, 10);
+          const albumArtistId = albumArtist?.id ?? null;
           touchedAlbums.add(albumId);
 
           const stmts: D1PreparedStatement[] = [
-            db.prepare("INSERT OR IGNORE INTO artists (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)")
-              .bind(artistId, artistName, artistName.toLowerCase(), now, now),
+            ...artistInsertStatements(db, [...artistCredits, ...albumArtistCredits], now),
             db.prepare("INSERT OR IGNORE INTO albums (id, name, sort_name, year, genre, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
               .bind(albumId, albumName, albumName.toLowerCase(), tags.year ?? null, tags.genre ?? null, now, now),
             db.prepare(
@@ -87,6 +97,7 @@ tagReadRoutes.get("/read", permissionMiddleware("manage_sources"), async (c) => 
               tags.lyrics ?? null,
               now, row.master_id,
             ),
+            ...songArtistStatements(db, row.master_id, artistCredits),
           ];
           await db.batch(stmts);
           scanned = 1;
@@ -109,9 +120,7 @@ tagReadRoutes.get("/read", permissionMiddleware("manage_sources"), async (c) => 
   }
   if (touchedAlbums.size > 0) {
     await db.prepare("DELETE FROM albums WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE album_id = albums.id)").run();
-    await db.prepare(
-      "DELETE FROM artists WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE artist_id = artists.id OR album_artist_id = artists.id)"
-    ).run();
+    await db.prepare(UNUSED_ARTIST_CLEANUP_SQL).run();
   }
 
   const remaining = (await db.prepare(

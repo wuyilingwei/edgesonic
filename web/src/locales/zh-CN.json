@@ -37,6 +37,7 @@
       "about": "关于"
     },
     "logout": "登出",
+    "openNavigation": "打开导航",
     "levels": {
       "guest": "访客",
       "user": "用户",
@@ -1049,5 +1050,29 @@
     "message": "为获得最新功能与修复，请刷新页面",
     "refresh": "立即刷新",
     "later": "稍后"
+  },
+  "about": {
+    "tagline": "构建在 Cloudflare Workers 上的 Subsonic 兼容音乐流媒体服务器",
+    "about_title": "关于",
+    "about_desc": "EdgeSonic 是一个开源的、自托管的音乐流媒体服务器，构建在 Cloudflare Workers 上。",
+    "source_code": "所有源代码都在",
+    "license_title": "许可证",
+    "license_text": "EdgeSonic 采用",
+    "license_desc": "这意味着如果您修改并通过网络使用 EdgeSonic，您必须将您的修改以相同的许可证提供给其他用户。",
+    "read_license": "阅读完整的 AGPL-3.0 许可证 →",
+    "copyright_title": "版权",
+    "copyright_text": "Copyright © 2022-2026 EdgeSonic Contributors",
+    "credits_title": "致谢与参考",
+    "credits_desc": "EdgeSonic 受这些优秀开源项目的启发:",
+    "compatibility_title": "兼容性",
+    "subsonic_compatible": "Subsonic API v1.16.1 兼容",
+    "compatibility_desc": "EdgeSonic 实现了 Subsonic REST API (v1.16.1) 并通过",
+    "protocol_enhancements": "协议增强来扩展它。",
+    "opensource_projects": "开源项目",
+    "powered_by": "EdgeSonic 由这些优秀的开源项目驱动:",
+    "project": "项目",
+    "version": "版本",
+    "license": "许可证",
+    "more_info": "有关更多信息，请访问"
   }
 }

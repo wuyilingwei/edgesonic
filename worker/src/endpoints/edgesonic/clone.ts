@@ -42,6 +42,7 @@ import { permissionMiddleware, sha256 } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
 import type { User } from "../../types/entities";
 import type { Context } from "hono";
+import { artistInsertStatements, parseArtistCredits, songArtistStatements } from "../../utils/artistCredits";
 
 export const cloneRoutes = new Hono<{
   Bindings: Env;
@@ -624,12 +625,15 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
   const sourceKey = body.sourceKey || DEFAULT_CLONE_SOURCE_KEY;
   const localSongId = await resolveExistingSongMaster(db, song, album, artist);
   const stmts: D1PreparedStatement[] = [];
+  const artistCredits = parseArtistCredits(artist.name);
+  const hasMultipleArtists = artistCredits.length > 1;
+  if (!hasMultipleArtists) artistCredits[0].id = artist.id;
+  const localArtistId = artistCredits[0].id;
+  const localAlbumArtistId = hasMultipleArtists && song.albumArtistId === artist.id
+    ? localArtistId
+    : song.albumArtistId ?? null;
 
-  stmts.push(
-    db.prepare(
-      "INSERT OR IGNORE INTO artists (id, name, sort_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-    ).bind(artist.id, artist.name, artist.sortName ?? artist.name.toLowerCase(), now, now),
-  );
+  stmts.push(...artistInsertStatements(db, artistCredits, now));
 
   if (albumArtist && albumArtist.id && albumArtist.id !== artist.id) {
     stmts.push(
@@ -654,8 +658,8 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
     ).bind(
       localSongId,
       song.albumId,
-      song.artistId,
-      song.albumArtistId ?? null,
+      localArtistId,
+      localAlbumArtistId,
       song.title,
       song.sortTitle ?? song.title.toLowerCase(),
       song.track ?? null,
@@ -668,6 +672,7 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
       now,
     ),
   );
+  if (hasMultipleArtists) stmts.push(...songArtistStatements(db, localSongId, artistCredits));
 
   await db.batch(stmts);
 
@@ -683,6 +688,7 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
 
   await db.prepare(
     `UPDATE song_masters SET
+       artist_id = ?,
        album_artist_id = COALESCE(?, album_artist_id),
        track = COALESCE(?, track),
        disc = COALESCE(?, disc),
@@ -693,7 +699,8 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
        updated_at = ?
      WHERE id = ?`,
   ).bind(
-    song.albumArtistId ?? null,
+    localArtistId,
+    localAlbumArtistId,
     song.track ?? null,
     song.disc ?? null,
     song.duration ?? null,
@@ -707,7 +714,7 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
 
   await saveCloneIdMap(db, sourceKey, "song", song.id, localSongId);
   await saveCloneIdMap(db, sourceKey, "album", album.id, album.id);
-  await saveCloneIdMap(db, sourceKey, "artist", artist.id, artist.id);
+  await saveCloneIdMap(db, sourceKey, "artist", artist.id, localArtistId);
 
   return c.json({ ok: true, masterId: localSongId });
 });

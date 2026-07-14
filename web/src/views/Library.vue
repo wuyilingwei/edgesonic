@@ -149,19 +149,25 @@ let albumLoadRequest = 0;
 const WATERFALL_COL_TARGET = 190; // matches the old minmax() card width
 const WATERFALL_GAP = 16; // px, mirrors the 1rem gap in CSS below
 const albumWaterfallEl = ref<HTMLElement | null>(null);
+function waterfallColumnsFor(width: number): number {
+  const count = Math.max(1, Math.floor((width + WATERFALL_GAP) / (WATERFALL_COL_TARGET + WATERFALL_GAP)));
+  return typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches
+    ? Math.min(3, Math.max(2, count))
+    : count;
+}
 const waterfallColCount = ref(
   typeof window !== "undefined"
-    ? Math.max(1, Math.floor((window.innerWidth + WATERFALL_GAP) / (WATERFALL_COL_TARGET + WATERFALL_GAP)))
+    ? waterfallColumnsFor(window.innerWidth)
     : 4,
 );
 let waterfallRO: ResizeObserver | null = null;
 watch(albumWaterfallEl, (el) => {
   if (waterfallRO) { waterfallRO.disconnect(); waterfallRO = null; }
   if (!el || typeof ResizeObserver === "undefined") return;
-  waterfallColCount.value = Math.max(1, Math.floor((el.clientWidth + WATERFALL_GAP) / (WATERFALL_COL_TARGET + WATERFALL_GAP)));
+  waterfallColCount.value = waterfallColumnsFor(el.clientWidth);
   waterfallRO = new ResizeObserver((entries) => {
     const w = entries[0]?.contentRect.width;
-    if (w) waterfallColCount.value = Math.max(1, Math.floor((w + WATERFALL_GAP) / (WATERFALL_COL_TARGET + WATERFALL_GAP)));
+    if (w) waterfallColCount.value = waterfallColumnsFor(w);
   });
   waterfallRO.observe(el);
 });
@@ -338,6 +344,8 @@ function mapSongRow(s: Record<string, string>): Track {
     starred: !!s.starred,
     starredAt: s.starred || undefined,
     createdAt: s.created || undefined,
+    artistId: s.artistId || undefined,
+    albumId: s.albumId || undefined,
   };
 }
 
@@ -509,6 +517,16 @@ function playFromStarred(i: number) {
 
 function playAlbumFromStart() {
   if (songs.value.length) player.setQueue(songs.value, 0);
+}
+
+async function openAlbumById(albumId: string, albumName: string) {
+  const album: Album = { id: albumId, name: albumName, artist: "", year: "", coverArt: "", songCount: "", starred: false };
+  await openAlbum(album);
+}
+
+async function openArtistById(artistId: string, artistName: string) {
+  const artist: Artist = { id: artistId, name: artistName, albumCount: "", starred: false };
+  await openArtist(artist);
 }
 
 type StarEntity = Artist | Album | Track;
@@ -954,7 +972,25 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
         </div>
         <h1 class="page-title">{{ currentAlbum?.name || currentArtist?.name || (starredOnly ? t("library.starredTitle") : t("library.title")) }}</h1>
       </div>
-      <button v-if="currentAlbum && songs.length" class="btn-primary" @click="playAlbumFromStart">{{ t("library.playAlbum") }}</button>
+      <div v-if="currentArtist || currentAlbum" class="detail-actions">
+        <StarButton
+          v-if="currentArtist && !currentAlbum"
+          :id="currentArtist.id"
+          kind="artist"
+          :starred="currentArtist.starred"
+          @update:starred="onStarChanged('artist', currentArtist, $event)"
+          @error="onStarError"
+        />
+        <StarButton
+          v-if="currentAlbum"
+          :id="currentAlbum.id"
+          kind="album"
+          :starred="currentAlbum.starred"
+          @update:starred="onStarChanged('album', currentAlbum, $event)"
+          @error="onStarError"
+        />
+        <button v-if="currentAlbum && songs.length" class="btn-primary" @click="playAlbumFromStart">{{ t("library.playAlbum") }}</button>
+      </div>
     </div>
 
     <!-- Library-wide search — always visible, independent of tabs/drilldown. -->
@@ -1005,7 +1041,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       >
        <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
         <span class="song-title">{{ s.title }}</span>
-         <span class="song-artist">{{ s.artist }}</span>
+          <span class="song-artist" :class="{ clickable: s.artistId }" :data-album="s.album" @click.stop="s.artistId && openArtistById(s.artistId, s.artist)">{{ s.artist }}</span>
          <span class="song-time">{{ formatDuration(s.duration) }}</span>
          <StarButton
            class="row-like-btn"
@@ -1015,17 +1051,20 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
            @update:starred="onStarChanged('song', s, $event)"
            @error="onStarError"
          />
-         <SongRowMenu
-          :song-id="s.id"
-          :title="s.title"
-          :is-admin="isAdmin"
+          <SongRowMenu
+            :song-id="s.id"
+            :title="s.title"
+            :starred="!!s.starred"
+            :is-admin="isAdmin"
           :open="openMenuId === s.id"
           @toggle="toggleRowMenu(s.id)"
           @close="closeRowMenu"
-          @edit="openEditor(s)"
-          @share="openShare('song', s.id, s.title)"
-          @add-playlist="openAddToPlaylist(s.id, s.title)"
-        />
+           @edit="openEditor(s)"
+           @share="openShare('song', s.id, s.title)"
+           @add-playlist="openAddToPlaylist(s.id, s.title)"
+           @update:starred="onStarChanged('song', s, $event)"
+           @error="onStarError"
+         />
       </div>
       <div v-if="loading" class="empty-state">{{ t("common.loading") }}</div>
       <div v-else-if="!songs.length" class="empty-state">{{ t("library.noTracks") }}</div>
@@ -1152,8 +1191,8 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
         >
           <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
           <span class="song-title">{{ s.title }}</span>
-          <span class="song-album">{{ s.album }}</span>
-          <span class="song-artist">{{ s.artist }}</span>
+          <span class="song-album" :class="{ clickable: s.albumId }" @click.stop="s.albumId && openAlbumById(s.albumId, s.album)">{{ s.album }}</span>
+          <span class="song-artist" :class="{ clickable: s.artistId }" :data-album="s.album" @click.stop="s.artistId && openArtistById(s.artistId, s.artist)">{{ s.artist }}</span>
           <span class="song-time">{{ formatDuration(s.duration) }}</span>
           <StarButton
             class="row-like-btn"
@@ -1164,16 +1203,19 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
             @error="onStarError"
           />
           <SongRowMenu
-            :song-id="s.id"
-            :title="s.title"
-            :is-admin="isAdmin"
+           :song-id="s.id"
+           :title="s.title"
+           :starred="!!s.starred"
+           :is-admin="isAdmin"
             :open="openMenuId === s.id"
             @toggle="toggleRowMenu(s.id)"
             @close="closeRowMenu"
             @edit="openEditor(s)"
-            @share="openShare('song', s.id, s.title)"
-            @add-playlist="openAddToPlaylist(s.id, s.title)"
-          />
+           @share="openShare('song', s.id, s.title)"
+           @add-playlist="openAddToPlaylist(s.id, s.title)"
+           @update:starred="onStarChanged('song', s, $event)"
+           @error="onStarError"
+         />
         </div>
         <div v-if="starredLoading" class="empty-state">{{ t("common.loading") }}</div>
         <div v-else-if="!displaySongs.length" class="empty-state">
@@ -1302,8 +1344,8 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
           />
           <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
           <span class="song-title">{{ s.title }}</span>
-          <span class="song-album">{{ s.album }}</span>
-           <span class="song-artist">{{ s.artist }}</span>
+          <span class="song-album" :class="{ clickable: s.albumId }" @click.stop="s.albumId && openAlbumById(s.albumId, s.album)">{{ s.album }}</span>
+            <span class="song-artist" :class="{ clickable: s.artistId }" :data-album="s.album" @click.stop="s.artistId && openArtistById(s.artistId, s.artist)">{{ s.artist }}</span>
            <span class="song-time">{{ formatDuration(s.duration) }}</span>
            <StarButton
              class="row-like-btn"
@@ -1316,6 +1358,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
            <SongRowMenu
             :song-id="s.id"
             :title="s.title"
+             :starred="!!s.starred"
             :is-admin="isAdmin"
             :open="openMenuId === s.id"
             @toggle="toggleRowMenu(s.id)"
@@ -1323,6 +1366,8 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
             @edit="openEditor(s)"
             @share="openShare('song', s.id, s.title)"
             @add-playlist="openAddToPlaylist(s.id, s.title)"
+            @update:starred="onStarChanged('song', s, $event)"
+            @error="onStarError"
           />
         </div>
          <div v-if="!displaySongs.length && !loading" class="empty-state">{{ t("library.noTracks") }}</div>
@@ -1416,8 +1461,8 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
             >
               <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
               <span class="song-title">{{ s.title }}</span>
-              <span class="song-album">{{ s.album }}</span>
-              <span class="song-artist">{{ s.artist }}</span>
+              <span class="song-album" :class="{ clickable: s.albumId }" @click.stop="s.albumId && openAlbumById(s.albumId, s.album)">{{ s.album }}</span>
+               <span class="song-artist" :class="{ clickable: s.artistId }" :data-album="s.album" @click.stop="s.artistId && openArtistById(s.artistId, s.artist)">{{ s.artist }}</span>
               <span class="song-time">{{ formatDuration(s.duration) }}</span>
               <StarButton
                 class="row-like-btn"
@@ -1430,14 +1475,17 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
               <SongRowMenu
                 :song-id="s.id"
                 :title="s.title"
+                :starred="!!s.starred"
                 :is-admin="isAdmin"
                 :open="openMenuId === s.id"
                 @toggle="toggleRowMenu(s.id)"
                 @close="closeRowMenu"
                 @edit="openEditor(s)"
-                @share="openShare('song', s.id, s.title)"
-                @add-playlist="openAddToPlaylist(s.id, s.title)"
-              />
+            @share="openShare('song', s.id, s.title)"
+            @add-playlist="openAddToPlaylist(s.id, s.title)"
+             @update:starred="onStarChanged('song', s, $event)"
+             @error="onStarError"
+          />
             </div>
           </div>
         </div>
@@ -1569,6 +1617,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 .breadcrumb a { color: var(--color-text-muted); cursor: pointer; }
 .breadcrumb a:hover { color: var(--color-accent-primary); }
 .breadcrumb span { color: var(--color-accent-primary); }
+.detail-actions { display: flex; align-items: center; gap: 0.65rem; }
 
 /* view tabs */
 .view-tabs {
@@ -1729,7 +1778,11 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 .song-no { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); text-align: right; }
 .song-title { font-size: var(--fs-md); color: var(--color-text-primary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-album { font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.song-album.clickable { color: var(--color-accent-primary); cursor: pointer; }
+.song-album.clickable:hover { text-decoration: underline; }
 .song-artist { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.song-artist.clickable { color: var(--color-accent-primary); cursor: pointer; }
+.song-artist.clickable:hover { text-decoration: underline; }
 .song-time { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); }
 
 /* 079: songs-tab discoverability hint. Sits above the song table on admins
@@ -1918,5 +1971,53 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
   .view-tab { padding-left: 0.7rem; padding-right: 0.7rem; font-size: var(--fs-xs); }
   .artist-info { flex-direction: column; }
   .artist-info-image { width: 88px; height: 88px; flex-basis: 88px; }
+}
+
+@media (max-width: 768px) {
+  .album-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.7rem; }
+  .album-waterfall { gap: 0.7rem; }
+  .waterfall-col { gap: 0.7rem; }
+
+  .song-table .table-header { display: none; }
+  .song-table .song-row {
+    grid-template-columns: minmax(0, 1fr) auto 30px;
+    grid-template-areas:
+      "title time menu"
+      "artist artist menu";
+    gap: 0.15rem 0.6rem;
+    padding: 0.55rem 0.7rem;
+    align-items: center;
+  }
+  .song-table .song-no,
+  .song-table .song-album,
+  .song-table .row-like-btn { display: none; }
+  .song-table .song-title {
+    grid-area: title;
+    font-size: var(--fs-lg);
+    font-weight: 700;
+  }
+  .song-table .song-time { grid-area: time; align-self: start; }
+  .song-table .song-artist {
+    grid-area: artist;
+    font-size: var(--fs-xs);
+    max-width: 100%;
+  }
+  .song-table .song-artist::after {
+    content: " - " attr(data-album);
+    color: var(--color-text-muted);
+  }
+  .song-table :deep(.row-menu-wrap) { grid-area: menu; align-self: center; }
+  .song-table :deep(.row-menu-btn) { opacity: 1; }
+  .song-table .row-check {
+    position: absolute;
+    top: 0.7rem;
+    left: 0.45rem;
+    z-index: 1;
+  }
+  .song-table .song-row:has(.row-check) .song-title { padding-left: 1.25rem; }
+}
+
+@media (min-width: 561px) and (max-width: 768px) {
+  .album-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 </style>

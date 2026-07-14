@@ -1,12 +1,14 @@
 
 <script setup lang="ts">
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
 
 const props = defineProps<{
   songId: string;
   title: string;
+  starred: boolean;
   open: boolean;
   isAdmin: boolean;
 }>();
@@ -16,10 +18,13 @@ const emit = defineEmits<{
   edit: [];
   share: [];
   addPlaylist: [];
+  "update:starred": [value: boolean];
+  error: [];
 }>();
 
 const { t } = useI18n();
-const { downloadUrl } = useAuth();
+const { authFetch, downloadUrl } = useAuth();
+const starBusy = ref(false);
 
 function pick(action: "edit" | "share" | "addPlaylist") {
   // emit()'s per-event overloads don't distribute over a union-typed
@@ -30,12 +35,29 @@ function pick(action: "edit" | "share" | "addPlaylist") {
   else emit("addPlaylist");
   emit("close");
 }
+
+async function toggleStar() {
+  if (starBusy.value) return;
+  const next = !props.starred;
+  starBusy.value = true;
+  try {
+    const xml = await authFetch(next ? "star" : "unstar", { id: props.songId });
+    if (/status="failed"/.test(xml)) throw new Error("star update failed");
+    emit("update:starred", next);
+    emit("close");
+  } catch {
+    emit("error");
+  } finally {
+    starBusy.value = false;
+  }
+}
 </script>
 
 <template>
   <div class="row-menu-wrap" @click.stop>
     <button class="row-menu-btn" :title="t('library.moreActions')" @click="emit('toggle')">⋮</button>
     <div v-if="open" class="row-menu">
+      <button class="row-menu-item row-menu-like" :disabled="starBusy" @click="toggleStar">★ {{ props.starred ? t("library.unlike") : t("library.like") }}</button>
       <button v-if="props.isAdmin" class="row-menu-item" @click="pick('edit')">✎ {{ t("library.editSong") }}</button>
       <button class="row-menu-item" @click="pick('share')">⤴ {{ t("library.share") }}</button>
       <button class="row-menu-item" @click="pick('addPlaylist')">＋ {{ t("library.addToPlaylist") }}</button>
@@ -80,4 +102,6 @@ function pick(action: "edit" | "share" | "addPlaylist") {
   white-space: nowrap;
 }
 .row-menu-item:hover { background: var(--color-bg-tertiary); color: var(--color-accent-primary); }
+.row-menu-like { display: none; }
+@media (max-width: 768px) { .row-menu-like { display: block; } }
 </style>

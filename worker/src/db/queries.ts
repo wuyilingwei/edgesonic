@@ -35,7 +35,13 @@ export interface SongPhysical {
 
 export type SongRow = SongMaster & SongNames & SongPhysical;
 
-const SONG_ROW_COLS = `sm.*, ar.name AS artist_name, al.name AS album_name,
+const SONG_ROW_COLS = `sm.*,
+       COALESCE((SELECT group_concat(name, ', ') FROM (
+         SELECT sar.name FROM song_artists sa
+         JOIN artists sar ON sar.id = sa.artist_id
+         WHERE sa.song_id = sm.id ORDER BY sa.position
+       )), ar.name) AS artist_name,
+       al.name AS album_name,
        si.suffix AS inst_suffix, si.content_type AS inst_content_type,
        si.bit_rate AS inst_bit_rate, si.size AS inst_size,
        si.duration AS inst_duration, si.storage_uri AS inst_storage_uri`;
@@ -85,8 +91,10 @@ export function createQueries(db: D1Database) {
 
     async getAlbumsByArtist(artistId: string): Promise<Album[]> {
       const masters = await db.prepare(
-        "SELECT DISTINCT album_id FROM song_masters WHERE artist_id = ? OR album_artist_id = ?"
-      ).bind(artistId, artistId).all<{ album_id: string }>();
+        `SELECT DISTINCT sm.album_id FROM song_masters sm
+         WHERE sm.artist_id = ? OR sm.album_artist_id = ?
+            OR EXISTS (SELECT 1 FROM song_artists sa WHERE sa.song_id = sm.id AND sa.artist_id = ?)`
+      ).bind(artistId, artistId, artistId).all<{ album_id: string }>();
 
       if (masters.results.length === 0) return [];
 
@@ -889,7 +897,9 @@ export function createQueries(db: D1Database) {
             WHERE EXISTS (
               SELECT 1 FROM song_masters sm
               JOIN song_instances si ON si.master_id = sm.id
-              WHERE sm.artist_id = ar.id AND si.source_id = ?
+              WHERE (sm.artist_id = ar.id OR sm.album_artist_id = ar.id
+                     OR EXISTS (SELECT 1 FROM song_artists sa WHERE sa.song_id = sm.id AND sa.artist_id = ar.id))
+                AND si.source_id = ?
             )
             ORDER BY ar.sort_name ASC NULLS LAST, ar.name ASC`
         : "SELECT * FROM artists ORDER BY sort_name ASC NULLS LAST, name ASC";

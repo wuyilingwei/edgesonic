@@ -108,6 +108,12 @@ function buildDb() {
       FOREIGN KEY (album_id) REFERENCES albums(id),
       FOREIGN KEY (artist_id) REFERENCES artists(id)
     );
+    CREATE TABLE song_artists (
+      song_id TEXT NOT NULL,
+      artist_id TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (song_id, artist_id)
+    );
     CREATE TABLE annotations (
       user_id TEXT NOT NULL,
       item_id TEXT NOT NULL,
@@ -200,6 +206,12 @@ async function main() {
   assert(upsertBody.masterId === "sg-local", `remote song fuzzy-mapped to sg-local (got ${upsertBody.masterId})`);
   const remoteSong = sqlite.prepare("SELECT id FROM song_masters WHERE id='remote-song'").get() as any;
   assert(!remoteSong, "no duplicate song_master created with remote id");
+  const credits = sqlite.prepare(
+    "SELECT ar.name FROM song_artists sa JOIN artists ar ON ar.id=sa.artist_id WHERE sa.song_id='sg-local' ORDER BY sa.position"
+  ).all() as Array<{ name: string }>;
+  assert(credits.map((credit) => credit.name).join(", ") === "JAY'ED, Ms.OOJA", `clone splits artist credits (got ${credits.map((credit) => credit.name).join(", ")})`);
+  const combinedArtist = sqlite.prepare("SELECT id FROM artists WHERE id='remote-ar'").get();
+  assert(!combinedArtist, "clone does not create a combined artist entity");
 
   console.log("clone upsertStarred resolves remote song id:");
   const starred = await app.post("/edgesonic/clone/upsertStarred", {

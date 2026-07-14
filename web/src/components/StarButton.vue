@@ -77,7 +77,7 @@ async function toggle() {
   padding: 0;
   border: 1px solid var(--color-border-subtle);
   border-radius: 2px;
-  background: rgba(10, 10, 11, 0.72);
+  background: var(--color-bg-secondary);
   color: var(--color-text-muted);
   cursor: pointer;
   transition: color 0.15s, border-color 0.15s, background 0.15s, opacity 0.15s;

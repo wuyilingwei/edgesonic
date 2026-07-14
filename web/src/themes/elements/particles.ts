@@ -120,9 +120,8 @@ export function mountParticles(host: HTMLElement, config: ParticleConfig): () =>
         continue;
       }
       // fade in/out envelope
-      const fade = Math.min(1, t / 0.15) * Math.min(1, (1 - t) / 0.25);
       const color = config.colors[p.ci];
-      drawParticle(ctx!, config.kind, p, now, fade, color);
+      drawParticle(ctx!, config.kind, p, now, color);
     }
     // top up toward density
     while (parts.length < config.density) parts.push(spawn());
@@ -157,7 +156,7 @@ export function mountParticles(host: HTMLElement, config: ParticleConfig): () =>
   };
 }
 
-function drawParticle(ctx: CanvasRenderingContext2D, kind: ParticleKind, p: P, now: number, fade: number, color: string) {
+function drawParticle(ctx: CanvasRenderingContext2D, kind: ParticleKind, p: P, now: number, color: string) {
   const t = p.life / p.ttl;
   // integrate motion
   const sway = Math.sin(now / 1000 * (kind === "ember" ? 2.4 : kind === "leaf" ? 1.6 : 1) + p.seed);
@@ -170,58 +169,30 @@ function drawParticle(ctx: CanvasRenderingContext2D, kind: ParticleKind, p: P, n
   else { p.x += p.vx * dt; p.y += p.vy * dt; }
 
   ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = color;
+
   if (kind === "ember") {
-    const flick = 0.6 + 0.4 * Math.sin(now / 90 + p.seed);
     const s = p.size * (1 - t * 0.5);
-    ctx.globalAlpha = fade * flick * 0.9;
-    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, s * 3);
-    g.addColorStop(0, color); g.addColorStop(1, "transparent");
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(p.x, p.y, s * 3, 0, TAU); ctx.fill();
-    ctx.globalAlpha = fade * flick;
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, s, 0, TAU); ctx.fill();
+    ctx.translate(p.x, p.y);
+    ctx.fillRect(-s / 2, -s / 2, s, s);
   } else if (kind === "bubble") {
-    ctx.globalAlpha = fade * 0.32;
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill();
-    ctx.globalAlpha = fade * 0.85;
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.stroke();
-    ctx.globalAlpha = fade * 0.9;
-    ctx.fillStyle = "rgba(255,255,255,.9)";
-    ctx.beginPath(); ctx.arc(p.x - p.size * 0.32, p.y - p.size * 0.32, p.size * 0.26, 0, TAU); ctx.fill();
+    ctx.translate(p.x, p.y);
+    ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
   } else if (kind === "leaf") {
     ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-    ctx.globalAlpha = fade * 0.72;
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, p.size, p.size * 0.5, 0, 0, TAU);
-    ctx.fill();
+    ctx.fillRect(-p.size / 2, -p.size * 0.25, p.size, p.size * 0.5);
   } else if (kind === "dust") {
-    if (p.seed === -1) {
-      ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-      ctx.globalAlpha = fade * 0.5;
-      ctx.fillStyle = color;
-      ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
-    } else {
-      ctx.globalAlpha = fade * 0.5;
-      ctx.fillStyle = color;
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill();
-    }
+    ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+    ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
   } else if (kind === "orb") {
     const pulse = 0.7 + 0.5 * Math.sin(now / 1400 + p.seed);
     const s = p.size * (0.6 + pulse * 0.6);
-    ctx.globalAlpha = fade * 0.34 * pulse;
-    const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, s);
-    g.addColorStop(0, color); g.addColorStop(0.5, color); g.addColorStop(1, "transparent");
-    ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(p.x, p.y, s, 0, TAU); ctx.fill();
+    ctx.translate(p.x, p.y);
+    ctx.fillRect(-s / 2, -s / 2, s, s);
   } else {
-    const tw = 0.35 + 0.65 * Math.abs(Math.sin(now / 700 + p.seed * 3));
-    ctx.globalAlpha = fade * tw;
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, TAU); ctx.fill();
+    ctx.translate(p.x, p.y);
+    ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
   }
   ctx.restore();
 }

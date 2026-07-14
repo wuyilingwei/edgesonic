@@ -329,6 +329,16 @@ CREATE INDEX IF NOT EXISTS idx_songmasters_album ON song_masters(album_id);
 CREATE INDEX IF NOT EXISTS idx_songmasters_artist ON song_masters(artist_id);
 CREATE INDEX IF NOT EXISTS idx_songmasters_title ON song_masters(title);
 
+CREATE TABLE IF NOT EXISTS song_artists (
+  song_id TEXT NOT NULL,
+  artist_id TEXT NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (song_id, artist_id),
+  FOREIGN KEY (song_id) REFERENCES song_masters(id) ON DELETE CASCADE,
+  FOREIGN KEY (artist_id) REFERENCES artists(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_songartists_artist ON song_artists(artist_id);
+
 -- ============================================================================
 -- 10. Song Instances (physical files — one per format/source/bitrate)
 -- ============================================================================
