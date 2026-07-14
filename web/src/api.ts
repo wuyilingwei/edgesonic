@@ -156,21 +156,17 @@ export function useAuth() {
   /**
    * Build the Subsonic protocol params for an SPA-side URL or fetch.
    *
-   * Post httpOnly-cookie upgrade: the SPA does NOT carry the session token
-   * in JS-readable storage, so it can no longer sign `t = md5(token +
-   * salt)` itself. The browser attaches the `edgesonic_session` cookie to
-   * every same-origin request and the backend's authMiddleware
-   * (`findSessionByCookie`) resolves the session from the cookie. We
-   * still emit `u`/`v`/`c` (and any `extra`) so log lines, format
-   * detection and Subsonic spec compliance are preserved; the middleware
-   * ignores `t`/`s`/`p` when they're absent and falls back to the cookie.
+   * Post httpOnly-cookie upgrade: the SPA relies on the `edgesonic_session`
+   * cookie attached to every same-origin request for authentication. No `u`,
+   * `t`, or `s` parameters are needed; credentials flow via the cookie.
+   * We emit `v`/`c` for format detection and Subsonic spec compliance.
    *
    * A value can be a string[] to emit the same key multiple times (Subsonic's
    * convention for repeatable params like createShare/star's `id`).
    */
   function signedParams(extra?: Record<string, string | string[]>): URLSearchParams {
     const params = new URLSearchParams({
-      u: username.value, v: "1.16.1", c: "EdgeSonicWeb",
+      v: "1.16.1", c: "EdgeSonicWeb",
     });
     for (const [key, value] of Object.entries(extra ?? {})) {
       if (Array.isArray(value)) {
@@ -201,7 +197,13 @@ export function useAuth() {
 
   // -------- Subsonic protocol (/rest/*) --------
   async function authFetch(path: string, params?: Record<string, string | string[]>): Promise<string> {
-    const resp = await fetch(`${REST_BASE}/${path}?${signedParams(params).toString()}`);
+    const resp = await fetch(`${REST_BASE}/${path}?${signedParams(params).toString()}`, {
+      credentials: "same-origin",
+    });
+    if (resp.status === 401 || resp.status === 403) {
+      handleAuthError(new Error("session expired"));
+      return "";
+    }
     return resp.text();
   }
 
@@ -210,7 +212,12 @@ export function useAuth() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      credentials: "same-origin",
     });
+    if (resp.status === 401 || resp.status === 403) {
+      handleAuthError(new Error("session expired"));
+      return "";
+    }
     return resp.text();
   }
 
@@ -220,7 +227,9 @@ export function useAuth() {
   // accordingly (see handleAuthError). The body is still text() so XML-shaped
   // /rest errors keep working for Subsonic callers.
   async function fetchAt(base: string, path: string, params?: Record<string, string>): Promise<string> {
-    const resp = await fetch(`${base}/${path}?${signedParams(params).toString()}`);
+    const resp = await fetch(`${base}/${path}?${signedParams(params).toString()}`, {
+      credentials: "same-origin",
+    });
     if (resp.status === 401 || resp.status === 403) {
       const err = new Error("session expired") as Error & { status: number };
       err.status = resp.status;
@@ -233,6 +242,7 @@ export function useAuth() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      credentials: "same-origin",
     });
     if (resp.status === 401 || resp.status === 403) {
       const err = new Error("session expired") as Error & { status: number };
