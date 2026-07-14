@@ -22,8 +22,9 @@ import { urlAdapter } from "../../adapters/url";
 import { createSubsonicAdapter } from "../../adapters/subsonic";
 import { encodePath } from "./scan";
 import { srcBaseUrl, type SourceRow } from "../../utils/slices";
+import type { User } from "../../types/entities";
 
-export const filesRoutes = new Hono();
+export const filesRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
 // ── Global Files API Security Guard ──────────────────────────────────────
 // All /storage/files/* operations require admin privileges (level 2+).
