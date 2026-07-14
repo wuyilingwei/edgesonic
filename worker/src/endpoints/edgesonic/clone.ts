@@ -36,6 +36,50 @@ export const cloneRoutes = new Hono<{
 const DEFAULT_CLONE_SOURCE_KEY = "default";
 const METADATA_SEPARATOR_RE = /[,，;；\/]+/g;
 
+type CloneSongRef = {
+  id?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  albumArtist?: string;
+  duration?: number | null;
+  track?: number | null;
+  disc?: number | null;
+};
+
+type CloneItemRef = CloneSongRef & {
+  id: string;
+  type: "song" | "album" | "artist";
+  name?: string;
+  year?: number | null;
+  songCount?: number | null;
+  starredAt?: number | null;
+};
+
+interface LocalSongMatchRow {
+  id: string;
+  title: string;
+  duration: number | null;
+  track: number | null;
+  disc: number | null;
+  album_name: string;
+  artist_name: string;
+}
+
+interface LocalAlbumMatchRow {
+  id: string;
+  name: string;
+  year: number | null;
+  song_count: number | null;
+  duration: number | null;
+  artist_name: string | null;
+}
+
+interface LocalArtistMatchRow {
+  id: string;
+  name: string;
+}
+
 function normMatch(s: string | null | undefined): string {
   return (s || "").trim().toLowerCase().replace(METADATA_SEPARATOR_RE, " ").replace(/\s+/g, " ");
 }
@@ -76,6 +120,170 @@ function artistsCompatible(existingArtist: string | null | undefined, incomingAr
   const incomingTokens = artistTokens(incomingArtist);
   if (!existingTokens.length || !incomingTokens.length) return false;
   return incomingTokens.every((token) => existingTokens.includes(token)) || existingTokens.every((token) => incomingTokens.includes(token));
+}
+
+function cloneNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function hasSongMetadata(ref: CloneSongRef): boolean {
+  return !!ref.title?.trim() && !!ref.album?.trim() && !!ref.artist?.trim();
+}
+
+function hasAlbumMetadata(ref: CloneItemRef): boolean {
+  return !!(ref.name || ref.album)?.trim();
+}
+
+function hasArtistMetadata(ref: CloneItemRef): boolean {
+  return !!(ref.name || ref.artist)?.trim();
+}
+
+function chooseSongCandidate(
+  candidates: LocalSongMatchRow[],
+  ref: CloneSongRef,
+): string | null {
+  if (candidates.length === 0) return null;
+  let narrowed = candidates;
+
+  if (ref.duration != null) {
+    const durationMatches = candidates.filter((row) => row.duration == null || Math.abs(row.duration - ref.duration!) <= 3);
+    if (durationMatches.length === 0) return null;
+    if (durationMatches.length < narrowed.length) narrowed = durationMatches;
+  }
+
+  if (ref.disc != null || ref.track != null) {
+    const positionMatches = narrowed.filter((row) =>
+      (ref.disc == null || row.disc == null || row.disc === ref.disc) &&
+      (ref.track == null || row.track == null || row.track === ref.track),
+    );
+    if (positionMatches.length > 0 && positionMatches.length < narrowed.length) narrowed = positionMatches;
+  }
+
+  return narrowed.length === 1 ? narrowed[0].id : null;
+}
+
+function matchSongByName(rows: LocalSongMatchRow[], ref: CloneSongRef): string | null {
+  if (!hasSongMetadata(ref)) return null;
+  const title = normMatch(ref.title);
+  const album = normMatch(ref.album);
+  const artist = ref.artist || ref.albumArtist || "";
+  const exact = rows.filter((row) =>
+    normMatch(row.title) === title &&
+    normMatch(row.album_name) === album &&
+    artistsCompatible(row.artist_name, artist),
+  );
+  const exactMatch = chooseSongCandidate(exact, ref);
+  if (exactMatch) return exactMatch;
+
+  const titleF = normFuzzy(ref.title);
+  const albumF = normFuzzy(ref.album);
+  const fuzzy = rows.filter((row) =>
+    normFuzzy(row.title) === titleF &&
+    normFuzzy(row.album_name) === albumF &&
+    artistsCompatible(row.artist_name, artist),
+  );
+  return chooseSongCandidate(fuzzy, ref);
+}
+
+function matchAlbumByName(rows: LocalAlbumMatchRow[], ref: CloneItemRef): string | null {
+  const name = ref.name || ref.album || "";
+  if (!name.trim()) return null;
+  const nameN = normMatch(name);
+  const artist = ref.artist || ref.albumArtist || "";
+  let candidates = rows.filter((row) => normMatch(row.name) === nameN);
+  if (artist) candidates = candidates.filter((row) => !row.artist_name || artistsCompatible(row.artist_name, artist));
+  if (candidates.length === 0) {
+    const nameF = normFuzzy(name);
+    candidates = rows.filter((row) => normFuzzy(row.name) === nameF);
+    if (artist) candidates = candidates.filter((row) => !row.artist_name || artistsCompatible(row.artist_name, artist));
+  }
+  if (candidates.length === 0) return null;
+
+  const scored = candidates.map((row) => {
+    let score = 0;
+    if (ref.year != null && row.year === ref.year) score += 3;
+    if (ref.songCount != null && row.song_count === ref.songCount) score += 2;
+    if (ref.duration != null && row.duration != null && Math.abs(row.duration - ref.duration) <= 3) score += 2;
+    if (artist && row.artist_name && normMatch(row.artist_name) === normMatch(artist)) score += 1;
+    return { row, score };
+  });
+  const bestScore = Math.max(...scored.map((item) => item.score));
+  const best = scored.filter((item) => item.score === bestScore);
+  return best.length === 1 ? best[0].row.id : null;
+}
+
+function matchArtistByName(rows: LocalArtistMatchRow[], ref: CloneItemRef): string | null {
+  const name = ref.name || ref.artist || "";
+  if (!name.trim()) return null;
+  const exact = rows.filter((row) => normMatch(row.name) === normMatch(name));
+  if (exact.length === 1) return exact[0].id;
+  const fuzzy = rows.filter((row) => normFuzzy(row.name) === normFuzzy(name));
+  return fuzzy.length === 1 ? fuzzy[0].id : null;
+}
+
+async function loadLocalSongMatchRows(db: D1Database): Promise<LocalSongMatchRow[]> {
+  const result = await db.prepare(
+    `SELECT sm.id, sm.title, sm.duration, sm.track, sm.disc,
+            al.name AS album_name, ar.name AS artist_name
+       FROM song_masters sm
+       JOIN albums al ON al.id = sm.album_id
+       JOIN artists ar ON ar.id = sm.artist_id`,
+  ).all<LocalSongMatchRow>();
+  return result.results;
+}
+
+async function loadLocalAlbumMatchRows(db: D1Database): Promise<LocalAlbumMatchRow[]> {
+  const result = await db.prepare(
+    `SELECT al.id, al.name, al.year,
+            (SELECT COUNT(*) FROM song_masters sm0 WHERE sm0.album_id = al.id) AS song_count,
+            (SELECT COALESCE(SUM(sm1.duration), 0) FROM song_masters sm1 WHERE sm1.album_id = al.id) AS duration,
+            (SELECT ar.name
+               FROM song_masters sm
+               JOIN artists ar ON ar.id = COALESCE(sm.album_artist_id, sm.artist_id)
+              WHERE sm.album_id = al.id
+              ORDER BY sm.disc ASC, sm.track ASC
+              LIMIT 1) AS artist_name
+       FROM albums al`,
+  ).all<LocalAlbumMatchRow>();
+  return result.results;
+}
+
+async function loadLocalArtistMatchRows(db: D1Database): Promise<LocalArtistMatchRow[]> {
+  const result = await db.prepare("SELECT id, name FROM artists").all<LocalArtistMatchRow>();
+  return result.results;
+}
+
+function normalizeCloneSongRef(value: unknown): CloneSongRef {
+  if (typeof value === "string") return { id: value };
+  const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  return {
+    id: typeof raw.id === "string" ? raw.id : undefined,
+    title: typeof raw.title === "string" ? raw.title : undefined,
+    artist: typeof raw.artist === "string" ? raw.artist : undefined,
+    album: typeof raw.album === "string" ? raw.album : undefined,
+    albumArtist: typeof raw.albumArtist === "string" ? raw.albumArtist : undefined,
+    duration: cloneNumber(raw.duration),
+    track: cloneNumber(raw.track),
+    disc: cloneNumber(raw.disc ?? raw.discNumber),
+  };
+}
+
+function normalizeCloneItemRef(value: unknown): CloneItemRef | null {
+  const raw = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const id = typeof raw.id === "string" ? raw.id : "";
+  const type = raw.type === "song" || raw.type === "album" || raw.type === "artist" ? raw.type : null;
+  if (!id || !type) return null;
+  return {
+    ...normalizeCloneSongRef(raw),
+    id,
+    type,
+    name: typeof raw.name === "string" ? raw.name : undefined,
+    year: cloneNumber(raw.year),
+    songCount: cloneNumber(raw.songCount),
+    starredAt: cloneNumber(raw.starredAt),
+  };
 }
 
 function isSoundtrackLikeDuplicate(title: string | null | undefined, album: string | null | undefined): boolean {
@@ -144,6 +352,78 @@ async function resolveCloneIds(
     for (const r of rows.results) out.set(r.remote_id, r.local_id);
   }
   return out;
+}
+
+async function resolveCloneSongRefs(
+  db: D1Database,
+  sourceKey: string,
+  refs: CloneSongRef[],
+  rows: LocalSongMatchRow[],
+): Promise<{ ids: string[]; unmatched: number }> {
+  const legacyIds = refs
+    .filter((ref) => !hasSongMetadata(ref))
+    .map((ref) => ref.id || "");
+  const idMap = await resolveCloneIds(db, sourceKey, "song", legacyIds);
+  const localIds = new Set(rows.map((row) => row.id));
+  const ids: string[] = [];
+  let unmatched = 0;
+
+  for (const ref of refs) {
+    let localId = matchSongByName(rows, ref);
+    if (!localId && !hasSongMetadata(ref) && ref.id) {
+      const mapped = idMap.get(ref.id) || ref.id;
+      if (localIds.has(mapped)) localId = mapped;
+    }
+    if (localId) ids.push(localId);
+    else unmatched++;
+  }
+  return { ids, unmatched };
+}
+
+async function resolveCloneItemRefs(
+  db: D1Database,
+  sourceKey: string,
+  items: CloneItemRef[],
+  rows: { songs: LocalSongMatchRow[]; albums: LocalAlbumMatchRow[]; artists: LocalArtistMatchRow[] },
+): Promise<{ items: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }>; unmatched: number }> {
+  const legacyIds = {
+    song: items.filter((item) => item.type === "song" && !hasSongMetadata(item)).map((item) => item.id),
+    album: items.filter((item) => item.type === "album" && !hasAlbumMetadata(item)).map((item) => item.id),
+    artist: items.filter((item) => item.type === "artist" && !hasArtistMetadata(item)).map((item) => item.id),
+  };
+  const maps = {
+    song: await resolveCloneIds(db, sourceKey, "song", legacyIds.song),
+    album: await resolveCloneIds(db, sourceKey, "album", legacyIds.album),
+    artist: await resolveCloneIds(db, sourceKey, "artist", legacyIds.artist),
+  };
+  const localIds = {
+    song: new Set(rows.songs.map((row) => row.id)),
+    album: new Set(rows.albums.map((row) => row.id)),
+    artist: new Set(rows.artists.map((row) => row.id)),
+  };
+  const resolved: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }> = [];
+  let unmatched = 0;
+
+  for (const item of items) {
+    let localId: string | null = null;
+    if (item.type === "song") localId = matchSongByName(rows.songs, item);
+    else if (item.type === "album") localId = matchAlbumByName(rows.albums, item);
+    else localId = matchArtistByName(rows.artists, item);
+
+    const hasMetadata = item.type === "song"
+      ? hasSongMetadata(item)
+      : item.type === "album"
+        ? hasAlbumMetadata(item)
+        : hasArtistMetadata(item);
+    if (!localId && !hasMetadata) {
+      const mapped = maps[item.type].get(item.id) || item.id;
+      if (localIds[item.type].has(mapped)) localId = mapped;
+    }
+
+    if (localId) resolved.push({ id: localId, type: item.type, starredAt: item.starredAt });
+    else unmatched++;
+  }
+  return { items: resolved, unmatched };
 }
 
 // Resolve the local target user for a starred/playlist clone and enforce the
@@ -433,6 +713,35 @@ cloneRoutes.post("/clone/upsertMaster", permissionMiddleware("manage_users"), as
 // false) (re)creates the header and clears entries, each subsequent append
 // chunk tacks its entries on at the current tail. This keeps a single upstream
 // playlist from being cloned in one oversized request (subrequest budget).
+async function resolveClonePlaylistId(
+  db: D1Database,
+  requestedId: string,
+  name: string,
+  owner: string,
+  sourceKey: string,
+  append: boolean,
+): Promise<string | null> {
+  const byName = await db.prepare("SELECT id, name FROM playlists WHERE owner = ?")
+    .bind(owner).all<{ id: string; name: string }>();
+  const sameName = byName.results.filter((row) => normMatch(row.name) === normMatch(name));
+  const byId = await db.prepare("SELECT id, name, owner FROM playlists WHERE id = ?")
+    .bind(requestedId).first<{ id: string; name: string; owner: string }>();
+
+  if (append) {
+    if (byId?.owner === owner && normMatch(byId.name) === normMatch(name)) return requestedId;
+    if (sameName.length === 1) return sameName[0].id;
+    return null;
+  }
+
+  if (sameName.length === 1) return sameName[0].id;
+  if (!byId) return requestedId;
+  if (byId.owner === owner && normMatch(byId.name) === normMatch(name)) return requestedId;
+
+  // A remote playlist id colliding with a different local playlist must never
+  // overwrite that playlist. The source/name hash keeps repeated clones stable.
+  return `pl-clone-${md5(`${sourceKey}\n${owner}\n${normMatch(name)}`).slice(0, 20)}`;
+}
+
 cloneRoutes.post("/clone/upsertPlaylist", async (c) => {
   const db = c.env.DB;
   const body = await c.req.json<{
@@ -440,10 +749,10 @@ cloneRoutes.post("/clone/upsertPlaylist", async (c) => {
       id: string; name: string; owner?: string;
       public?: boolean | null; comment?: string | null;
     };
-    entries?: string[];
+    entries?: Array<string | CloneSongRef>;
     append?: boolean;
     sourceKey?: string;
-  }>().catch(() => ({} as { playlist?: { id: string; name: string; owner?: string; public?: boolean | null; comment?: string | null }; entries?: string[]; append?: boolean; sourceKey?: string }));
+  }>().catch(() => ({} as { playlist?: { id: string; name: string; owner?: string; public?: boolean | null; comment?: string | null }; entries?: Array<string | CloneSongRef>; append?: boolean; sourceKey?: string }));
 
   const { playlist, entries } = body;
   if (!playlist || !playlist.id || !playlist.name) {
@@ -457,10 +766,15 @@ cloneRoutes.post("/clone/upsertPlaylist", async (c) => {
   const sourceKey = body.sourceKey || DEFAULT_CLONE_SOURCE_KEY;
   const append = body.append === true;
   const now = Math.floor(Date.now() / 1000);
+  const playlistId = await resolveClonePlaylistId(db, playlist.id, playlist.name, owner, sourceKey, append);
+  if (!playlistId) {
+    return c.json({ ok: false, error: "Cannot uniquely match the target playlist by name" }, 409);
+  }
 
-  const remoteSongIds = Array.isArray(entries) ? entries.filter((s) => typeof s === "string" && s) : [];
-  const idMap = await resolveCloneIds(db, sourceKey, "song", remoteSongIds);
-  const songIds = remoteSongIds.map((sid) => idMap.get(sid) || sid);
+  const refs = Array.isArray(entries) ? entries.map(normalizeCloneSongRef) : [];
+  const localSongs = await loadLocalSongMatchRows(db);
+  const resolved = await resolveCloneSongRefs(db, sourceKey, refs, localSongs);
+  const songIds = resolved.ids;
 
   if (!append) {
     await db.batch([
@@ -468,11 +782,12 @@ cloneRoutes.post("/clone/upsertPlaylist", async (c) => {
         `INSERT OR REPLACE INTO playlists
            (id, name, owner, public, song_count, duration, comment, created_at, updated_at)
          VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)`,
-      ).bind(playlist.id, playlist.name, owner, playlist.public ? 1 : 0, playlist.comment ?? null, now, now),
-      db.prepare("DELETE FROM playlist_songs WHERE playlist_id = ?").bind(playlist.id),
+      ).bind(playlistId, playlist.name, owner, playlist.public ? 1 : 0, playlist.comment ?? null, now, now),
+      db.prepare("DELETE FROM playlist_songs WHERE playlist_id = ?").bind(playlistId),
     ]);
   } else {
-    const exists = await db.prepare("SELECT id FROM playlists WHERE id = ?").bind(playlist.id).first<{ id: string }>();
+    const exists = await db.prepare("SELECT id FROM playlists WHERE id = ? AND owner = ?")
+      .bind(playlistId, owner).first<{ id: string }>();
     if (!exists) {
       return c.json({ ok: false, error: "append to a playlist that was never created (send the first chunk without append)" }, 400);
     }
@@ -482,28 +797,17 @@ cloneRoutes.post("/clone/upsertPlaylist", async (c) => {
   let base = 0;
   if (append) {
     const cnt = await db.prepare("SELECT COUNT(*) AS c FROM playlist_songs WHERE playlist_id = ?")
-      .bind(playlist.id).first<{ c: number }>();
+      .bind(playlistId).first<{ c: number }>();
     base = cnt?.c ?? 0;
   }
 
   if (songIds.length > 0) {
-    // Only insert entries with a matching song_master so a FK failure can't
-    // abort the batch.
-    const known = new Set<string>();
-    const BATCH = 80;
-    for (let i = 0; i < songIds.length; i += BATCH) {
-      const batch = songIds.slice(i, i + BATCH);
-      const ph = batch.map(() => "?").join(",");
-      const rows = await db.prepare(`SELECT id FROM song_masters WHERE id IN (${ph})`).bind(...batch).all<{ id: string }>();
-      for (const r of rows.results) known.add(r.id);
-    }
     const insertStmts: D1PreparedStatement[] = [];
     let pos = base;
     for (const sid of songIds) {
-      if (!known.has(sid)) continue;
       insertStmts.push(
         db.prepare("INSERT INTO playlist_songs (playlist_id, song_master_id, position, added_at) VALUES (?, ?, ?, ?)")
-          .bind(playlist.id, sid, pos, now),
+          .bind(playlistId, sid, pos, now),
       );
       pos++;
     }
@@ -515,11 +819,11 @@ cloneRoutes.post("/clone/upsertPlaylist", async (c) => {
     `SELECT COUNT(*) AS c, COALESCE(SUM(sm.duration), 0) AS d
        FROM playlist_songs ps JOIN song_masters sm ON sm.id = ps.song_master_id
       WHERE ps.playlist_id = ?`,
-  ).bind(playlist.id).first<{ c: number; d: number }>();
+  ).bind(playlistId).first<{ c: number; d: number }>();
   await db.prepare("UPDATE playlists SET song_count = ?, duration = ?, updated_at = ? WHERE id = ?")
-    .bind(totals?.c ?? 0, totals?.d ?? 0, now, playlist.id).run();
+    .bind(totals?.c ?? 0, totals?.d ?? 0, now, playlistId).run();
 
-  return c.json({ ok: true, playlistId: playlist.id, inserted: songIds.length, owner, append });
+  return c.json({ ok: true, playlistId, inserted: songIds.length, unmatched: resolved.unmatched, owner, append });
 });
 
 // ---------------------------------------------------------------------------
@@ -541,34 +845,28 @@ cloneRoutes.post("/clone/upsertStarred", async (c) => {
   const db = c.env.DB;
   const body = await c.req.json<{
     userId?: string;
-    items?: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }>;
+    items?: Array<CloneItemRef>;
     sourceKey?: string;
-  }>().catch(() => ({} as { userId?: string; items?: unknown[]; sourceKey?: string }));
+  }>().catch(() => ({} as { userId?: string; items?: Array<CloneItemRef>; sourceKey?: string }));
 
   const target = await resolveTargetUser(c, body.userId);
   if (!target.ok) {
     return c.json({ ok: false, error: "manage_users required to clone into another user" }, 403);
   }
   const userId = target.userId;
-  const items = Array.isArray(body.items) ? body.items : [];
+  const items = Array.isArray(body.items)
+    ? body.items.map(normalizeCloneItemRef).filter((item): item is CloneItemRef => item !== null)
+    : [];
   const sourceKey = body.sourceKey || DEFAULT_CLONE_SOURCE_KEY;
 
-  const valid = (items as unknown[]).filter(
-    (it): it is { id: string; type: "song" | "album" | "artist"; starredAt?: number | null } => {
-      const o = it as { id?: unknown; type?: unknown };
-      return !!o && typeof o.id === "string" && o.id.length > 0 &&
-        (o.type === "song" || o.type === "album" || o.type === "artist");
-    },
-  );
-  const maps = {
-    song: await resolveCloneIds(db, sourceKey, "song", valid.filter((v) => v.type === "song").map((v) => v.id)),
-    album: await resolveCloneIds(db, sourceKey, "album", valid.filter((v) => v.type === "album").map((v) => v.id)),
-    artist: await resolveCloneIds(db, sourceKey, "artist", valid.filter((v) => v.type === "artist").map((v) => v.id)),
-  };
+  const resolved = await resolveCloneItemRefs(db, sourceKey, items, {
+    songs: await loadLocalSongMatchRows(db),
+    albums: await loadLocalAlbumMatchRows(db),
+    artists: await loadLocalArtistMatchRows(db),
+  });
 
   const nowDefault = Math.floor(Date.now() / 1000);
-  const stmts: D1PreparedStatement[] = valid.map((it) => {
-    const localId = maps[it.type].get(it.id) || it.id;
+  const stmts: D1PreparedStatement[] = resolved.items.map((it) => {
     const starredAt = it.starredAt ?? nowDefault;
     return db.prepare(
       `INSERT INTO annotations (user_id, item_id, item_type, play_count, starred, starred_at)
@@ -576,11 +874,11 @@ cloneRoutes.post("/clone/upsertStarred", async (c) => {
        ON CONFLICT(user_id, item_id, item_type) DO UPDATE SET
          starred = 1,
          starred_at = excluded.starred_at`,
-    ).bind(userId, localId, it.type, starredAt);
+    ).bind(userId, it.id, it.type, starredAt);
   });
   if (stmts.length > 0) await db.batch(stmts);
 
-  return c.json({ ok: true, applied: stmts.length, userId });
+  return c.json({ ok: true, applied: stmts.length, unmatched: resolved.unmatched, userId });
 });
 
 // ---------------------------------------------------------------------------

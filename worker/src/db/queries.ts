@@ -119,6 +119,9 @@ export function createQueries(db: D1Database) {
         case "alphabeticalByName":
           order = "a.sort_name ASC NULLS LAST, a.name ASC";
           break;
+        case "alphabeticalByNameDesc":
+          order = "a.sort_name DESC NULLS LAST, a.name DESC";
+          break;
         case "alphabeticalByArtist":
           // sort by primary artist's sort_name then album name
           order = "artist_sort ASC NULLS LAST, a.sort_name ASC NULLS LAST, a.name ASC";
@@ -338,14 +341,18 @@ export function createQueries(db: D1Database) {
       // to the original alphabetical order so third-party Subsonic clients
       // (which never send this) see no behavior change; the web Songs tab
       // passes "newest" to browse most-recently-added-to-library first.
-      songSort?: "title" | "newest";
+      songSort?: "title" | "titleDesc" | "newest";
     } = {}): Promise<{
       artists: Artist[];
       albums: Album[];
       songs: SongRow[];
     }> {
       const like = `%${query}%`;
-      const songOrder = opts.songSort === "newest" ? "sm.created_at DESC" : "sm.sort_title ASC";
+      const songOrder = opts.songSort === "newest"
+        ? "sm.created_at DESC"
+        : opts.songSort === "titleDesc"
+          ? "sm.sort_title DESC"
+          : "sm.sort_title ASC";
       const [artists, albums, songs] = await Promise.all([
         db.prepare(
           "SELECT * FROM artists WHERE name LIKE ? ORDER BY sort_name ASC LIMIT ? OFFSET ?"

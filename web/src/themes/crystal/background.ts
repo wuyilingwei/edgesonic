@@ -336,6 +336,8 @@ export interface CrystalBackgroundOptions {
 // marker. Uses the same WebGL Renderer as the drifting background crystals and
 // the click-drop pieces. No glow pass — a CSS drop-shadow on the canvas
 // supplies the halo without clipping to canvas bounds.
+const THUMB_SIZE = 42 * 0.8;
+
 export function mountCrystalThumb(host: HTMLElement, options: { color: [number, number, number]; halo: [number, number, number]; shape: CrystalShape }): () => void {
   const reduce = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const canvas = document.createElement("canvas");
@@ -348,7 +350,7 @@ export function mountCrystalThumb(host: HTMLElement, options: { color: [number, 
   if (!renderer.ok) { renderer.dispose(); return remove; }
 
   const CSS = 44; // canvas viewport, CSS px
-  const size = 42 / meshRadius(options.shape); // same on-screen extent for every shape
+  const size = THUMB_SIZE / meshRadius(options.shape); // same on-screen extent for every shape
   if (reduce) {
     renderer.render([{ cx: CSS / 2, cy: CSS / 2, size, t: 0.9, alpha: 1 }], CSS, CSS);
     return () => { renderer.dispose(); remove(); };

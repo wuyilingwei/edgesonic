@@ -116,9 +116,13 @@ async function main() {
   {
     const src = fs.readFileSync(path.resolve(__dirname, "../../web/src/views/NowPlaying.vue"), "utf-8");
     assert(src.includes("function parseStructuredLines"), "NowPlaying.vue still defines parseStructuredLines");
-    assert(src.includes('lyrics.value = parseStructuredLines(inner);'), "the structuredLyrics branch calls parseStructuredLines, not the old text-only regex");
+    assert(src.includes("parseStructuredLines(payload.structured)"), "the structuredLyrics branch calls parseStructuredLines, not the old text-only regex");
     assert(!/<line\[\^>\]\*>/.test(src) || src.includes("start=\"(\\d+)\")?"),
       "no longer relies on a start-attribute-blind <line> regex for the structured path");
+    assert(src.includes("let lyricsRequest = 0;"), "lyrics requests have a generation counter");
+    assert(src.includes("userScrolled.value = false;"), "track changes restore automatic lyric following");
+    assert(src.includes("function resetLyricsScroll()"), "track changes reset the lyric scroll container");
+    assert(src.includes("if (request !== lyricsRequest) return;"), "stale lyric responses cannot overwrite the current track");
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PASS");
