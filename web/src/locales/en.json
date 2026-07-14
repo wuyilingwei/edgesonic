@@ -17,7 +17,8 @@
   "app": {
     "groups": {
       "library": "LIBRARY",
-      "management": "MANAGEMENT"
+      "management": "MANAGEMENT",
+      "help": "HELP"
     },
     "menu": {
       "dashboard": "Dashboard",
@@ -31,7 +32,8 @@
       "radio": "Radio",
       "podcasts": "Podcasts",
       "shares": "Shares",
-      "playlists": "Playlists"
+      "playlists": "Playlists",
+      "about": "About"
     },
     "logout": "LOGOUT",
     "levels": {

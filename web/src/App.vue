@@ -70,6 +70,12 @@ const groups = computed<NavGroup[]>(() => {
         { label: t("app.menu.settings"), path: "/settings", minLevel: 3 },
       ],
     },
+    {
+      label: t("app.groups.help"),
+      items: [
+        { label: t("app.menu.about"), path: "/about", minLevel: 0 },
+      ],
+    },
   ];
   return defs
     .map((g) => ({ ...g, items: g.items.filter((i) => level.value >= i.minLevel) }))

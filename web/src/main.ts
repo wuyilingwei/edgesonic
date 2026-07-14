@@ -46,6 +46,7 @@ const routes = [
   // owns its detail state inline so back-nav doesn't re-pick a playlist.
   { path: "/playlists", component: () => import("./views/Playlists.vue"), meta: { title: "Playlists" } },
   { path: "/now-playing", component: () => import("./views/NowPlaying.vue"), meta: { title: "Now Playing" } },
+  { path: "/about", component: () => import("./views/About.vue"), meta: { title: "About", minLevel: 0 } },
 ];
 
 const router = createRouter({ history: createWebHashHistory(), routes });
