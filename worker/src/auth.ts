@@ -147,15 +147,14 @@ export async function sha256(input: string): Promise<string> {
 // ============================================================================
 // Subsonic Credential Lookup (token/salt auth)
 // ============================================================================
-// Supports both subsonic_credentials and session tokens via t/s parameters.
-// Session tokens are allowed here for in-app playback scenarios.
+// Only checks subsonic_credentials. Session tokens cannot be used as password
+// or salt in any form. Sessions must use HTTP-only cookie authentication.
 async function findSubsonicCredential(
   db: D1Database,
   username: string,
   token: string,
   salt: string,
-): Promise<{ credential: string; kind: "subsonic_cred" | "session"; streamProxyStrategy: string } | null> {
-  // 1. Check subsonic_credentials table
+): Promise<{ credential: string; kind: "subsonic_cred"; streamProxyStrategy: string } | null> {
   const creds = await db
     .prepare("SELECT password, stream_proxy_strategy FROM subsonic_credentials WHERE username = ?")
     .bind(username)
@@ -173,20 +172,6 @@ async function findSubsonicCredential(
         ? strat
         : "always";
       return { credential: cred.password, kind: "subsonic_cred", streamProxyStrategy: strategy };
-    }
-  }
-
-  // 2. Check active sessions (session token as Subsonic t/s parameter)
-  // Sessions are allowed via t/s for in-app playback, but NOT via password (p param).
-  const sessions = await db
-    .prepare("SELECT token FROM sessions WHERE username = ? AND expires_at > ?")
-    .bind(username, Math.floor(Date.now() / 1000))
-    .all<{ token: string }>();
-
-  for (const sess of sessions.results) {
-    if (md5(sess.token + salt) === token) {
-      await renewSessionIfNeeded(db, sess.token);
-      return { credential: sess.token, kind: "session", streamProxyStrategy: "always" };
     }
   }
 
