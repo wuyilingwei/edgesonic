@@ -101,6 +101,10 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
 });
 
 sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async (c) => {
+  const user = c.get("user");
+  if (user.level < 2) {
+    return c.text(subsonicError(0, "Source creation requires admin privileges (level 2+)"), 403, XML);
+  }
   const body = await c.req.json<{
     type: string; base_url: string; name?: string; username?: string;
     password?: string; root_path?: string; mode?: string; region?: string;
@@ -133,6 +137,10 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
 });
 
 sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), async (c) => {
+  const user = c.get("user");
+  if (user.level < 2) {
+    return c.text(subsonicError(0, "Source update requires admin privileges (level 2+)"), 403, XML);
+  }
   const body = await c.req.json<{
     id: string; name?: string; base_url?: string; username?: string; password?: string;
     root_path?: string; enabled?: number; mode?: string; region?: string;
@@ -191,6 +199,10 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
 });
 
 sourcesRoutes.post("/sources/delete", permissionMiddleware("manage_sources"), async (c) => {
+  const user = c.get("user");
+  if (user.level < 2) {
+    return c.text(subsonicError(0, "Source deletion requires admin privileges (level 2+)"), 403, XML);
+  }
   const body = await c.req.json<{ id: string }>();
   if (!body.id) {
     return c.text(subsonicError(0, "Missing id"), 400, XML);

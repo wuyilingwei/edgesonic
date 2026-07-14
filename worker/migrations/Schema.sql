@@ -763,6 +763,15 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
    'Hours between automatic batch scans for sibling .lrc sidecar files on songs still missing lyrics (0=disabled)',
    unixepoch());
 
+-- 199: Security — allow level 1+ users to generate their own API credentials
+-- Default ON (1). When enabled, users can create/manage Subsonic credentials
+-- for third-party clients. When disabled (0), only admins (level 2+) can
+-- manage credentials.
+INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
+  ('allow_user_credentials', '1',
+   'Allow level 1+ users to generate their own API credentials (0=disabled, 1=enabled)',
+   unixepoch());
+
 -- ============================================================================
 -- ============================================================================
 -- Stored as plain TEXT for now; admin-gated endpoints read/write only.

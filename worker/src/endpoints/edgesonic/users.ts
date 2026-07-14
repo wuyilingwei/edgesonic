@@ -52,6 +52,10 @@ usersRoutes.get("/users/list", permissionMiddleware("manage_users"), async (c) =
 const ADMIN_TIER_LEVEL = 2;
 
 usersRoutes.post("/users/create", permissionMiddleware("manage_users"), async (c) => {
+  const caller = c.get("user");
+  if (caller.level < 2) {
+    return c.json({ ok: false, error: "User creation requires admin privileges (level 2+)" }, 403);
+  }
   const body = await c.req.json<{ username: string; password: string; level?: number }>();
   if (!body.username || !body.password) {
     return c.json({ ok: false, error: "Missing username or password" }, 400);
@@ -60,7 +64,6 @@ usersRoutes.post("/users/create", permissionMiddleware("manage_users"), async (c
   if (level < 0 || level > 3) {
     return c.json({ ok: false, error: "Invalid level (0-3)" }, 400);
   }
-  const caller = c.get("user");
   if (level >= ADMIN_TIER_LEVEL && caller.level < 3) {
     return c.json({ ok: false, error: "Only a super-admin can create admin/super-admin accounts" }, 403);
   }
@@ -95,11 +98,14 @@ usersRoutes.get("/users/get", async (c) => {
 });
 
 usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c) => {
+  const caller = c.get("user");
+  if (caller.level < 2) {
+    return c.json({ ok: false, error: "User update requires admin privileges (level 2+)" }, 403);
+  }
   const body = await c.req.json<{ username: string; password?: string; level?: number; enabled?: number }>();
   if (!body.username) {
     return c.json({ ok: false, error: "Missing username" }, 400);
   }
-  const caller = c.get("user");
   const db = c.env.DB;
   const now = Math.floor(Date.now() / 1000);
 
@@ -164,11 +170,14 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
 });
 
 usersRoutes.post("/users/delete", permissionMiddleware("manage_users"), async (c) => {
+  const caller = c.get("user");
+  if (caller.level < 2) {
+    return c.json({ ok: false, error: "User deletion requires admin privileges (level 2+)" }, 403);
+  }
   const body = await c.req.json<{ username: string }>();
   if (!body.username) {
     return c.json({ ok: false, error: "Missing username" }, 400);
   }
-  const caller = c.get("user");
   const db = c.env.DB;
   const targetUser = await db
     .prepare("SELECT level FROM users WHERE username = ?")

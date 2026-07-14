@@ -357,6 +357,14 @@ const streamHandler = async (c: Context) => {
         }
       }
     } else if (parsed.scheme === "webdav") {
+      // ============================================================================
+      // SECURITY: WebDAV 302 redirect disabled by default (enable_webdav_presign = "0")
+      // Reason: Direct WebDAV redirects expose credentials in the URL to clients,
+      // proxies, logs, and browsers. Use Worker-mediated streaming instead, or
+      // enable presigned URLs (requires safe server-side signing without embedding
+      // credentials in the URL).
+      // ============================================================================
+
       // Skip WebDAV presign for browser sessions — see isBrowserSession note above.
       if (isBrowserSession) {
         // fall through to in-Worker stream
@@ -364,9 +372,10 @@ const streamHandler = async (c: Context) => {
         // rejected by ExoPlayer/AVFoundation/okhttp-based Subsonic clients
         // too, not just browsers — external players got a 302 they couldn't
         // follow and reported "unable to load media". It also hands the
-        // WebDAV credentials to every streaming client. Admins with a
-        // controlled client set can still re-enable via feature_strings
-        // (migration 0035 flips existing '1' rows to '0').
+        // WebDAV credentials to every streaming client.
+        // SECURITY (199): Presign disabled by default. To enable, set enable_webdav_presign=1
+        // in feature_strings ONLY if you have a safe presign implementation that does not
+        // embed credentials in the URL.
         const presignOn = await getFeatureString(env, "enable_webdav_presign", "0");
         const schemeAllowed = strategy === "always" || strategy === "webdav_only";
         if (presignOn === "1" && schemeAllowed) {

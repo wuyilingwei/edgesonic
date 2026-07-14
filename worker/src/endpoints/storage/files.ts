@@ -25,6 +25,20 @@ import { srcBaseUrl, type SourceRow } from "../../utils/slices";
 
 export const filesRoutes = new Hono();
 
+// ── Global Files API Security Guard ──────────────────────────────────────
+// All /storage/files/* operations require admin privileges (level 2+).
+// This prevents level 0/1 users from accessing file management entirely.
+filesRoutes.use("*", async (c, next) => {
+  const user = c.get("user");
+  if (user.level < 2) {
+    return c.json({
+      ok: false,
+      error: "File operations require admin privileges (level 2+)",
+    }, 403);
+  }
+  return next();
+});
+
 // ── Upload (raw body stream — studio-style) ──────────────────────────────
 // POST /rest/files/upload?name=file.mp3&source=r2|webdav&path=music
 //
@@ -219,6 +233,10 @@ function normalizeFolderPath(p: string | undefined): string | null {
 
 // POST /rest/files/delete body: { key: "music/file.mp3" }
 filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {
+  const user = c.get("user");
+  if (user.level < 2) {
+    return c.json({ ok: false, error: "File deletion requires admin privileges (level 2+)" }, 403);
+  }
   const env = c.env as Env;
   const body = await c.req.json<{ key: string }>();
   const { key } = body;
