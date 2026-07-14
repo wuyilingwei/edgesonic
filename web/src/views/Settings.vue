@@ -72,14 +72,28 @@ const pickerThemeIds = computed(() => {
   const extra = registeredThemeIds().filter((id) => !known.has(id));
   return [...SUPPORTED_THEMES, ...extra];
 });
-function themeTitle(id: string): string {
-  return (SUPPORTED_THEMES as readonly string[]).includes(id)
-    ? t(`settings.common.themeOptions.${id}`)
-    : (getTheme(id)?.label ?? id);
-}
 function themeSwatchStyle(id: string): Record<string, string> {
-  const preview = getTheme(id)?.swatchPreview;
-  return preview ? { background: preview } : {};
+  const visuals: Record<string, [string, string]> = {
+    black: ["#0a0a0b", "#727784"], white: ["#f7f8fc", "#384d7a"],
+    "color-gold": ["#080a18", "#d7ae37"], "sp-gold": ["#080a18", "#ffd64a"],
+    "color-ocean": ["#f7fcff", "#65c7ec"], "sp-ocean": ["#f7fcff", "#65c7ec"],
+    "color-scarlet": ["#fffafb", "#ff4004"], "sp-scarlet": ["#fffafb", "#ff4004"],
+    "color-sky": ["#f8fffa", "#65bd8c"], "sp-sky": ["#f8fffa", "#65bd8c"],
+    "color-earth": ["#fff9e8", "#ffc45a"], "sp-earth": ["#fff9e8", "#ffc45a"],
+    "color-crimson": ["#25183e", "#9b78e5"], "sp-crimson": ["#25183e", "#9b78e5"],
+  };
+  const [base, accent] = visuals[id] ?? ["#111", "#fff"];
+  const isNeutral = id === "black" || id === "white";
+  return { "--swatch-base": base, "--swatch-accent": accent, background: isNeutral ? base : `linear-gradient(135deg, ${accent} 0 42%, color-mix(in srgb, ${accent} 50%, ${base}) 50%, ${base} 58% 100%)` };
+}
+function themeShape(id: string): string {
+  if (id.includes("crimson")) return "dodecahedron";
+  if (id.includes("gold")) return "star";
+  if (id.includes("ocean")) return "icosahedron";
+  if (id.includes("scarlet")) return "tetrahedron";
+  if (id.includes("sky")) return "octahedron";
+  if (id.includes("earth")) return "cube";
+  return "cube";
 }
 onMounted(() => {
   // Warm every built-in theme's module so the picker's swatches/titles are
@@ -1130,13 +1144,12 @@ onMounted(() => {
               <button
                 v-for="th in pickerThemeIds"
                 :key="th"
-                type="button"
-                class="theme-swatch"
-                :class="{ active: activeTheme === th }"
-                :style="themeSwatchStyle(th)"
-                :title="themeTitle(th)"
-                @click="onThemeChange(th)"
-              />
+                  type="button"
+                  class="theme-swatch"
+                  :class="[{ active: activeTheme === th, sp: th.startsWith('sp-') }, `shape-${themeShape(th)}`]"
+                  :style="themeSwatchStyle(th)"
+                  @click="onThemeChange(th)"
+                />
             </div>
           </div>
         </div>
@@ -2203,16 +2216,34 @@ onMounted(() => {
 .lang-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .lang-select { width: auto; min-width: 160px; }
 
-.theme-swatches { display: flex; align-items: center; gap: 0.6rem; }
+.theme-swatches { display: grid; grid-template-columns: repeat(7, minmax(70px, 1fr)); gap: 0.45rem; width: min(100%, 620px); }
 .theme-swatch {
-  width: 26px; height: 26px;
-  border-radius: 50%;
-  border: 2px solid var(--color-border-subtle);
+  position: relative;
+  min-height: 38px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--color-border-subtle);
   cursor: pointer;
-  transition: transform 0.15s, border-color 0.15s;
+  /* background-clip padding-box so the 1px border never lets the container
+     colour bleed through at the edges. */
+  background-clip: padding-box;
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
 }
-.theme-swatch:hover { transform: scale(1.1); }
-.theme-swatch.active { border-color: var(--color-text-primary); }
+.theme-swatch::after { display: none; }
+.theme-swatch.sp::after { content: ""; display: block; position: absolute; width: 17px; height: 17px; right: 7px; bottom: 7px; background: var(--swatch-accent); filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); }
+.theme-swatch.shape-star::after { clip-path: polygon(50% 0, 62% 32%, 100% 50%, 62% 68%, 50% 100%, 38% 68%, 0 50%, 38% 32%); }
+.theme-swatch.shape-tetrahedron::after { clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.theme-swatch.shape-icosahedron::after { clip-path: polygon(50% 0, 90% 22%, 100% 62%, 66% 100%, 24% 92%, 0 52%, 14% 17%); }
+.theme-swatch.shape-dodecahedron::after { clip-path: polygon(50% 0, 88% 18%, 100% 55%, 72% 100%, 28% 100%, 0 55%, 12% 18%); }
+.theme-swatch.shape-octahedron::after { clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.theme-swatch.shape-cube::after { clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.theme-swatch:hover { transform: translateY(-1px); box-shadow: 0 5px 12px rgba(0,0,0,.18); }
+/* Inset ring instead of an outward one: the enclosing .settings-section has
+   overflow:hidden, which clipped an outer 0 0 0 2px ring on whichever edge
+   the active swatch sat against ("top/bottom/left/right not covered"). An
+   inset ring lives entirely inside the button and never clips. */
+.theme-swatch.active { border-color: var(--color-accent-primary); box-shadow: inset 0 0 0 2px var(--color-accent-primary), inset 0 0 0 3px rgba(0,0,0,.32); }
+@media (max-width: 760px) { .theme-swatches { grid-template-columns: repeat(4, minmax(70px, 1fr)); } }
 
 .external-theme-list { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.6rem; }
 .external-theme-row {

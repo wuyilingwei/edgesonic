@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "./api";
@@ -22,8 +22,9 @@ import PlayerBar from "./components/PlayerBar.vue";
 import UpdateBanner from "./components/UpdateBanner.vue";
 import { usePlayerStore } from "./stores/player";
 import { useWorkerPool } from "./stores/workerPool";
-import { activeTheme } from "./theme";
+import { activeTheme, resetTheme, restoreSavedTheme } from "./theme";
 import { getTheme } from "./themes/registry";
+import { ensureBuiltinThemeLoaded } from "./themes/builtin";
 
 const router = useRouter();
 const route = useRoute();
@@ -34,8 +35,10 @@ const player = usePlayerStore();
 const workerPool = useWorkerPool();
 watch(isLoggedIn, (now) => {
   if (now) {
+    void restoreSavedTheme();
     void workerPool.hydrateConfig().then(() => workerPool.start());
   } else {
+    resetTheme();
     workerPool.reset();
   }
 }, { immediate: true });
@@ -70,6 +73,7 @@ const groups = computed<NavGroup[]>(() => {
       items: [
         { label: t("app.menu.dashboard"), path: "/", minLevel: 0 },
         { label: t("app.menu.library"), path: "/library", minLevel: 0 },
+        { label: t("app.menu.starred"), path: "/starred", minLevel: 0 },
         { label: t("app.menu.playlists"), path: "/playlists", minLevel: 0 },
         { label: t("app.menu.radio"), path: "/radio", minLevel: 0 },
         { label: t("app.menu.podcasts"), path: "/podcasts", minLevel: 0 },
@@ -99,14 +103,36 @@ function doLogout() {
   router.push("/login");
 }
 
-// Theme-provided extras (decorative background layer, sidebar footer
-// reveal height, ...) are consumed generically here — App.vue never
-// checks for any specific theme id. See themes/registry.ts.
-const activeThemeDef = computed(() => getTheme(activeTheme.value));
+const loadedThemeDef = ref<ReturnType<typeof getTheme>>();
+const activeThemeDef = computed(() => getTheme(activeTheme.value) ?? loadedThemeDef.value);
+let themeLoadId = 0;
+watch(
+  activeTheme,
+  async (theme) => {
+    const loadId = ++themeLoadId;
+    await ensureBuiltinThemeLoaded(theme);
+    if (loadId === themeLoadId) loadedThemeDef.value = getTheme(theme);
+  },
+  { immediate: true },
+);
+
+const bgHostEl = ref<HTMLElement | null>(null);
+let bgCleanup: (() => void) | null = null;
+watch(
+  [activeThemeDef, bgHostEl],
+  ([def, host]) => {
+    bgCleanup?.();
+    bgCleanup = null;
+    if (def?.mountBackground && host) bgCleanup = def.mountBackground(host);
+  },
+  { immediate: true, flush: "post" },
+);
+onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
 </script>
 
 <template>
   <component :is="activeThemeDef?.background" v-if="activeThemeDef?.background" />
+  <div v-else-if="activeThemeDef?.mountBackground" ref="bgHostEl" aria-hidden="true"></div>
 
   <UpdateBanner />
 
@@ -174,6 +200,7 @@ const activeThemeDef = computed(() => getTheme(activeTheme.value));
 
 <style>
 @import "./assets/palette.css";
+@import "./assets/decor.css";
 
 /* === App shell === */
 .shell,
@@ -328,7 +355,7 @@ const activeThemeDef = computed(() => getTheme(activeTheme.value));
  * active theme's `sidebarFooterHeight` (0 for themes that don't set one —
  * see themes/registry.ts). A theme that wants this space to visually bleed
  * into a shared page background does so via its own stylesheet targeting
- * `.sidebar` directly (e.g. themes/stardust/stardust.css); this file never
+ * `.sidebar` directly (e.g. themes/elements/elements.css); this file never
  * mentions any specific theme.
  */
 .sidebar-footer-spacer {

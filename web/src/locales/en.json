@@ -22,6 +22,7 @@
     "menu": {
       "dashboard": "Dashboard",
       "library": "Library",
+      "starred": "Liked",
       "files": "Files",
       "sources": "Sources",
       "users": "Users",
@@ -122,6 +123,8 @@
   "library": {
     "title": "Library",
     "breadcrumb": "LIBRARY",
+    "starredTitle": "Liked",
+    "starredBreadcrumb": "LIKED",
     "playAlbum": "▶ PLAY ALBUM",
     "loadFailed": "Failed to load artists",
     "albumCount": "{n} ALBUMS",
@@ -135,6 +138,13 @@
     "tabArtists": "Artists",
     "tabAlbums": "Albums",
     "tabSongs": "Songs",
+    "tabStarred": "Liked",
+    "noStarred": "NO LIKED ITEMS",
+    "starredLoadFailed": "Failed to load liked items",
+    "artistInfoTitle": "Artist information",
+    "artistInfoLoading": "Looking up artist information…",
+    "artistInfoUnavailable": "Artist information is unavailable. Configure a Last.fm API key to enable it.",
+    "artistInfoOpen": "Open Last.fm profile",
     "loadMore": "Load more",
     "colAlbum": "Album",
     "editSong": "Edit Track Info",
@@ -408,8 +418,7 @@
         "black": "Black",
         "red": "Red",
         "green": "Green",
-        "yellow": "Yellow",
-        "stardust": "Stardust"
+        "yellow": "Yellow"
       },
       "externalTheme": {
         "title": "External Themes",

@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-// Real-3D renderer for the Stardust "Metatron" solid: two regular
+// Real-3D renderer for the star-tetrahedron ("Metatron") solid: two regular
 // tetrahedra interlocked at 180° (a stella octangula), drawn fully solid
 // with per-face lighting. Repeated CSS attempts (clip-path facet fans,
 // preserve-3d face rigs) flatten back to a plane because filter/clip-path
@@ -111,13 +111,10 @@ function clampChannel(x: number): number {
   return Math.max(0, Math.min(255, Math.round(x)));
 }
 
-// Fixed key light from the upper left front. Earlier revisions hue-shifted
-// shadowed faces toward cobalt (first as a flat additive haze, then as a
-// proportional mix) — either way that puts a second colour on the solid.
-// Rosmontis wants the gold hue held constant everywhere: only its
-// *vividness* — brightness and saturation together — should move with the
+// Fixed key light from the upper left front. The gold hue is held constant;
+// only its vividness (brightness and saturation together) moves with the
 // angle to the light, so facets read as a faceted gold gem rather than
-// shading into blue.
+// shading into a second colour.
 const LIGHT = normalize([-0.5, 0.78, 0.62]);
 const HALF = normalize([LIGHT[0], LIGHT[1], LIGHT[2] + 1]);
 
@@ -143,8 +140,8 @@ export interface MetatronOptions {
   spinSeconds?: number;
   /** 0..1 offset into the tumble cycle so instances don't sync up. */
   phase?: number;
-  /** Base fill for both tetrahedra (Stardust gold). Facets read as one gold
-   * hue throughout — see shadeFace — so there's no separate twin colour. */
+  /** Base fill for both tetrahedra. Facets read as one hue throughout —
+   * see shadeFace — so there's no separate twin colour. */
   color?: string;
 }
 

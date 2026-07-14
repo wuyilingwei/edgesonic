@@ -339,11 +339,8 @@ onMounted(async () => {
       isAdmin.value ? edgesonicFetch("users/list") : Promise.resolve(""),
     ]);
 
-    // 164: was getArtists (row-count, actually accurate) + search3 with
-    // songCount/albumCount:"500" (155's fix for the album stat, but capped —
-    // any library past 500 albums or songs silently plateaued at exactly
-    // 500 instead of showing the true total, per Rosmontis's report). One
-    // real COUNT(*) endpoint replaces both, and is exact regardless of size.
+    // A single real COUNT(*) endpoint for the library stats — exact
+    // regardless of size (the earlier search3-based counts capped at 500).
     try {
       const parsed = JSON.parse(libraryJson) as { ok?: boolean; artists?: number; albums?: number; songs?: number };
       if (parsed.ok) {

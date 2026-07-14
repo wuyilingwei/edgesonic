@@ -15,8 +15,8 @@
 
 // Theme registry: lets a theme be more than a CSS palette without any
 // component (App.vue, PlayerBar.vue, ...) hardcoding that theme's name.
-// Built-in themes with behaviour (currently just Stardust) register here
-// exactly the same way an externally-loaded theme would — there is no
+// Built-in themes with behaviour (the animated SP element themes) register
+// here exactly the same way an externally-loaded theme would — there is no
 // separate "built-in" code path.
 import { reactive, type Component } from "vue";
 
@@ -26,6 +26,8 @@ export interface ThemeDefinition {
   label?: string;
   /** Full-viewport decorative background layer, mounted behind the app shell. */
   background?: Component;
+  /** Mounts a non-Vue background and returns its cleanup function. */
+  mountBackground?: (host: HTMLElement) => () => void;
   /** Replaces the player bar's default progress-thumb marker. */
   progressThumb?: Component;
   /**
