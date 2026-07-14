@@ -119,8 +119,6 @@ jobs:
             echo "## Changes"
             if [ -n "$PREVIOUS_TAG" ]; then
               git log --no-merges --format='- %s' "${PREVIOUS_TAG}..${TAG}"
-              echo
-              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${TAG}"
             else
               echo "- Initial release"
             fi
