@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, watch, nextTick } from "vue";
 import { usePlayerStore } from "../stores/player";
 import { useAuth } from "../api";
@@ -22,7 +9,6 @@ import { getTrackLyrics } from "../lib/trackPrefetch";
 const player = usePlayerStore();
 const { coverArtUrl, authFetch, username } = useAuth();
 
-// ---- Lyrics: original + translation (dual axis) ----
 interface LyricLine { time: number; text: string; tr?: string }
 const lyrics = ref<LyricLine[]>([]);
 const lyricsLoading = ref(false);
@@ -30,19 +16,10 @@ const lyricsError = ref("");
 const hasSynced = computed(() => lyrics.value.some((l) => l.time > 0));
 const userScrolled = ref(false);
 const lyricsScrollEl = ref<HTMLElement | null>(null);
-// Auto-scroll calling container.scrollTo() itself fires the container's
-// "scroll" event, which onLyricsScroll can't tell apart from a real user
-// scroll — every auto-scroll was self-marking userScrolled=true and locking
-// out the *next* auto-scroll for 5s. Lyric lines are usually <5s apart, so in
-// practice only the first line ever scrolled into view. Suppress the scroll
-// handler until this timestamp (end of the smooth-scroll animation) so only
-// genuine user-initiated scrolls arm the pause.
 const suppressScrollUntil = ref(0);
 const autoScrolling = ref(false);
 const ACTIVE_CENTER_TOLERANCE_PX = 24;
 
-// Parse LRC into timed lines. Handles dual-language LRC where original and
-// translation alternate at the same timestamp.
 function parseLrcDual(text: string): LyricLine[] {
   const re = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)/g;
   const byTime = new Map<number, { text: string; tr?: string }>();
@@ -77,14 +54,6 @@ function parseLrcDual(text: string): LyricLine[] {
   return ordered.sort((a, b) => a.time - b.time);
 }
 
-// Parse getLyricsBySongId's <structuredLyrics><line start="8120">text</line></...>
-// XML. The real per-line timestamp lives in the `start` ms attribute — the
-// server (worker/src/endpoints/subsonic/lyrics.ts) already strips any
-// "[mm:ss]" bracket tag out of the line text before emitting it, so re-deriving
-// timestamps from the text with parseLrcDual's bracket regex (as this used to
-// do) could never match anything. Every line silently got time=0, hasSynced
-// was permanently false, and auto-scroll/click-to-seek never actually engaged
-// even though the code for both was otherwise correct.
 function parseStructuredLines(inner: string): LyricLine[] {
   const lineRe = /<line(?:\s+start="(\d+)")?[^>]*>([^<]*)<\/line>/g;
   let m: RegExpExecArray | null;
@@ -121,7 +90,6 @@ function parseStructuredLines(inner: string): LyricLine[] {
   return ordered.sort((a, b) => a.time - b.time);
 }
 
-// Detect if LRC has translation lines (same timestamp appears twice)
 function extractTranslation(text: string): string | null {
   const re = /\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\](.*)/g;
   const byTime = new Map<number, string[]>();
@@ -138,7 +106,6 @@ function extractTranslation(text: string): string | null {
   return null;
 }
 
-// Fetch lyrics when track changes
 let lyricsRequest = 0;
 function resetLyricsScroll() {
   lyricsScrollEl.value?.scrollTo({ top: 0, behavior: "auto" });
@@ -177,7 +144,6 @@ function decodeEntities(s: string): string {
   return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'");
 }
 
-// ---- Auto-scroll to active lyric ----
 const activeIdx = computed(() => {
   if (!hasSynced.value) return -1;
   const t = player.currentTime;
@@ -189,14 +155,6 @@ const activeIdx = computed(() => {
   return idx;
 });
 
-// Scroll active line to center. Manual scrolling pauses auto-follow until the
-// user scrolls the active line back near center (or clicks a timed lyric).
-//
-// lyricsScrollEl is bound to .np-right — the actual overflow:auto scroll
-// container — not the inner .np-lyrics-scroll wrapper; scrollTo() on the
-// (non-scrolling) wrapper was a no-op, so auto-scroll never visibly moved.
-// Query by class rather than raw `.children[idx]` too: the wrapper's first
-// child is a leading spacer div, so a plain index was off by one.
 watch(activeIdx, async (idx) => {
   if (idx < 0 || userScrolled.value || !lyricsScrollEl.value) return;
   await nextTick();
@@ -226,8 +184,6 @@ function activeLineIsCentered(): boolean {
   return Math.abs(activeCenter - viewportCenter) <= ACTIVE_CENTER_TOLERANCE_PX;
 }
 
-// Click a lyric line to jump playback there. Only meaningful for synced (LRC
-// timestamped) lyrics — plain unsynced text has every line's time=0.
 function onLyricClick(line: LyricLine) {
   if (!hasSynced.value || !player.hasTrack) return;
   userScrolled.value = false;
@@ -237,15 +193,6 @@ function onLyricClick(line: LyricLine) {
 
 const coverFailed = ref(false);
 const track = computed(() => player.current);
-// coverArtUrl generates a fresh random salt each call; calling it in the
-// template directly (e.g. :src="coverArtUrl(track.coverArt, 512)") re-fetches
-// the cover image 4×/s because timeupdate → activeIdx triggers re-render.
-//
-// 400 isn't in the backend's ALLOWED_COVER_SIZES allow-list (64/96/128/192/
-// 256/384/512 — media.ts parseCoverSize), so a request with size=400 silently
-// fell through to the uncached "serve the original file" path: every play
-// served the full-size original instead of a cached thumbnail. 512 is the
-// closest allowed size at or above this box's ~280px CSS width.
 const coverSrc = computed(() => {
   const tr = track.value;
   return tr?.coverArt ? coverArtUrl(tr.coverArt, 512) : "";

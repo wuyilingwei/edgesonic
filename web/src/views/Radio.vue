@@ -1,26 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-//   GET    /rest/getInternetRadioStations       (any authed user)
-//   GET/POST /rest/createInternetRadioStation   (manage_radio)
-//   GET/POST /rest/updateInternetRadioStation   (manage_radio)
-//   GET/POST /rest/deleteInternetRadioStation   (manage_radio)
-// All four are reached through authFetch with query params — backend supports
-// both GET and POST (form-encoded). GET keeps the call sites readable and
-// avoids having to switch to multipart for the optional homepageUrl field.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, onMounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
@@ -35,8 +15,6 @@ interface Station {
   homepageUrl: string;
 }
 
-// Only admins (level >= 2) can CUD. We still show the list to everyone — the
-// sidebar entry is open at minLevel 0 to mirror /library.
 const canManage = computed(() => level.value >= 2);
 
 const stations = ref<Station[]>([]);
@@ -53,9 +31,6 @@ function showToast(msg: string, type: "success" | "error" = "success") {
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-// Subsonic responses signal failure via <subsonic-response status="failed">.
-// Our success path emits status="ok" — checking the substring is enough because
-// the worker always serialises that single attribute on the root element.
 function failed(xml: string): boolean {
   return /status="failed"/.test(xml);
 }

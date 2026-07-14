@@ -1,27 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// ----------------------------------------------------------------------------
-// Mirrors Sources.vue card pattern: a header bar with primary actions on the
-// right, then a 2-column grid of channel cards. Each card shows up to the 5
-// most recent episodes inline; "expand all" reveals the rest. Admin-only
-// surface (download / delete) is hidden for non-admins via `isAdmin`; the
-// backend additionally enforces `manage_podcasts` so a determined user gets
-// a Subsonic error rather than silent failure.
-// ----------------------------------------------------------------------------
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatDuration } from "../api";
@@ -58,34 +37,26 @@ interface Channel {
   episodes: Episode[];
 }
 
-// === State ===
 const channels = ref<Channel[]>([]);
 const loading = ref(false);
 const expanded = ref<Set<string>>(new Set());
 
-// Add-channel form
 const showAddForm = ref(false);
 const newChannelUrl = ref("");
 const addingChannel = ref(false);
 
-// Refresh button cooldown — backend uses ctx.waitUntil so the immediate
-// response says nothing useful; we lock for 5s then reload.
 const refreshing = ref(false);
 
-// Per-episode busy lock for download/delete buttons. Keyed by episode id.
 const epBusy = ref<Set<string>>(new Set());
 
-// Per-channel busy lock for delete.
 const chBusy = ref<Set<string>>(new Set());
 
-// Toast
 const toast = ref({ show: false, msg: "", type: "success" as "success" | "error" });
 function showToast(msg: string, type: "success" | "error" = "success") {
   toast.value = { show: true, msg, type };
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-// === XML helpers (Subsonic ok/failed envelope) ===
 function isOk(xml: string): boolean {
   return /status="ok"/.test(xml);
 }
@@ -94,7 +65,6 @@ function errorMessage(xml: string): string {
   return e?.message || t("podcasts.errorGeneric");
 }
 
-// === Load ===
 async function loadAll() {
   loading.value = true;
   try {
@@ -156,7 +126,6 @@ async function loadAll() {
   }
 }
 
-// === Actions ===
 async function addChannel() {
   const url = newChannelUrl.value.trim();
   if (!url) return;
@@ -280,7 +249,6 @@ function statusLabel(s: EpisodeStatus): string {
 
 const totalChannels = computed(() => channels.value.length);
 
-// === Lifecycle ===
 let pollHandle: number | null = null;
 const POLL_MS = 30_000;
 
@@ -296,8 +264,6 @@ function stopPolling(): void {
   }
 }
 
-// P6 — pause the poll while the tab is hidden; resume + immediately refresh
-// when it becomes visible again. Mirrors Dashboard.vue onActivityVisibility.
 function onVisibilityChange(): void {
   if (document.hidden) {
     stopPolling();

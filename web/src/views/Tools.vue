@@ -1,22 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// used to live inside Settings; they are workflows rather than configuration,
-// so they get their own page with one sub-page per direction. The credential
-// form is shared — both directions talk to the same upstream server.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
@@ -28,9 +12,6 @@ const { t } = useI18n();
 const { isSuperAdmin, isAdmin, isUser, username: currentUsername, edgesonicPost, edgesonicFetch, rescanSongs, md5, signedParams, restUrl } = useAuth();
 const workerPool = useWorkerPool();
 
-// "auto-start in mm:ss" countdown next to the manual poll button.
-// workerPool.nextPollAt is a plain timestamp (not itself ticking), so a
-// local 1s clock drives the countdown text reactively.
 const nowTick = ref(Date.now());
 const autoStartCountdownText = computed(() => {
   const eta = workerPool.nextPollAt;
@@ -41,7 +22,6 @@ const autoStartCountdownText = computed(() => {
   return `${m}:${String(s).padStart(2, "0")}`;
 });
 
-// ---- 110: Work pool status (moved from Dashboard) ----
 interface WorkCounts { queued: number; claimed: number; completed: number; failed: number; canceled: number }
 interface WorkLoadRow { username: string; n: number }
 const workCounts = ref<WorkCounts>({ queued: 0, claimed: 0, completed: 0, failed: 0, canceled: 0 });
@@ -49,18 +29,6 @@ const workLoad = ref<WorkLoadRow[]>([]);
 const totalTasks = computed(() => workCounts.value.queued + workCounts.value.claimed + workCounts.value.completed + workCounts.value.failed);
 const progressPct = computed(() => totalTasks.value > 0 ? Math.round((workCounts.value.completed / totalTasks.value) * 100) : 0);
 
-// Global speed / ETA — sampled from the aggregate work/status counts (all
-// browsers combined), same windowed-rate technique workerPool.ts uses for
-// its own (this-browser-only) speedPerMin. Local speed is exposed directly
-// by the store; this just adds the aggregate view alongside it.
-// switched from a noisy 5-min real-time window to a 15-min rolling
-// average (SAMPLE_LIMIT 120 ~ 20 min of 10s status polls) so the number
-// stabilises instead of swinging with every batch. ETA uses the same
-// averaged speed but applies a 0.8 conservative coefficient
-// wanted "拉长估算" rather than the instantaneous rate, so we deliberately
-// over-estimate remaining time by 25%. This accounts for the queue being
-// served in bursts (other browsers may pause, scans can re-queue) and
-// keeps the displayed ETA honest rather than optimistic.
 const SPEED_WINDOW_MS = 15 * 60 * 1000;
 const SAMPLE_LIMIT = 120;
 const globalSamples = ref<Array<{ ts: number; count: number }>>([]);
@@ -110,10 +78,6 @@ async function loadWorkStatus() {
   } catch { /* stay quiet */ }
 }
 
-// Concurrency knob — moved here from Settings .
-// saving writes localStorage via workerPool.setMaxConcurrent (no server
-// POST). Concurrency only affects this browser's poll limit, so persisting
-// it server-side as a shared feature_string was both wasteful and misleading.
 const maxConcurrentInput = ref<number>(workerPool.maxConcurrent);
 const maxConcurrentBusy = ref(false);
 function saveMaxConcurrent() {
@@ -135,7 +99,6 @@ async function onReclaimStaleWork() {
   try { await edgesonicPost("maintenance/reclaimStaleWork", {}); await loadWorkStatus(); } catch { /* */ }
 }
 
-// ---- 110: Storage + R2 cost (moved from Dashboard) ----
 interface StorageRow { source_type: string; count: number; bytes: number }
 interface StorageStats { breakdown: StorageRow[]; r2CoverCount: number; r2CoverBytes: number; freeAllocationGb: number }
 const storageStats = ref<StorageStats | null>(null);
@@ -166,9 +129,6 @@ async function saveFreeAlloc() {
   try { await edgesonicPost("features/updateString", { key: "r2_free_allocation_gb", value: String(freeAllocInput.value) }); } catch { /* */ } finally { freeAllocSaving.value = false; }
 }
 
-// ---- Orphan songs (files.ts upload placeholder bucket that never got
-// relinked to real artist/album — see worker/src/endpoints/edgesonic/
-// maintenance.ts's orphanSongs endpoints for the full rationale) ----
 interface OrphanSong {
   masterId: string; title: string; createdAt: number; instanceCount: number;
   suffix: string | null; totalSize: number; tagScanned: number; missing: boolean;
@@ -243,9 +203,6 @@ function formatOrphanDate(unixSec: number): string {
   return new Date(unixSec * 1000).toLocaleString();
 }
 
-// handle, so it leaked a new 10s poller every time this component
-// (re)mounted (e.g. navigating away from /tools and back). Store the handle
-// and clear it on unmount, same pattern as Files.vue's workStatusHandle.
 let workStatusPollHandle: ReturnType<typeof setInterval> | null = null;
 let nowTickHandle: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
@@ -260,71 +217,29 @@ onUnmounted(() => {
   if (nowTickHandle !== null) { clearInterval(nowTickHandle); nowTickHandle = null; }
 });
 
-// === Toast (same shape as Settings.vue's) ===
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") {
   toast.value = { show: true, msg, type };
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-// (same open/toggleSection shape) instead of the bespoke `.tools-accordion`
-// this page used to have. Clone + Push are now one section ("migrate") with
-// an internal seg-btn switch (migrateMode) instead of two separate
-// top-level accordion entries.
 type SectionKey = "migrate" | "workPool" | "storage" | "orphanSongs";
 const open = ref<Record<SectionKey, boolean>>({ migrate: false, workPool: false, storage: false, orphanSongs: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
 const migrateMode = ref<"clone" | "push">("clone");
 
-// Browser-driven clone: the SPA fetches metadata + bytes directly from the
-// upstream Subsonic server (using Subsonic MD5 token auth: t = md5(password
-// + salt), s = salt) and POSTs each item to /edgesonic/clone/* to persist
-// locally. Keeping the loop client-side avoids Worker CPU-time timeouts
-// when the upstream library is large.
-//
-// Stages run sequentially:
-//  1. metadata — getAlbumList2 → getAlbum → upsertMaster per song
-//   2. audio   — (optional) stream → ingestAudio per song
-//  3. playlists — getPlaylists → getPlaylist → upsertPlaylist
-//   4. starred — getStarred2 → upsertStarred
-//   5. users   — (admin upstream only) getUsers → upsertUser
-//
-// Each stage exposes a reactive progress object so the UI can render
-// "X / Y" counters and a per-stage status pill.
 interface CloneForm { url: string; username: string; password: string; }
 const cloneForm = ref<CloneForm>({ url: "", username: "", password: "" });
-// 161: on by default (matches the pre-existing always-on behavior) — the
-// toggle exists so a re-run that only needs starred/playlists/users doesn't
-// have to re-walk the whole library's metadata every time.
 const cloneMetadataEnabled = ref(true);
 const cloneAudioEnabled = ref(false);
-// "browser" (default): fetch upstream bytes in the browser then POST to
-// ingestAudio — more resilient on flaky upstreams, costs the operator's own
-// bandwidth twice (down then up). "worker": the Worker fetches upstream
-// bytes itself and writes straight to R2 — saves the browser-side bandwidth
-// entirely, at the cost of running through the Worker's own outbound
-// subrequest (less forgiving of a slow/unstable upstream).
 const cloneAudioMode = ref<"browser" | "worker">("browser");
-// 176: favourites (starred) and playlists are now independently selectable,
-// and land on a target chosen by cloneUserMode:
-//   current   — the caller's own account (any authenticated user)
-//   specified — a named local user (requires manage_users)
-//   all       — every upstream user, cloned into matching local accounts,
-//               provisioning the accounts too (super admin only)
 const cloneStarredEnabled = ref(true);
 const clonePlaylistsEnabled = ref(true);
 const cloneUserMode = ref<"current" | "specified" | "all">("current");
 const cloneTargetUsername = ref("");
-// 176: the Worker proxy is now always on (the opt-out checkbox was removed);
-// all upstream reads route through /clone/proxy so source-site CORS never
-// blocks a clone.
 const cloneProxyEnabled = ref(true);
 const clonePlaylistOnly = ref(false);
 const cloneStarredOnly = ref(false);
-// How many playlist entries / starred items per upsert request. Keeps a single
-// huge playlist or favourites list from exceeding the Worker subrequest budget
-// (176): the browser sends bounded chunks, the first replacing and the rest
-// appending.
 const CLONE_ENTRY_CHUNK = 300;
 const cloneRunning = ref(false);
 const cloneCancelRequested = ref(false);
@@ -353,15 +268,6 @@ function cloneLogPush(line: string) {
   if (cloneLog.value.length > 500) cloneLog.value.splice(0, cloneLog.value.length - 500);
 }
 
-// 159: resume cache — a cancelled/interrupted/failed clone used to mean
-// starting over from song #1 next time: every album gets re-walked and
-// every song's audio gets re-fetched-and-reuploaded from scratch, even the
-// ones that already landed locally last run. Persist the set of song ids
-// that have already been metadata-upserted / audio-uploaded to
-// localStorage, keyed per upstream URL (so cloning two different servers
-// doesn't cross-contaminate completion state), and skip re-processing
-// anything already in the set. Re-running after a cancel/crash then just
-// picks up where it left off instead of redoing already-finished work.
 interface CloneCache { metadataDone: string[]; audioDone: string[] }
 function cloneCacheKey(): string {
   return "edgesonic_clone_cache_" + md5(cloneForm.value.url.trim().toLowerCase());
@@ -396,8 +302,6 @@ function saveCloneCacheNow() {
     // sessionStorage full/disabled — resume just won't work next time, not fatal.
   }
 }
-// Debounced so a fast library (hundreds of items/sec once cache-hit-skipping
-// kicks in) doesn't hammer sessionStorage with a synchronous write per item.
 function markCloneCacheDirty() {
   cloneCacheDirty = true;
   if (cloneCacheFlushTimer) return;
@@ -415,8 +319,6 @@ function clearCloneCache() {
   cloneCacheClearedAt.value = Date.now();
   showToast(t("settings.common.clone.cacheCleared"));
 }
-// Reactive-ish counts for the template hint — read at render time via a
-// computed so cloneCacheClearedAt / cloneForm.url changes refresh it.
 const cloneCacheCounts = computed(() => {
   void cloneCacheClearedAt.value; // dependency: recompute after clearCloneCache()
   void cloneForm.value.url;
@@ -424,22 +326,9 @@ const cloneCacheCounts = computed(() => {
   return { metadata: c.metadataDone.size, audio: c.audioDone.size };
 });
 
-// mapConcurrent (shared, see lib/concurrency.ts) replaced the fully
-// sequential `for...await` this clone used to do — CLONE_*_CONCURRENCY
-// bounds how many albums/songs are in flight at once (does NOT cap the
-// total item count, which is already fully paginated before this runs).
 const CLONE_METADATA_CONCURRENCY = 4;
 const CLONE_AUDIO_CONCURRENCY = 3;
 
-// Build the upstream Subsonic auth query string for a single call.
-// t = md5(password + salt), s = salt — the same scheme EdgeSonic uses
-// in api.ts:signedParams, but signed with the *upstream* password.
-// 163: parameterized on username/password (rather than always reading
-// cloneForm.value) so cloneUsersStage can authenticate as each cloned user
-// in turn to pull *their own* starred/playlists — Subsonic's getStarred2
-// has no "give me user X's stars" param for a regular client, the only way
-// to get another user's personal data is to actually sign in as them (and
-// upstream getUsers already hands us their password for this exact reason).
 function cloneSignedParamsFor(username: string, password: string, extra?: Record<string, string>): URLSearchParams {
   const s = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
   return new URLSearchParams({
@@ -464,10 +353,6 @@ function cloneUpstreamUrl(path: string, params?: Record<string, string>): string
   return cloneUpstreamUrlFor(cloneForm.value.username, cloneForm.value.password, path, params);
 }
 
-// Subsonic JSON responses come back as { "subsonic-response": { ... } }.
-// We tolerate either JSON or XML for getAlbumList2/getAlbum/getSong etc;
-// when the server only speaks XML (older Navidrome / supysonic), we parse
-// the attributes out of the XML.
 async function cloneFetchJsonAs(username: string, password: string, path: string, params?: Record<string, string>): Promise<any> {
   const resp = cloneProxyEnabled.value
     ? await fetch("/edgesonic/clone/proxy", {
@@ -494,7 +379,6 @@ async function cloneFetchJson(path: string, params?: Record<string, string>): Pr
   return cloneFetchJsonAs(cloneForm.value.username, cloneForm.value.password, path, params);
 }
 
-// Generic attribute parser for XML-fallback responses.
 function parseXmlChildren(xml: string, tag: string): Record<string, string>[] {
   const items: Record<string, string>[] = [];
   const re = new RegExp(`<${tag}\\s+([^>]+?)\\s*/?>`, "g");
@@ -509,7 +393,6 @@ function parseXmlChildren(xml: string, tag: string): Record<string, string>[] {
   return items;
 }
 
-// Pull a value from a Subsonic JSON node OR fall back to the XML parse.
 function jget(node: any, key: string): string | undefined {
   if (node && typeof node === "object") {
     const v = node[key];
@@ -520,8 +403,6 @@ function jget(node: any, key: string): string | undefined {
   return undefined;
 }
 
-// Normalize a Subsonic song node (from getAlbum.songs / getStarred2.song /
-// getPlaylist.entries) into the shape upsertMaster expects.
 function normalizeSongNode(song: any, album: any, artist: any): {
   artist: { id: string; name: string; sortName?: string | null };
   album: { id: string; name: string; sortName?: string | null; year?: number | null; genre?: string | null };
@@ -620,21 +501,16 @@ function cloneStarredAt(node: any): number | null {
   return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
 }
 
-// Tiny non-crypto hash for synthesising Subsonic-style ids when the upstream
-// server omits them. Subsonic ids are opaque strings so a stable 10-char
-// hash matches the EdgeSonic convention (ar-/al-/sm- prefixes use md5[:10]).
 function simpleHash(input: string): string {
   // Reuse the project's md5 from api.ts for stable ids.
   return md5(input).substring(0, 10);
 }
 
-// Sanitise a path component for R2 keys — replaces path separators and trims.
 function sanitizePathPart(s: string, fallback: string): string {
   const cleaned = (s || "").replace(/[\/\\]+/g, "_").replace(/^\.+/, "").trim();
   return cleaned || fallback;
 }
 
-// Format bytes for the log.
 function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -689,8 +565,6 @@ async function buildCloneFilterSet(): Promise<Set<string> | null> {
   return out;
 }
 
-// Stage 1 — metadata. Walk getAlbumList2 (alphabeticalByName, large size),
-// then getAlbum per album, then POST /clone/upsertMaster per song.
 async function cloneMetadataStage() {
   const stage = cloneStages.value.metadata;
   // 176: writing metadata into the shared library is manage_users (admin) only.
@@ -846,8 +720,6 @@ async function cloneMetadataStage() {
   stage.message = cloneCancelRequested.value ? "cancelled" : "";
 }
 
-// Stage 2 — audio. For every song_master already cloned, fetch the upstream
-// /rest/stream bytes and POST them to /clone/ingestAudio.
 async function cloneAudioStage() {
   const stage = cloneStages.value.audio;
   // 176: fetching audio bytes into R2 is manage_users (admin) only.
@@ -1026,10 +898,6 @@ async function cloneAudioStage() {
   stage.status = cloneCancelRequested.value ? "skipped" : "done";
 }
 
-// The clone endpoints live under /edgesonic/*, so they need the same
-// session-signed query string as edgesonicPost. We can't call the closure
-// inside useAuth from here, but useAuth() already returns signedParams().
-// To keep this self-contained, sign against the same auth singleton.
 function signedParamsCloneEdge(): URLSearchParams {
   // useAuth() exposes signedParams; we just re-import it here.
   return signedParams();
@@ -1050,10 +918,6 @@ function suffixToMime(suffix: string): string {
   }
 }
 
-// Stage 3 — playlists.
-// 176: send a playlist's entries in bounded chunks so a single huge playlist
-// can't blow the Worker subrequest budget. First chunk replaces, the rest
-// append. `owner` is the local target user the backend writes the playlist to.
 async function upsertPlaylistChunked(
   playlist: { id: string; name: string; owner: string; public: boolean; comment: string | null },
   entries: CloneSongRef[],
@@ -1081,7 +945,6 @@ async function upsertPlaylistChunked(
   return { unmatched };
 }
 
-// 176: send starred items in bounded chunks (same subrequest-budget reason).
 async function upsertStarredChunked(
   userId: string,
   items: CloneStarredRef[],
@@ -1148,7 +1011,6 @@ async function clonePlaylistsStage(targetUser: string) {
   stage.status = cloneCancelRequested.value ? "skipped" : "done";
 }
 
-// Stage 4 — starred.
 async function cloneStarredStage(targetUser: string) {
   const stage = cloneStages.value.starred;
   if (!cloneStarredEnabled.value || cloneUserMode.value === "all") {
@@ -1196,14 +1058,6 @@ async function cloneStarredStage(targetUser: string) {
   stage.status = cloneCancelRequested.value ? "skipped" : "done";
 }
 
-// Stage 5 — users (requires upstream admin).
-// 163: a cloned user account used to mean just the login — their own
-// starred items and owned playlists never came along, since getStarred2 has
-// no "give me user X's stars" param for a regular client and getPlaylists'
-// admin-visibility into other users' playlists isn't guaranteed by every
-// server. The only universal way to see another user's personal data is to
-// actually authenticate as them — which upstream getUsers's password field
-// (the same one that unlocks the account clone at all) already lets us do.
 async function cloneUserStarredAndPlaylists(username: string, password: string): Promise<void> {
   if (cloneStarredEnabled.value) try {
     const resp = await cloneFetchJsonAs(username, password, "getStarred2");
@@ -1384,20 +1238,12 @@ function cancelClone() {
   cloneCancelRequested.value = true;
 }
 
-// The reverse direction of the 094 clone, same browser-driven shape and same
-// upstream credential form. Local song ids mean nothing upstream, so each
-// song is matched via upstream search3 using a *cleaned* title (leading track
-// numbers like "01." / "01 - " / "#1 " stripped), and only written when the
-// combined title/artist/duration confidence clears a threshold — a wrong
-// star/playlist entry on the upstream is worse than a skipped one.
 const pushRunning = ref(false);
 const pushCancelRequested = ref(false);
 const pushStages = ref({
   starred: newCloneProgress(),
   playlists: newCloneProgress(),
 });
-// title|artist → matched upstream id (or null after a failed search), so the
-// starred pass and every playlist share one search per distinct song.
 const pushMatchCache = new Map<string, string | null>();
 
 function scorePushCandidate(
@@ -1456,8 +1302,6 @@ async function matchUpstreamSong(
   return id ? { id, score: bestScore } : null;
 }
 
-// Local /rest reads (session-signed). EdgeSonic answers XML; the attribute
-// parser above handles it.
 async function localFetchXml(path: string, params?: Record<string, string>): Promise<string> {
   const resp = await fetch(restUrl(path, params));
   return resp.text();
@@ -1468,8 +1312,6 @@ function upstreamOk(resp: any): boolean {
   return resp?.status === "ok";
 }
 
-// createPlaylist needs repeated songId params, which the Record-based helper
-// can't express — build the query directly.
 async function upstreamCreatePlaylist(name: string, songIds: string[]): Promise<boolean> {
   const sp = cloneSignedParams({ name });
   for (const id of songIds) sp.append("songId", id);

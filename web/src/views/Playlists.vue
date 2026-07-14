@@ -1,39 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-//
-// Backend (034):
-//   GET /rest/getPlaylists                                         list
-//   GET /rest/getPlaylist?id=                                      detail
-//   GET /rest/createPlaylist?name=[&songId=...]                    create new
-//   GET /rest/createPlaylist?playlistId=&songId=...                overwrite tracks
-//  GET /rest/updatePlaylist?playlistId=
-//                          [&name=&comment=&public=]
-//                          [&songIdToAdd=...]
-//                            [&songIndexToRemove=...]              partial
-//   GET /rest/deletePlaylist?id=                                   remove
-//
-// We deliberately keep detail-view inline (no nested route) — playback queue
-// and PlayerBar already live in App.vue; switching routes would force users to
-// re-pick a playlist after every back-navigation.
-//
-// Reorder is implemented by re-calling createPlaylist with the existing
-// playlistId + the new songId[] order (the worker route handles that as a
-// full replace via replacePlaylistSongs). This is simpler than maintaining a
-// move endpoint and matches Subsonic conventions.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatDuration } from "../api";
@@ -43,9 +10,6 @@ const { t } = useI18n();
 const { authFetch, coverArtUrl, username } = useAuth();
 const player = usePlayerStore();
 
-// ===========================================================================
-// Types
-// ===========================================================================
 interface Playlist {
   id: string;
   name: string;
@@ -62,44 +26,32 @@ interface PlaylistEntry extends Track {
   position: number; // 1-based for display; index in array is what we send back
 }
 
-// ===========================================================================
-// State
-// ===========================================================================
 const playlists = ref<Playlist[]>([]);
 const loading = ref(false);
 
-// Detail view — when currentPlaylist != null we show entries instead of list.
 const currentPlaylist = ref<Playlist | null>(null);
 const entries = ref<PlaylistEntry[]>([]);
 const detailLoading = ref(false);
 
-// Create form
 const showCreate = ref(false);
 const createForm = ref({ name: "", comment: "", public: false });
 const createBusy = ref(false);
 
-// Edit meta form (in detail view)
 const showEdit = ref(false);
 const editForm = ref({ name: "", comment: "", public: false });
 const editBusy = ref(false);
 
-// Add-song modal (in detail view)
 const showAddSong = ref(false);
 const addSongQuery = ref("");
 const addSongResults = ref<Array<{ id: string; title: string; artist: string; album: string }>>([]);
 const addSongBusy = ref(false);
 
-// Tiny toast — Shares.vue uses the same pattern; copying here keeps the view
-// independent (no new components).
 const toast = ref({ show: false, msg: "", type: "success" as "success" | "error" });
 function showToast(msg: string, type: "success" | "error" = "success") {
   toast.value = { show: true, msg, type };
   setTimeout(() => { toast.value.show = false; }, 2500);
 }
 
-// ===========================================================================
-// XML helpers
-// ===========================================================================
 function failed(xml: string): boolean { return /status="failed"/.test(xml); }
 function extractError(xml: string): string | null {
   const m = /<error[^>]+message="([^"]+)"/.exec(xml);
@@ -141,9 +93,6 @@ function parseEntry(attrs: Record<string, string>, idx: number): PlaylistEntry {
   };
 }
 
-// ===========================================================================
-// Load playlists
-// ===========================================================================
 async function loadPlaylists() {
   loading.value = true;
   try {
@@ -183,9 +132,6 @@ function backToList() {
   addSongQuery.value = "";
 }
 
-// ===========================================================================
-// Create
-// ===========================================================================
 function openCreate() {
   createForm.value = { name: "", comment: "", public: false };
   showCreate.value = true;
@@ -225,9 +171,6 @@ async function submitCreate() {
   }
 }
 
-// ===========================================================================
-// Edit meta (detail view)
-// ===========================================================================
 function openEdit() {
   if (!currentPlaylist.value) return;
   editForm.value = {
@@ -266,9 +209,6 @@ async function submitEdit() {
   }
 }
 
-// ===========================================================================
-// Delete playlist
-// ===========================================================================
 async function deletePlaylist(p: Playlist) {
   if (!confirm(t("playlists.confirmDelete", { name: p.name }))) return;
   try {
@@ -284,9 +224,6 @@ async function deletePlaylist(p: Playlist) {
   }
 }
 
-// ===========================================================================
-// Songs — add, remove, reorder
-// ===========================================================================
 function openAddSong() {
   addSongQuery.value = "";
   addSongResults.value = [];
@@ -354,12 +291,6 @@ async function removeSong(idx: number) {
   }
 }
 
-// Swap two indices and persist via createPlaylist(playlistId, songId[]) which
-// the worker treats as a full replace through replacePlaylistSongs.
-//
-// NB: authFetch's Record<string,string> shape collapses duplicate keys; we
-// need true repeated `songId=...` query parameters, so build the URL by hand
-// using signedParams() from useAuth().
 async function moveSong(idx: number, dir: -1 | 1) {
   if (!currentPlaylist.value) return;
   const target = idx + dir;
@@ -389,9 +320,6 @@ async function sendCreatePlaylistOrdered(playlistId: string, songIds: string[]) 
   if (failed(xml)) throw new Error(extractError(xml) || "reorder failed");
 }
 
-// ===========================================================================
-// Playback
-// ===========================================================================
 function playFromEntry(i: number) {
   // entries already share the Track shape (id/title/artist/album/coverArt/duration).
   player.setQueue(entries.value as Track[], i);
@@ -400,9 +328,6 @@ function playAll() {
   if (entries.value.length) player.setQueue(entries.value as Track[], 0);
 }
 
-// ===========================================================================
-// Derived
-// ===========================================================================
 const canEdit = computed(() =>
   currentPlaylist.value ? currentPlaylist.value.owner === username.value : false,
 );

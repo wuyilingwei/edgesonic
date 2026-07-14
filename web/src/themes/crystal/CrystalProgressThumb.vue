@@ -1,22 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// SP progress marker. Renders the active element's solid tumbling in a tiny
-// WebGL canvas via the SAME Renderer the background drift and click-drop use —
-// not CSS 3D, which collapses under filter/clip/stacking on the player bar.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { activeTheme } from "../../theme";
 import { mountCrystalThumb } from "./background";

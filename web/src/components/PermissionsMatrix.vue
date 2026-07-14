@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
@@ -27,11 +14,6 @@ const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
-// Ordered by sensitivity, least → most: read-only browsing first, account/
-// infrastructure-altering capabilities last. manage_permissions is
-// deliberately absent — it's hardcoded to level 3 only server-side (see
-// worker/src/utils/permissions.ts), never a toggleable row here, so a
-// level-2 admin can never grant themselves or anyone else more permissions.
 const permKeys = ["browse", "search", "stream", "download", "upload", "edit_tags", "manage_sources", "manage_users"];
 
 async function load() {
@@ -52,17 +34,6 @@ async function load() {
   } catch { permissions.value = []; }
 }
 
-// checkboxes just mutate this local reactive copy; nothing is sent to
-// the server until Save is clicked. Replaces the old per-toggle real-time
-// POST (each checkbox used to fire its own /permissions/update request).
-//
-// Cascade rule granting a permission to a lower level should
-// default it on for every higher level too — a level-1 user getting
-// `download` implies level-2/3 should have it as well unless an admin
-// explicitly turns it back off for that level. This only cascades upward
-// on enable; disabling never cascades (turning level 1 off doesn't touch
-// level 2/3, and an explicit uncheck after a cascade always wins since it's
-// just the next click overwriting the same field).
 function setPerm(level: number, name: string, checked: boolean) {
   const row = permissions.value.find((p) => p.level === level && p.name === name);
   if (row) row.enabled = checked;

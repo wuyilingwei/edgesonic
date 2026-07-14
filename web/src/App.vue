@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, watch, onBeforeUnmount } from "vue";
 import { useRouter, useRoute } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -31,7 +18,6 @@ const route = useRoute();
 const { t } = useI18n();
 const { isLoggedIn, username, level, logout } = useAuth();
 const player = usePlayerStore();
-// AND opt-in flag stored locally); the store itself gates non-eligible users.
 const workerPool = useWorkerPool();
 watch(isLoggedIn, (now) => {
   if (now) {
@@ -46,11 +32,6 @@ watch(isLoggedIn, (now) => {
 const menuOpen = ref(false);
 watch(() => route.path, () => { menuOpen.value = false; });
 
-// Page-switch transition: entering/leaving /now-playing gets a bottom-sheet
-// "expand"/"collapse" motion that echoes the player bar it opens from;
-// regular navigation between other pages gets a plain fade/slide. Decided in
-// beforeEach (not a computed on route.path) so we know both the `to` and
-// `from` side of the navigation before the transition starts.
 const pageTransitionName = ref("page");
 router.beforeEach((to, from) => {
   if (to.path === "/now-playing") pageTransitionName.value = "expand";
@@ -62,7 +43,6 @@ router.beforeEach((to, from) => {
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 const levelLabel = computed(() => levelKeys[level.value] ? t(`app.levels.${levelKeys[level.value]}`) : String(level.value));
 
-// optional `icon` prefix per item — generic slot for future nav items.
 interface NavItem { label: string; path: string; minLevel: number; icon?: string; }
 interface NavGroup { label: string; items: NavItem[]; }
 

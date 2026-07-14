@@ -1,30 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// ScrapeButton — fetches metadata from external providers and emits a chosen
-// result back to the parent. Lives inside TagEditor's `#extras` slot (task 040).
-//
-// Flow:
-//  1. user clicks "Scrape metadata" → searchAll() against enabled sources
-//  2. result panel opens; user picks a row
-//  3. emit('apply', result) → parent (TagEditor host) merges fields into form
-//  4. parent also calls submitResult() to leave an audit row (status='applied')
-//
-// The component is dumb about WHERE the form fields live: it only emits the
-// chosen ScrapeResult. ts/Library.vue + Files.vue own the merge logic.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -56,7 +32,6 @@ const emit = defineEmits<{
   (e: "apply", result: ScrapeResult): void;
 }>();
 
-// === Source config (pulled from /rest/getFeatures) ===========================
 const enabledSources = ref<ScrapeSource[]>([]);
 const scrapeEnabled = ref<boolean>(true);
 const configReady = ref(false);
@@ -85,7 +60,6 @@ async function loadConfig() {
   configReady.value = true;
 }
 
-// === Search state ===========================================================
 const query = ref(props.initialQuery);
 const open = ref(false);
 const busy = ref(false);

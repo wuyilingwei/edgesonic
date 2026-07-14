@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
@@ -30,8 +17,6 @@ function showToast(msg: string, type = "success") { toast.value = { show: true, 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 const levelColors: Record<number, string> = { 0: "muted", 1: "success", 2: "info", 3: "warning" };
 
-// the existing /rest/getAvatar response (Cache-Control: max-age=86400 from
-// subsonic/account.ts) doesn't stick around in the browser cache.
 const avatarBust = ref<Record<string, number>>({});
 function avatarSrc(u: string): string {
   const ts = avatarBust.value[u] ?? 0;
@@ -44,7 +29,6 @@ function onAvatarError(e: Event) {
   img.style.visibility = "hidden";
 }
 
-// ----- Avatar modal state -----
 const showAvatarModal = ref(false);
 const avatarTarget = ref<{ username: string } | null>(null);
 const avatarPreview = ref<string>(""); // data: URL preview of compressed JPEG
@@ -66,9 +50,6 @@ function closeAvatarModal() {
   avatarBase64.value = "";
 }
 
-// Canvas compression: long edge ≤200px, iterative JPEG quality 0.85→0.4 until
-// ≤100KB. Mirrors the cover compressor in TagEditor.vue (042). Output is
-// always image/jpeg — simpler than threading PNG through the quality loop.
 async function compressToJpeg(file: File): Promise<{ dataUrl: string; base64: string; mime: string }> {
   const blobUrl = URL.createObjectURL(file);
   try {
@@ -157,10 +138,6 @@ async function submitAvatar() {
   }
 }
 
-// ----- CRUD — 072 ported off XML envelopes to plain JSON now that the whole
-// /edgesonic/users bucket emits {ok,...}/{ok:false,error}. The wrapper
-// edgesonicFetch/Post still returns a raw response string so we JSON.parse
-// here (consistent with writeTags etc. elsewhere in api.ts). -----
 interface OkJson { ok: boolean; error?: string }
 interface UsersListJson extends OkJson { users?: Array<{ username: string; level: number; enabled: boolean }> }
 
@@ -218,7 +195,6 @@ function changeLevel(u: { username: string; level: number }, newLevel: number) {
   updateUser({ username: u.username, level: newLevel });
 }
 
-// always for self; admin+ for everyone.
 const canEditAvatar = (u: { username: string }) =>
   u.username === currentUsername.value || isAdmin.value;
 

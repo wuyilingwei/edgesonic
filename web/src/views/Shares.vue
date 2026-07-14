@@ -1,30 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-//   GET    /rest/getShares
-//  GET|POST /rest/createShare
-//  GET|POST /rest/updateShare
-//  GET|POST /rest/deleteShare
-// Plus the public byte stream at /share/:id which we never call from JS — the
-// URL comes back inside the <share url=".."> attribute and we hand it to the
-// clipboard so users can paste it anywhere.
-//
-// `expires` is sent in MILLISECONDS per Subsonic spec. The server stores
-// seconds internally; mapShareDetail.expires is already ISO 8601 by the time
-// we receive it so the round-trip is transparent.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
@@ -32,9 +8,6 @@ import { useAuth, parseXmlAttrs } from "../api";
 const { t } = useI18n();
 const { authFetch } = useAuth();
 
-// ===========================================================================
-// Types
-// ===========================================================================
 interface ShareEntry {
   id: string;
   title: string;
@@ -54,9 +27,6 @@ interface Share {
   entries: ShareEntry[];
 }
 
-// ===========================================================================
-// Reactive state
-// ===========================================================================
 const shares = ref<Share[]>([]);
 const loading = ref(false);
 
@@ -74,8 +44,6 @@ const form = ref({
 const searchResults = ref<Array<{ id: string; label: string; sub: string }>>([]);
 const searching = ref(false);
 
-// Per-share inline "update expires" modal — keep it lightweight (one share at
-// a time) rather than fork a global state machine.
 const editingExpires = ref<Share | null>(null);
 const editExpiresType = ref<"never" | "days" | "datetime">("days");
 const editExpiresDays = ref(7);
@@ -87,9 +55,6 @@ function showToast(msg: string, type: "success" | "error" = "success") {
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-// ===========================================================================
-// Helpers — Subsonic XML envelope + share parsing
-// ===========================================================================
 function failed(xml: string): boolean {
   return /status="failed"/.test(xml);
 }
@@ -98,7 +63,6 @@ function extractError(xml: string): string | null {
   return m ? m[1] : null;
 }
 
-// Decode XML attribute values (&amp;/&lt;/&gt;/&quot;/&#39; → plain).
 function decodeAttr(s: string): string {
   return s
     .replace(/&amp;/g, "&")
@@ -108,8 +72,6 @@ function decodeAttr(s: string): string {
     .replace(/&#39;/g, "'");
 }
 
-// parseXmlAttrs only flattens; share + entry are nested so we split by <share>
-// blocks first then run the helper on each block separately.
 function parseShares(xml: string): Share[] {
   const out: Share[] = [];
   // Match <share ... > ... </share> AND self-closing <share .../> — getShares
@@ -156,9 +118,6 @@ function fmtDate(iso: string): string {
   }
 }
 
-// ===========================================================================
-// Load shares
-// ===========================================================================
 async function load() {
   loading.value = true;
   try {
@@ -171,9 +130,6 @@ async function load() {
   }
 }
 
-// ===========================================================================
-// Target search — search3 with the right *Count knobs
-// ===========================================================================
 async function searchTargets() {
   const q = form.value.targetQuery.trim();
   if (!q) {
@@ -230,8 +186,6 @@ function resetForm() {
   searchResults.value = [];
 }
 
-// Translate the three expires choices to a millisecond timestamp per
-// Subsonic spec. Returns undefined when the user picked "never".
 function computeExpiresMs(
   type: "never" | "days" | "datetime",
   days: number,
@@ -251,9 +205,6 @@ function computeExpiresMs(
   return ts;
 }
 
-// ===========================================================================
-// Create
-// ===========================================================================
 async function createShare() {
   if (!form.value.targetId) {
     showToast(t("shares.targetSelectRequired"), "error");
@@ -284,9 +235,6 @@ async function createShare() {
   }
 }
 
-// ===========================================================================
-// Update expires
-// ===========================================================================
 function openEditExpires(s: Share) {
   editingExpires.value = s;
   editExpiresType.value = s.expires ? "datetime" : "never";
@@ -338,9 +286,6 @@ async function saveEditExpires() {
   }
 }
 
-// ===========================================================================
-// Delete
-// ===========================================================================
 async function deleteShare(s: Share) {
   if (!confirm(t("shares.confirmDelete"))) return;
   try {
@@ -354,9 +299,6 @@ async function deleteShare(s: Share) {
   }
 }
 
-// ===========================================================================
-// Copy
-// ===========================================================================
 async function copyUrl(url: string) {
   try {
     await navigator.clipboard.writeText(url);

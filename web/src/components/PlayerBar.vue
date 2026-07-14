@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, watch, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter, useRoute } from "vue-router";
@@ -28,15 +15,8 @@ const route = useRoute();
 const player = usePlayerStore();
 const { coverArtUrl } = useAuth();
 
-// The active theme can replace the progress-thumb visual generically (see
-// themes/registry.ts) — this component never checks for a specific theme
-// id, it just renders whatever's registered, defaulting to the plain dot
-// below when a theme doesn't provide one.
 const activeThemeDef = computed(() => getTheme(activeTheme.value));
 
-// Remember the last non-now-playing route so the cover/track-info click can
-// toggle the now-playing view open/closed instead of only ever navigating
-// forward (there was previously no way to "close" it from the player bar).
 let lastRoute = "/library";
 watch(() => route.path, (p) => { if (p !== "/now-playing") lastRoute = p; }, { immediate: true });
 
@@ -73,8 +53,6 @@ const progressPct = computed(() =>
   player.duration > 0 ? (displayTime.value / player.duration) * 100 : 0,
 );
 
-// Resting display stays mm:ss (formatDuration); while dragging the seek bar
-// a floating tooltip shows hundredths precision at the thumb position.
 function fmtPrecise(sec: number): string {
   if (!isFinite(sec) || sec < 0) return "0:00.00";
   const m = Math.floor(sec / 60);
@@ -124,7 +102,6 @@ function onVolume(e: Event) {
   player.setVolume(parseFloat((e.target as HTMLInputElement).value));
 }
 
-// ---- Queue panel (in player bar) ----
 const queueOpen = ref(false);
 function playFromQueue(i: number) { player.playAt(i); }
 function removeFromQueue(i: number) {

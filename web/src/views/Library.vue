@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, parseXmlInner, formatDuration } from "../api";
@@ -48,8 +35,6 @@ interface Album {
 
 type Tab = "artists" | "albums" | "songs";
 type SortMode = "newest" | "oldestStarred" | "newestAdded" | "oldestAdded" | "nameAsc" | "nameDesc";
-// Users land on tracks (the most common entry point). Switching tabs is still
-// honored for the current session, but a re-mount resets to songs.
 const tab = ref<Tab>("songs");
 const sortMode = ref<SortMode>("newest");
 
@@ -155,24 +140,12 @@ const currentAlbum = ref<Album | null>(null);
 const loading = ref(false);
 const error = ref("");
 
-// === Albums tab (paged grid over the whole library) ===
-// First page and every infinite-scroll page use the same size.
 const ALBUM_PAGE = 100;
 const allAlbums = ref<Album[]>([]);
 const albumOffset = ref(0);
 const albumsDone = ref(false);
 let albumLoadRequest = 0;
 
-// 154: waterfall grid columns. Went through CSS multi-column (`columns:`)
-// first, but that fills strictly column-first — item order on screen no
-// longer matches fetch/alphabetical order, and worse, every async cover
-// image that finishes loading after initial paint changes that column's
-// total height, which can shove *later* items into a different column
-// entirely (the whole grid re-flows, reads as flicker). Splitting
-// allAlbums into fixed column buckets by index (round-robin) up front
-// fixes both: order is deterministic from the source array, and an image
-// loading late only grows its own column downward — no cross-column
-// reflow.
 const WATERFALL_COL_TARGET = 190; // matches the old minmax() card width
 const WATERFALL_GAP = 16; // px, mirrors the 1rem gap in CSS below
 const albumWaterfallEl = ref<HTMLElement | null>(null);
@@ -199,10 +172,6 @@ const albumWaterfallCols = computed<Album[][]>(() => {
   return cols;
 });
 
-// === Songs tab (paged flat list over the whole library) ===
-// bumped from 500 to 1000 per ("默认拉取1k"): the list is a
-// flat alphabetical dump so larger pages both cut the number of round-trips
-// and make the load-more IntersectionObserver less trigger-happy on arrival.
 const SONG_PAGE = 1000;
 const allSongs = ref<Track[]>([]);
 const songOffset = ref(0);
@@ -213,11 +182,6 @@ const displayArtists = computed(() => sortArtists(starredOnly ? starredLists.val
 const displayAlbums = computed(() => starredOnly ? sortAlbums(starredLists.value.albums) : allAlbums.value);
 const displaySongs = computed(() => starredOnly ? sortSongs(starredLists.value.songs) : allSongs.value);
 
-// IntersectionObserver sentinel elements for the two paged tabs. A single
-// observer watches whichever sentinel is currently in the DOM (only one is
-// visible at a time since tabs are v-if mutually exclusive); hitting it with
-// root=viewport triggers the matching loadMore automatically
-// longer has to click "加载更多" by hand.
 const songListEnd = ref<HTMLElement | null>(null);
 const albumListEnd = ref<HTMLElement | null>(null);
 let io: IntersectionObserver | null = null;
@@ -415,10 +379,6 @@ watch(sortMode, () => {
   if (tab.value === "songs") void loadMoreSongs();
 });
 
-// === Library-wide search (search3), independent of the paged tab lists ===
-// Debounced so keystrokes don't hammer the API; searching a non-empty query
-// switches the songs/albums/artists tabs out for a combined results view,
-// clearing the box restores whichever tab was active before.
 const SEARCH_DEBOUNCE_MS = 300;
 const searchQuery = ref("");
 const searching = ref(false);
@@ -569,8 +529,6 @@ function onStarError() {
   error.value = t("library.starUpdateFailed");
 }
 
-// === Tag editor (single + batch) ===
-// editTargets: array drives both modes; length 1 → single, length >1 → batch.
 const editTargets = ref<Track[]>([]);
 const editInitial = ref<Record<string, string | number>>({});
 const editBusy = ref(false);
@@ -578,18 +536,12 @@ const editMsg = ref("");
 const editErr = ref(false);
 const editorOpen = ref(false);
 const editorMode = computed<"single" | "batch">(() => editTargets.value.length > 1 ? "batch" : "single");
-// 149: preload the song's current cover into TagEditor — single mode only,
-// batch targets may span different albums so there's no one image to show.
 const editExistingCoverUrl = computed(() => {
   if (editorMode.value !== "single") return undefined;
   const coverArt = editTargets.value[0]?.coverArt;
   return coverArt ? coverArtUrl(coverArt, 200) : undefined;
 });
 
-// === Edit mode toggle (songs tab, admin-only) ===
-// Default OFF: admins land in browse mode; click the ✎ toggle to reveal
-// checkboxes, batch-preview, and the batch toolbar. Turning edit mode off
-// also clears any pending selection so no ghost state lingers.
 const editMode = ref(false);
 function toggleEditMode() {
   editMode.value = !editMode.value;
@@ -629,11 +581,6 @@ function openBatchEditor() {
   editorOpen.value = true;
 }
 
-// batch toolbar "重新扫描": force-requeue the selected songs' original
-// instances for metadata re-parsing (resets tag_scanned=0 + redispatches a
-// work_queue task with upsert:true so an already-completed row actually
-// comes back to 'queued'). No modal needed — just a transient inline status
-// message next to the toolbar buttons.
 const rescanBusy = ref(false);
 const rescanMsg = ref("");
 async function batchRescan() {
@@ -660,9 +607,6 @@ function closeEditor() {
   // keep targets briefly so the modal slide-out reads consistent state; reset on next open.
 }
 
-// === 040 scrape-button helpers ===
-// Build a "title artist" query from the live TagEditor form; falls back to the
-// initial track data when the user hasn't typed anything yet.
 function scrapeQueryFromForm(form: Record<string, string>): string {
   const t1 = (form.title || "").trim();
   const a1 = (form.artist || "").trim();
@@ -671,9 +615,6 @@ function scrapeQueryFromForm(form: Record<string, string>): string {
   return [init.title, init.artist].filter(Boolean).join(" ");
 }
 
-// Merge a ScrapeResult into TagEditor's reactive form + apply flags. Only
-// fields the result actually carries get touched; unchecked-apply boxes (batch
-// mode) are NOT auto-flipped — single mode infers "changed" from initialTags.
 function applyScrapeResult(
   form: Record<string, string>,
   applyFlags: Record<string, boolean>,
@@ -736,7 +677,6 @@ async function onEditorSubmit(patch: Record<string, string | number>, cover?: { 
   editBusy.value = false;
 }
 
-// === Batch selection (songs tab only) ===
 const selectedIds = ref<string[]>([]);
 const selectedSet = computed(() => new Set(selectedIds.value));
 
@@ -762,9 +702,6 @@ function backToAlbums() {
   songs.value = [];
 }
 
-// === 079: songs-tab discoverability hint ===
-// The hint stays at full opacity for 5s after first mount, then fades to 0.5
-// so it doesn't keep stealing attention from the song list itself.
 const songsHintFaded = ref(false);
 
 onMounted(() => {
@@ -780,15 +717,6 @@ onMounted(() => {
   setupObserver();
 });
 
-// re-observe the new tab's sentinel after switchTab inserts it. 156: default
-// (`pre`) flush runs this callback BEFORE Vue patches the DOM for the tab
-// switch, so `albumListEnd`/`songListEnd` were still pointing at the
-// *previous* tab's sentinel (or null, the very first time) — `io.observe()`
-// was silently a no-op and the newly-active tab's infinite scroll never
-// fired again after the first tab switch. Verified with a minimal repro:
-// same watcher, default flush read the ref as null; `flush:'post'` read it
-// correctly. `flush:'post'` runs this after the DOM update, once the ref is
-// actually attached to the new tab's sentinel element.
 watch(() => tab.value, () => {
   refreshTargets();
 }, { flush: "post" });
@@ -813,20 +741,8 @@ onUnmounted(() => {
   if (searchTimer) clearTimeout(searchTimer);
 });
 
-// ============================================================================
-//
-// Backend: GET /rest/createShare?id=<song|album>&description=&expires=<ms>
-// Returns: <shares><share id url description ...><entry .../></share></shares>
-//
-// We deliberately do NOT touch any of the rendering / playback / batch-edit
-// state above — 061's footprint is strictly additive (this block + a couple
-// of buttons in the template + a modal at the bottom).
-// ============================================================================
 const shareOpen = ref(false);
 const shareTarget = ref<{ kind: "song" | "album"; id: string; label: string } | null>(null);
-// Set only for the batch-toolbar "share selected" flow — createShare's `id`
-// param is repeatable server-side, so a batch share is one call with every
-// selected song id rather than N separate shares.
 const shareBatchIds = ref<string[] | null>(null);
 const shareDescription = ref("");
 const shareExpiresType = ref<"never" | "days" | "datetime">("never");
@@ -912,14 +828,6 @@ async function copyShareUrl() {
   try { await navigator.clipboard.writeText(shareCreatedUrl.value); } catch { /* silent */ }
 }
 
-// ============================================================================
-//
-// Reached from the per-song "⋮" menu (SongRowMenu). Clicking opens a small
-// modal listing the caller's playlists; picking one calls updatePlaylist with
-// songIdToAdd. A "Create new playlist..." sentinel option creates the playlist
-// on the fly (createPlaylist with the seed song), avoiding a forced detour
-// through /playlists for first-time users.
-// ============================================================================
 interface AddPlaylistRow {
   id: string;
   name: string;
@@ -1020,13 +928,6 @@ async function submitCreateAndAdd() {
   }
 }
 
-// === Per-row "⋮" menu ===
-// Replaces the old always-visible edit/share/add-to-playlist button cluster —
-// one menu per row (keyed by song id) collapses those three actions plus the
-// new download action into a single grid column. Only one row's menu is open
-// at a time; a window-level click listener closes it when the click lands
-// outside any `.row-menu-wrap` (the menu button + popover itself stop
-// propagation so they don't immediately close their own click).
 const openMenuId = ref<string | null>(null);
 function toggleRowMenu(id: string) {
   openMenuId.value = openMenuId.value === id ? null : id;

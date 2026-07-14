@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
@@ -86,22 +73,9 @@ async function saveFreeAlloc() {
 }
 const recentAlbums = ref<Array<{ id: string; name: string; artist: string; year: string }>>([]);
 
-//   "ok"          — schedules present (no banner)
-//   "empty"       — CF responded ok with schedules=[] (the bug we warn about)
-//  "unconfigured" — CF_API_TOKEN/CF_ACCOUNT_ID missing (info, not error)
-//   "error"       — getCron returned an unexpected failure; we stay quiet
-//                   here because the Dashboard isn't the place to surface
-//                   CF upstream errors (Settings does that).
-//   "checking"    — initial state before the request resolves
 type CronStatus = "checking" | "ok" | "empty" | "unconfigured" | "error";
 const cronStatus = ref<CronStatus>("checking");
 
-// inactive (flag off or secrets missing), explaining that R2 streams go
-// through the Worker and may be speed-limited. Three modes:
-//   "active"      — flag on + secrets set (no banner; presign is working)
-//   "inactive"    — flag off OR secrets missing (show "may be slow" hint)
-//   "checking"    — initial state before the request resolves
-//   "error"       — fetch failed (stay quiet; Settings is the debug surface)
 type R2PresignStatus = "checking" | "active" | "inactive" | "error";
 const r2presignStatus = ref<R2PresignStatus>("checking");
 
@@ -131,9 +105,6 @@ async function loadVersionInfo() {
   }
 }
 
-// Both refresh on a 30s timer (paused while the tab is hidden) so an admin
-// just sitting on the Dashboard sees a live signal of how the metadata
-// pipeline is doing without needing to bounce to Files / Settings.
 interface WorkCounts { queued: number; claimed: number; completed: number; failed: number; canceled: number }
 interface WorkLoadRow { username: string; n: number }
 interface ScanSourceRow { id: string; jobId: string; status: string; total: number; scanned: number; startedAt: number; endedAt: number | null; error: string | null }
@@ -147,22 +118,15 @@ const resetFailedBusy = ref(false);
 const reclaimBusy = ref(false);
 const activityToast = ref<string>("");
 let activityTimer: number | null = null;
-// running scan we refresh briskly; when idle we back off ~4x so an open-but-idle
-// Dashboard tab stops hammering /work/status + /scan/status every 30s.
 const ACTIVE_POLL_MS = 30_000;
 const IDLE_POLL_MS = 120_000;
 
-// Denominator for "metadata progress": everything except canceled (the user
-// cancelled it, it's not "work in flight" anymore). We don't divide by
-// counts.canceled so a one-off cancel doesn't drag the % down forever.
 const totalTasks = computed(() => workCounts.value.queued + workCounts.value.claimed + workCounts.value.completed + workCounts.value.failed);
 const progressPct = computed(() => {
   const total = totalTasks.value;
   if (total === 0) return 0;
   return Math.min(100, Math.round((workCounts.value.completed / total) * 1000) / 10);
 });
-// Latest scan job: prefer endedAt desc (so we surface the most recent finished
-// scan), fall back to startedAt for in-flight ones.
 const latestScan = computed<ScanSourceRow | null>(() => {
   if (scanSources.value.length === 0) return null;
   const sorted = [...scanSources.value].sort((a, b) => {
@@ -243,8 +207,6 @@ async function refreshActivity() {
   await Promise.all([loadWorkStatus(), loadScanStatus()]);
 }
 
-// True while there's something worth watching closely: in-flight work or a
-// running scan. Drives the adaptive poll cadence below.
 const activityActive = computed(() =>
   workCounts.value.queued + workCounts.value.claimed > 0 ||
   scanSources.value.some((s) => s.status === "running"),
@@ -255,8 +217,6 @@ function startActivityPolling() {
   scheduleNextActivityPoll();
 }
 
-// Self-scheduling timer (not a fixed setInterval) so each tick picks its delay
-// from the current activity state — brisk when busy, relaxed when idle.
 function scheduleNextActivityPoll() {
   if (activityTimer !== null) return;
   const delay = activityActive.value ? ACTIVE_POLL_MS : IDLE_POLL_MS;

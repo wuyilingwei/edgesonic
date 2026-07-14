@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatSize } from "../api";
@@ -30,17 +17,14 @@ interface StorageSource { id: string; type: string; name: string; baseUrl: strin
 interface DirEntry { name: string; }
 interface FileEntry { name: string; size: number; contentType: string | null; uri: string; }
 
-// Source selector state
 const sources = ref<StorageSource[]>([]);
 const currentSource = ref("r2");
 
-// Browser state
 const path = ref("music");
 const dirs = ref<DirEntry[]>([]);
 const files = ref<FileEntry[]>([]);
 const loading = ref(false);
 
-// Upload state — 089/S4: batch upload queue + per-file progress
 const showUpload = ref(false);
 const uploadInput = ref<HTMLInputElement | null>(null);
 const uploadQueue = ref<File[]>([]);
@@ -51,11 +35,6 @@ const uploadBusy = ref(false);
 const uploadMsg = ref("");
 const uploadErr = ref(false);
 
-// Cross-source copy state — 089/S4, batched + concurrent as of 144.
-// `crossCopyDestPath` is now a destination *directory*; each queued file's
-// actual destPath is `${crossCopyDestPath}/${file.name}` (see joinPath below).
-// This also fixes a pre-existing rough edge in the single-file flow, which
-// used to require the user to type the filename themselves.
 interface CrossCopyItem { file: FileEntry; status: "pending" | "copying" | "done" | "failed"; error?: string; }
 const crossCopyModal = ref<{ files: FileEntry[] } | null>(null);
 const crossCopyDestSource = ref("r2");
@@ -63,54 +42,32 @@ const crossCopyDestPath = ref("");
 const crossCopyBusy = ref(false);
 const crossCopyQueue = ref<CrossCopyItem[]>([]);
 const selectedFiles = ref<Set<string>>(new Set()); // keyed by FileEntry.uri
-// Folder selection — keyed by DirEntry.name, unique within the directory
-// being shown. Both sets are cleared on navigation, and every consumer
-// filters against the *current* listing (selectedDirEntries /
-// selectedFileEntries below) so a stale key can never inflate the count.
 const selectedDirs = ref<Set<string>>(new Set());
 const CROSS_COPY_CONCURRENCY = 3;
 
-// Tag scan state
 const scanning = ref(false);
 const scanProcessed = ref(0);
 const scanRemaining = ref<number | null>(null);
 
-// Files still awaiting metadata parse show up as a "待解析" badge in the
-// page header — draining is handled entirely by the background browser
-// worker pool (see stores/workerPool.ts + workers/taskExecutor.ts), this
-// page only reads the count.
 const pendingCount = ref(0);
 
-// R2 file operations state
 const renamingFile = ref<string | null>(null); // file name currently being renamed
 const renameInput = ref("");
-// 150 — generalized to N files so the same modal drives both the per-row
-// move/copy button (files: [f]) and the batch-move action. Selected folders
-// ride along as bare names (`dirs`) resolved against `base`, the browse path
-// captured when the modal opened (so a background reload can't reroot them).
 const opModal = ref<{ files: FileEntry[]; dirs: string[]; mode: "move" | "copy"; base: string } | null>(null);
 const opBusy = ref(false);
 const opQueue = ref<Array<{ kind: "file" | "dir"; name: string; key: string; status: "pending" | "running" | "done" | "failed"; error?: string }>>([]);
 const OP_CONCURRENCY = 3;
-// Destination folder tree for the move/copy modal — replaces the old
-// free-text path input. Children are lazy-loaded from files/list on first
-// expand; `path` is the full source-relative directory path ("" = root).
 interface DestNode { name: string; path: string; children: DestNode[] | null; expanded: boolean; loading: boolean }
 const destTreeRoot = ref<DestNode | null>(null);
 const opDestSelected = ref("");
 const treeNewFolderName = ref("");
 const treeNewFolderBusy = ref(false);
-// 150 — replaces window.confirm() for delete (single + batch), same reasoning
-// as the mirror-copy confirm modal in Sources.vue: a native confirm() can't
-// be styled and blocks the whole page's event loop until answered.
 const deleteConfirmModal = ref<{ files: FileEntry[]; dirs: string[]; base: string } | null>(null);
 
-// New folder state — works on r2 (marker object) and webdav (MKCOL) alike
 const newFolderModal = ref(false);
 const newFolderName = ref("");
 const newFolderBusy = ref(false);
 
-// Toast
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") {
   toast.value = { show: true, msg, type };
@@ -123,14 +80,9 @@ const isR2 = computed(() => currentSource.value === "r2");
 const crumbs = computed(() => (path.value ? path.value.split("/") : []));
 const uploadTarget = computed(() => (currentSource.value === "r2" ? "r2" : "webdav"));
 
-// ── Multi-select (files + folders) ──────────────────────────────────────────
-// Selections filtered against the current listing — stale keys left behind by
-// a rename or a partially-failed batch never count.
 const selectedDirEntries = computed(() => dirs.value.filter((d) => selectedDirs.value.has(d.name)));
 const selectedFileEntries = computed(() => files.value.filter((f) => selectedFiles.value.has(f.uri)));
 const selectedTotal = computed(() => selectedDirEntries.value.length + selectedFileEntries.value.length);
-// Batch tag-edit and cross-copy operate on library entries / single objects —
-// neither has a folder semantic, so they grey out while a folder is selected.
 const hasDirSelection = computed(() => selectedDirEntries.value.length > 0);
 const allSelected = computed(() => selectedTotal.value > 0 && selectedTotal.value === dirs.value.length + files.value.length);
 
@@ -161,7 +113,6 @@ function sourceLabel(id: string): string {
   return s.name || `${s.type.toUpperCase()} · ${shortUrl(s.baseUrl)}`;
 }
 
-// R2 key from a FileEntry URI
 function r2Key(f: FileEntry): string {
   return f.uri.startsWith("r2://") ? f.uri.slice(5) : f.uri;
 }
@@ -208,8 +159,6 @@ function selectSource(id: string) {
   loadPending();
 }
 
-// resets the badge — only WebDAV sources can have incremental scans populate
-// the queue. The endpoint validates the source server-side.
 async function loadPending() {
   if (!currentSource.value || currentSource.value === "r2") {
     pendingCount.value = 0;
@@ -239,14 +188,11 @@ function goCrumb(index: number) {
   loadDir();
 }
 
-// 089/S4 — collect all selected files into the queue (multiple allowed)
 function onUploadFile(e: Event) {
   const target = e.target as HTMLInputElement;
   if (target.files?.length) uploadQueue.value = Array.from(target.files);
 }
 
-// 089/S4 — serial upload loop: each file reports progress; single failure never
-// aborts the rest; a summary toast is shown after the full queue drains.
 async function doUpload() {
   if (!uploadQueue.value.length) { uploadMsg.value = t("files.selectFileFirst"); uploadErr.value = true; return; }
   uploadBusy.value = true;
@@ -289,7 +235,6 @@ async function doUpload() {
   }
 }
 
-// 089/S4, batched in 144 — Cross-source copy helpers
 function openCrossModal(f: FileEntry) {
   crossCopyModal.value = { files: [f] };
   crossCopyDestSource.value = "r2";
@@ -374,7 +319,6 @@ async function runTagScan() {
   }
 }
 
-// ── R2 file operations ──────────────────────────────────────────────────────
 
 function startRename(f: FileEntry) {
   renamingFile.value = f.name;
@@ -408,9 +352,6 @@ function openMoveModal(f: FileEntry, mode: "move" | "copy") {
   initDestTree();
 }
 
-// 150 — batch move: same modal, N files. Copy has no batch entry point in
-// the UI (not requested), but the underlying code handles N files either way.
-// Folders are included: they go through files/moveFolder (recursive).
 function openBatchMoveModal() {
   const fileTargets = selectedFileEntries.value;
   const dirTargets = selectedDirEntries.value.map((d) => d.name);
@@ -428,7 +369,6 @@ function closeOpModal() {
   treeNewFolderName.value = "";
 }
 
-// ── Destination folder tree (lazy-loaded from files/list) ──────────────────
 async function loadDestChildren(node: DestNode) {
   node.loading = true;
   try {
@@ -452,8 +392,6 @@ async function toggleDestNode(node: DestNode) {
   node.expanded = !node.expanded;
 }
 
-// Build the tree root and pre-expand down to the current directory so the
-// default selection (= where the user already is) is visible on open.
 async function initDestTree() {
   const root: DestNode = { name: "", path: "", children: null, expanded: true, loading: false };
   destTreeRoot.value = root;
@@ -470,8 +408,6 @@ async function initDestTree() {
   }
 }
 
-// Flattened render list — DFS over expanded nodes, avoids a recursive
-// component for what is a simple indented list.
 const destTreeRows = computed(() => {
   const rows: Array<{ node: DestNode; depth: number }> = [];
   const walk = (node: DestNode, depth: number) => {
@@ -491,8 +427,6 @@ function findDestNode(node: DestNode | null, p: string): DestNode | null {
   return null;
 }
 
-// "New folder here" — mkdir under the selected tree node, then reload that
-// node's children and select the fresh folder as the destination.
 async function createFolderInTree() {
   const name = treeNewFolderName.value.trim();
   if (!name || /[\\/]/.test(name)) { showToast(t("files.folderNameInvalid"), "error"); return; }
@@ -515,9 +449,6 @@ async function createFolderInTree() {
   }
 }
 
-// True when the picked destination sits at/inside one of the folders being
-// moved — the server rejects that too, but disabling the confirm button with
-// a visible reason beats a per-item failure row.
 const destInsideSelectedDir = computed(() => {
   if (!opModal.value) return false;
   const { dirs: dirNames, base } = opModal.value;
@@ -636,7 +567,6 @@ async function confirmDelete() {
   }
 }
 
-// ── New folder (r2 + webdav) ────────────────────────────────────────────────
 function openNewFolderModal() {
   newFolderName.value = "";
   newFolderModal.value = true;
@@ -662,7 +592,6 @@ async function confirmNewFolder() {
   finally { newFolderBusy.value = false; }
 }
 
-// ── Tag editor (single + batch, 150) ────────────────────────────────────────
 const editorOpen = ref(false);
 const editorMode = ref<"single" | "batch">("single");
 const editTargetId = ref<string | null>(null); // single mode
@@ -672,21 +601,11 @@ const editCoverArt = ref<string>("");
 const editBusy = ref(false);
 const editMsg = ref("");
 const editErr = ref(false);
-// 149: preload the matched song's current cover into TagEditor.
 const editExistingCoverUrl = computed(() => editCoverArt.value ? coverArtUrl(editCoverArt.value, 200) : undefined);
 
 const canEditTags = computed(() => level.value >= 2);
 const isAudio = (name: string) => /\.(mp3|flac|wav|ogg|opus|m4a|aac)$/i.test(name);
 
-// Worker writeTags/batchWriteTags want song master_ids; resolve them via
-// search3 on the filename stem. search3 does `title LIKE '%query%'` —
-// WebDAV filenames almost always carry a leading track number
-// ("11 (Bonus Track)...") that the stored title doesn't, so searching on the
-// raw stem reliably found nothing ("no match"). normalizeForMatch strips
-// that prefix (same helper the migration tool's push-match already uses) so
-// the LIKE has a real substring to find. Shared by the single editor, the
-// batch editor, and tidy-folder — three call sites used to each carry their
-// own copy of this lookup.
 async function lookupSongByFilename(f: FileEntry, songCount = 5): Promise<Record<string, string> | null> {
   const stem = f.name.replace(/\.[^.]+$/, "");
   const searchStem = normalizeForMatch(stem);
@@ -723,9 +642,6 @@ async function openTagEditor(f: FileEntry) {
   }
 }
 
-// 150 — batch counterpart: resolve every selected file to a master_id (best
-// effort, same as tidy-folder) and open TagEditor in batch mode. Unresolved
-// files are silently dropped, matching tidy-folder's existing convention.
 async function openBatchTagEditor() {
   if (hasDirSelection.value) return; // tag-edit is file-only — button is disabled too
   const targets = selectedFileEntries.value;
@@ -754,7 +670,6 @@ async function openBatchTagEditor() {
 
 function closeTagEditor() { editorOpen.value = false; }
 
-// === 040 scrape-button helpers (single mode only — Files.vue has no batch) ===
 function scrapeQueryFromForm(form: Record<string, string>): string {
   const t1 = (form.title || "").trim();
   const a1 = (form.artist || "").trim();
@@ -778,9 +693,6 @@ function applyScrapeResult(
   if (r.year) applyFlags.year = true;
 }
 
-// ── Tidy folder (042) — template-driven move on R2 / WebDAV ─────────────────
-// Two-step UX: open the modal → run a dry-run → review plan → "Apply" runs it
-// for real. Avoids accidental large-scale moves on a typo'd template.
 const DEFAULT_TIDY_TEMPLATE = "{albumArtist}/{album}/{track:02d} - {title}";
 const tidyOpen = ref(false);
 const tidyTemplate = ref(DEFAULT_TIDY_TEMPLATE);

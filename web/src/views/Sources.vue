@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
@@ -68,25 +55,16 @@ interface Source {
 }
 
 const sources = ref<Source[]>([]);
-// P3 — loading guard for initial fetch
 const loading = ref(false);
 const showForm = ref(false);
 const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "", mode: "library", region: "us-east-1", presign_username: "", presign_password: "" });
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
-// In-memory history: scan_jobs we've observed during this session. Keyed by
-// source id, capped at 5 entries (newest first). We deliberately don't add a
-// /storage/scan/history endpoint (task scope says "don't extend endpoints"),
-// so the array only grows from /storage/scan/status snapshots seen while the
-// page is mounted. That's enough for the common "user clicks scan → watches
-// progress" loop; cron-triggered scans that finish while the user is on
-// another page won't appear here.
 const HISTORY_CAP = 5;
 const scanHistory = ref<Record<string, ScanJobSnapshot[]>>({});
 const expandedSources = ref<Set<string>>(new Set());
 const pollHandle = ref<number | null>(null);
-// P6: reduced from 3000ms — less aggressive polling
 const POLL_INTERVAL_MS = 8000;
 const STATUS_LAUNCHING = "__launching__"; // placeholder while scan/start hasn't yet returned
 const launching = ref<Set<string>>(new Set());
@@ -181,7 +159,6 @@ function stopPolling() {
   }
 }
 
-// P6 — pause polling when tab hidden, resume when visible
 function handleVisibilityChange() {
   if (document.hidden) {
     stopPolling();
@@ -193,7 +170,6 @@ function handleVisibilityChange() {
   }
 }
 
-// === Edit modal ===
 const editing = ref<Source | null>(null);
 const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only", region: "us-east-1", presignUsername: "", presignPassword: "" });
 
@@ -280,15 +256,6 @@ async function deleteSource(id: string) {
   catch { showToast(t("sources.deleteFailed"), "error"); }
 }
 
-// 093f — Client-driven mirror WebDAV → R2. The client pages through
-// /storage/scan/listForMirror and calls /storage/files/crossCopy per item.
-// Each crossCopy is a separate Worker request so a large library never
-// holds a single long-running connection that could hit the Worker CPU
-// time limit. Progress is shown inline on the source row.
-// 144/146 — batched via mapConcurrent (was one item at a time) and gated by
-// an in-app confirm modal instead of window.confirm(), which blocks the
-// whole page (including the Claude-in-Chrome extension, if that's ever
-// driving the browser) until a human physically clicks a native dialog.
 interface MirrorState {
   running: boolean;
   total: number;
@@ -435,7 +402,6 @@ async function scanSource(s: Source, force = false) {
   }
 }
 
-// --- Display helpers ---
 function formatBytes(bytes: number): string {
   if (!bytes) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -484,12 +450,6 @@ function statusLabel(s: Source): string {
   return t("sources.scanStatus.idle");
 }
 
-// Super-admin only. The button is hidden for plain admins so the one-way
-// nature of the action stays out of the regular admin's foot-gun surface.
-// We don't pre-check STORAGE_KEY availability on the client because:
-//  1. The endpoint already returns ok:false + error when the secret is unset.
-//  2. Probing would leak whether a secret is configured to anyone who can
-//    reach the page.
 const migrating = ref(false);
 async function migratePasswords() {
   if (migrating.value) return;

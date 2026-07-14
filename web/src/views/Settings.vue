@@ -1,19 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
@@ -28,45 +15,31 @@ import { useWorkerPool } from "../stores/workerPool";
 const router = useRouter();
 const { t, locale } = useI18n();
 const { isSuperAdmin, isAdmin, edgesonicFetch, edgesonicPost, logout, username, handleAuthError } = useAuth();
-// surfaces live stats; admin sees a queue overview pulled from /work/status.
 const workerPool = useWorkerPool();
 
-// === Accordion ===
 type SectionKey = "user" | "system" | "sessions" | "clients" | "permissions";
 const open = ref<Record<SectionKey, boolean>>({ user: true, system: false, sessions: false, clients: false, permissions: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
 
-// once whenever the section was open. Nested them into 4 thematic
-// second-level groups (same open/toggle shape as the top-level accordion,
-// just one step down visually) so an admin only has to expand what they
-// actually need. Instance ID stays unwrapped (it's a single read-only row).
 type SubSectionKey = "media" | "integrations" | "workers" | "featureFlags";
 const subOpen = ref<Record<SubSectionKey, boolean>>({ media: false, integrations: false, workers: false, featureFlags: false });
 function toggleSubSection(key: SubSectionKey) { subOpen.value[key] = !subOpen.value[key]; }
 
-// === Toast ===
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") {
   toast.value = { show: true, msg, type };
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-// === Common: language ===
 const localeLabels: Record<AppLocale, string> = { "zh-CN": "中文（简体）", en: "English" };
 function onLocaleChange(e: Event) {
   setLocale((e.target as HTMLSelectElement).value as AppLocale);
 }
 
-// === Common: theme ===
 function onThemeChange(next: AppTheme) {
   setTheme(next);
 }
 
-// Built-ins are always offered even before their module has loaded
-// (selecting one triggers the load, see theme.ts's applyTheme); externally
-// registered themes are appended once loaded. `registeredThemeIds()` reads
-// a reactive Map, so this recomputes as soon as a lazy built-in or
-// external theme finishes registering — no manual refresh needed.
 const pickerThemeIds = computed(() => {
   const known = new Set<string>(SUPPORTED_THEMES);
   const extra = registeredThemeIds().filter((id) => !known.has(id));
@@ -101,10 +74,6 @@ onMounted(() => {
   for (const id of SUPPORTED_THEMES) void ensureBuiltinThemeLoaded(id);
 });
 
-// === Common: external themes ===
-// Loading a theme from a URL dynamically imports and executes that URL's
-// JS in this origin — the same trust level as adding a <script src="...">
-// tag. Only ever point this at a theme you wrote or explicitly trust.
 const externalThemeUrl = ref("");
 const externalThemeBusy = ref(false);
 const loadedExternalThemeIds = computed(() => externalThemeIds());
@@ -128,7 +97,6 @@ function removeExternalTheme(id: string) {
   unregisterExternalTheme(id);
 }
 
-// === Common: features + instance ===
 interface Feature { key: string; value: number; description: string; }
 interface FeatureString { key: string; value: string; description: string; }
 const features = ref<Feature[]>([]);
@@ -138,8 +106,6 @@ const loading = ref(true);
 const error = ref("");
 const copied = ref(false);
 
-// featureStrings into local refs so the form is plain HTML; saveTranscode()
-// pushes them back via /rest/updateFeatureString.
 const transcodeEngine = ref<"sandbox" | "external" | "browser_pool" | "disabled">("disabled");
 const transcodeMode = ref<"on_demand" | "pre_bake" | "both">("on_demand");
 const defaultProfiles = ref<string[]>([]);
@@ -250,8 +216,6 @@ async function saveTranscode() {
   transcodeBusy.value = false;
 }
 
-// scrape_enabled lives in the boolean `features` table; the priority list is
-// in feature_strings.scrape_enabled_sources. Save batches both like transcode.
 type ScrapeSourceKey = "netease" | "qmusic" | "kugou" | "kuwo" | "migu";
 const SCRAPE_ALL_SOURCES: { id: ScrapeSourceKey; label: string }[] = [
   { id: "netease", label: "NetEase" },
@@ -320,8 +284,6 @@ async function saveScrape() {
   scrapeBusy.value = false;
 }
 
-// Stored in user_settings.lastfm_api_key (per-user, not system-level).
-// Empty means the four getXxxInfo proxies stay quiet (Subsonic error code 30).
 const lastfmKeyInput = ref("");
 const lastfmKeySet = ref(false);
 const lastfmBusy = ref(false);
@@ -352,17 +314,11 @@ async function saveLastfm() {
   lastfmBusy.value = false;
 }
 
-// Four feature_strings drive the incremental WebDAV scanner + BROWSER READ
-// queue. Stored as strings so the same updateFeatureString endpoint works.
 const scanIntervalHours = ref<number>(1);
 const scanEtagCheck = ref<boolean>(true);
 const scanRescanStrategy = ref<"auto" | "worker" | "browser">("auto");
 const scanBusy = ref(false);
 
-// COOP/COEP/CORP gating for SharedArrayBuffer + ffmpeg.wasm multi-thread.
-// `crossOriginIsolated` reflects the *current* page state (live), not the
-// feature flag — so the admin can see whether their last change took effect
-// after a reload.
 const cioEnabled = ref<boolean>(true);
 const cioBusy = ref(false);
 const cioLive = computed<boolean>(() =>
@@ -390,9 +346,6 @@ async function saveCio() {
   cioBusy.value = false;
 }
 
-// Two feature flags + the R2 S3 secrets presence. The Dashboard surfaces a
-// "stream speed may be limited" hint when presign is inactive; this sub-block
-// is the admin-facing toggle + status readout.
 const r2PresignEnabled = ref<boolean>(false);
 const webdavPresignEnabled = ref<boolean>(true);
 const r2SecretsConfigured = ref<boolean>(false);
@@ -470,7 +423,6 @@ async function saveMetadataRecheckInterval() {
   metadataRecheckIntervalBusy.value = false;
 }
 
-// === 113 — LRC sidecar backfill cadence ===
 const lrcBackfillIntervalHours = ref<number>(24);
 const lrcBackfillIntervalBusy = ref(false);
 
@@ -531,9 +483,6 @@ async function saveScan() {
   scanBusy.value = false;
 }
 
-// Six endpoints under /edgesonic/cf/*. Token never echoed; UI shows tokenLast4
-// so the admin can recognise which token is live. All controls hidden when
-// the user is not super-admin (level<3).
 interface CfStatus {
   configured: boolean;
   accountId: string;
@@ -557,8 +506,6 @@ const cronExpression = ref("");
 const cronBusy = ref(false);
 const cfAnalytics = ref<CfAnalytics | null>(null);
 const cfAnalyticsBusy = ref(false);
-// the Worker's schedules; this button re-applies "0 */1 * * *" when the
-// schedules list is empty (no-op when admin already wrote a custom cadence).
 const cfEnsureCronBusy = ref(false);
 
 async function loadCfStatus() {
@@ -645,10 +592,6 @@ async function saveCron() {
   cronBusy.value = false;
 }
 
-// Behaviour:
-//  - applied=true → CF schedules were empty, default re-applied; toast OK
-//  - applied=false → schedules already populated, no change; informational toast
-//   - error path  → surface the CF error verbatim
 async function ensureDefaultCron() {
   cfEnsureCronBusy.value = true;
   try {
@@ -688,8 +631,6 @@ async function loadCfAnalytics() {
   cfAnalyticsBusy.value = false;
 }
 
-// The local participate switch is the only writable control for non-admins.
-// Admins additionally see the per-status counts and per-user active load.
 const workerStatus = ref<{
   counts: Record<string, number>;
   load: Array<{ username: string; n: number }>;
@@ -729,10 +670,6 @@ async function loadWorkerStatus() {
   workerStatusLoading.value = false;
 }
 
-// applyMetadataResult against every completed metadata row whose apply step
-// was skipped before 077 landed (~82 rows in the production deployment when
-// this code was written). Refreshes the queue overview when done so the
-// counts move visibly.
 const workerBackfillBusy = ref(false);
 const workerBackfillToast = ref("");
 async function onBackfillCompleted() {
@@ -755,10 +692,6 @@ async function onBackfillCompleted() {
   workerBackfillBusy.value = false;
 }
 
-// selection the cron tick (metadata_recheck_interval_hours) uses, bypassing
-// its cadence gate: dispatches a browser-pool metadata re-check for
-// tag_scanned=2 rows (unsupported container format) and tag_scanned=1 rows
-// still missing lyrics/disc despite the album already having a cover.
 const recheckMetadataBusy = ref(false);
 const recheckMetadataToast = ref("");
 async function onRecheckMetadataNow() {
@@ -782,10 +715,6 @@ async function onRecheckMetadataNow() {
   recheckMetadataBusy.value = false;
 }
 
-// 113 — admin trigger for /edgesonic/work/backfillLrcNow. Scans song_masters
-// still missing lyrics for a sibling .lrc file next to their audio source
-// and fills them in directly (no work_queue involved — a sidecar read is a
-// small R2/WebDAV GET the Worker can do itself).
 const backfillLrcBusy = ref(false);
 const backfillLrcToast = ref("");
 async function onBackfillLrcNow() {
@@ -806,11 +735,6 @@ async function onBackfillLrcNow() {
   backfillLrcBusy.value = false;
 }
 
-// 078 — maintenance: cleanup duplicate album cover bindings. Calls
-// /edgesonic/maintenance/cleanupDuplicateCovers, surfaces groups/cleared
-// counts in a toast, and tolerates 0/0 (no-op) gracefully. R2 objects are
-// NOT deleted — only the album.cover_r2_key column is freed for the freed
-// rows, so a subsequent getCoverArt will re-resolve per-album.
 const cleanupCoversBusy = ref(false);
 const cleanupCoversToast = ref("");
 async function onCleanupDuplicateCovers() {
@@ -833,10 +757,6 @@ async function onCleanupDuplicateCovers() {
   cleanupCoversBusy.value = false;
 }
 
-// Useful when CF schedules are empty (post-deploy, before ensureDefaultCron)
-// and a browser worker has left rows stuck in status='claimed'. The endpoint
-// returns the breakdown (reclaimed/requeued/failed) and we surface it in a
-// toast so the operator can see what changed at a glance.
 const reclaimBusy = ref(false);
 const reclaimToast = ref("");
 async function onReclaimStaleWork() {
@@ -860,9 +780,6 @@ async function onReclaimStaleWork() {
   reclaimBusy.value = false;
 }
 
-// burns through attempts the deterministic-id INSERT OR IGNORE means scan
-// can't dispatch them again; this knob flips them back to queued so a fresh
-// (presumably fixed) bundle can pick them up.
 const resetFailedBusy = ref(false);
 const resetFailedToast = ref("");
 async function onResetFailedWork() {
@@ -927,7 +844,6 @@ async function copyInstanceId() {
   } catch { showToast(t("settings.common.copyFailed"), "error"); }
 }
 
-// === Sessions ===
 interface Session { id: string; userAgent: string; createdAt: number; expiresAt: number; }
 const sessions = ref<Session[]>([]);
 const sessionsLoading = ref(true);
@@ -977,7 +893,6 @@ async function revokeSession(id: string) {
   } catch { showToast(t("settings.sessions.revokeFailed"), "error"); }
 }
 
-// === Subsonic client credentials ===
 interface Credential { id: string; label: string; lastUsed: number; createdAt: number; streamProxyStrategy: string; }
 const credentials = ref<Credential[]>([]);
 const credLoading = ref(true);
@@ -1031,10 +946,6 @@ async function createCredential() {
   credBusy.value = false;
 }
 
-// blur/Enter when the value differs from the persisted label. We snapshot the
-// original on focus so blur knows whether to fire — see the template's
-// @focus/@blur handlers below. On failure we revert the local mutation by
-// reloading the list (cheap; the table is per-user and capped at 64).
 async function updateCredentialLabel(cr: { id: string; label: string }, newLabel: string) {
   const trimmed = newLabel.trim();
   if (trimmed === cr.label) return;            // no-op — user pressed blur with no change
@@ -1067,8 +978,6 @@ async function deleteCredential(id: string) {
   } catch { showToast(t("settings.clients.loadFailed"), "error"); }
 }
 
-// per-row <select>. Commits immediately; on failure reloads the list so
-// the dropdown snaps back to the persisted value.
 const STRATEGY_OPTIONS: Array<{ value: string; key: string }> = [
   { value: "always", key: "settings.clients.strategyAlways" },
   { value: "never", key: "settings.clients.strategyNever" },

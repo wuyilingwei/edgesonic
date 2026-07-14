@@ -1,41 +1,6 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later
-//
-// This program is free software: you can redistribute it and/or modify
-// it under the terms of the GNU Affero General Public License as
-// published by the Free Software Foundation, either version 3 of the
-// License, or (at your option) any later version.
-//
-// This program is distributed in the hope that it will be useful,
-// but WITHOUT ANY WARRANTY; without even the implied warranty of
-// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-// GNU Affero General Public License for more details.
-//
-// You should have received a copy of the GNU Affero General Public License
-// along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-// TagEditor — reusable modal for single & batch tag edits (task 039).
-//
-// Slots
-//  #cover : rendered above the form (task 042 will inject a drop-zone here).
-//  #extras : rendered between the form and the actions row
-//           (task 040 will inject a "scrape metadata" button here).
-//
-// Caller wires up:
-//   - `mode`      : 'single' | 'batch'
-//   - `songIds`   : 1 id for single, N (<=50) for batch
-//  - `initialTags` : prefill values (only consulted in single mode)
-//
-// Emits:
-//  - submit(patch) : object with only the fields the user wants written.
-//                   In batch mode, fields whose `apply` checkbox is OFF are
-//                   stripped, so the worker leaves them untouched.
-//   - close       : user clicked Cancel / backdrop.
-//
-// Future tasks (040 scrape, 042 cover writeback) can extend the patch shape
-// via the same `submit` event — `disc/comment/lyrics` already have inputs but
-// are stripped from the patch until the backend tagwrite kernel grows the
-// matching frames. See agents/039_*/findings.md for the rationale.
+// SPDX-License-Identifier: AGPL-3.0-or-later
 
 import { ref, reactive, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
@@ -82,9 +47,6 @@ const emit = defineEmits<{
   (e: "close"): void;
 }>();
 
-// === Form state =============================================================
-// Two-level state: `form` carries the raw input strings, `apply` (batch only)
-// flags which fields should land in the emitted patch.
 const form = reactive({
   title: "", artist: "", album: "", albumArtist: "",
   genre: "", year: "", track: "", disc: "",
@@ -97,9 +59,6 @@ const apply = reactive({
   comment: false, lyrics: false,
 });
 
-// === 042 cover state =========================================================
-// Picked image → canvas-compressed JPEG ≤500KB → base64 string for upload.
-// `coverPreviewUrl` is a smaller (≤200px) blob URL for the thumbnail.
 const COVER_MAX_BYTES = 500 * 1024;
 const COVER_MAX_DIM = 1500;            // pre-scale longest side before quality iteration
 const COVER_PREVIEW_DIM = 200;
@@ -111,27 +70,14 @@ const coverError = ref<string>("");
 const coverBusy = ref(false);
 const coverInputEl = ref<HTMLInputElement | null>(null);
 
-// 149: the cover already on file, shown as the drop-zone's starting preview
-// so opening the editor doesn't look like the song has no artwork. Purely
-// informational — it never counts toward `hasCover` (no pending change until
-// the user actually picks a new image or clicks a keyword). Albums without
-// any embedded art 404 on getCoverArt; `existingCoverBroken` catches that so
-// we fall back to the plain drop-hint instead of a broken <img>.
 const existingCoverBroken = ref(false);
 const hasExistingCover = computed(() => !!props.existingCoverUrl && !existingCoverBroken.value);
-// Falls back to the existing cover once a newly-picked image is cleared.
 const displayCoverUrl = computed(() => coverPreviewUrl.value || (hasExistingCover.value ? props.existingCoverUrl! : ""));
 function onExistingCoverError() {
   if (!coverPreviewUrl.value) existingCoverBroken.value = true;
 }
 
-// picked image: choosing a keyword clears any picked cover, and picking an
-// image clears the keyword. Empty string means "no cover op".
 const coverKeyword = ref<"" | typeof KW_WRITE | typeof KW_EXPORT>("");
-// 149: provenance of `coverData` — lets the {write} button show an active
-// state and lets clearing it fall back to the existing-cover preview instead
-// of the empty drop hint. Batch mode never sets this (it uses coverKeyword
-// instead, since each target song may belong to a different album).
 const coverSource = ref<"" | "picked" | "write">("");
 
 function resetFromProps() {
@@ -164,9 +110,6 @@ watch(() => props.open, (v) => { if (v) resetFromProps(); }, { immediate: true }
 
 const isBatch = computed(() => props.mode === "batch");
 
-// verbatim to the worker, which interprets them. The UI just passes them
-// through like any other string value (subject to the apply checkbox in
-// batch mode).
 const KW_NULL = "{null}";
 const KW_WRITE = "{write}";
 const KW_EXPORT = "{export}";
@@ -236,7 +179,6 @@ function onClose() {
   emit("close");
 }
 
-// === 042 cover picker ========================================================
 
 function onCoverDrop(e: DragEvent) {
   const file = e.dataTransfer?.files?.[0];
@@ -259,7 +201,6 @@ function clearCover() {
   coverSource.value = "";
   if (coverInputEl.value) coverInputEl.value.value = "";
 }
-// a keyword button is toggled on).
 function clearCoverImageOnly() {
   if (coverPreviewUrl.value) URL.revokeObjectURL(coverPreviewUrl.value);
   coverData.value = "";
@@ -270,10 +211,6 @@ function clearCoverImageOnly() {
   if (coverInputEl.value) coverInputEl.value.value = "";
 }
 
-// `source` records provenance for the {write} active-state + clear fallback;
-// see the `coverSource` declaration above. Accepts a Blob so the {write}
-// fetch path (a same-origin getCoverArt response, not a <input type=file>
-// File) can reuse the exact same compression pipeline as a manual pick.
 async function handleCoverFile(file: File | Blob, source: "picked" | "write" = "picked") {
   coverError.value = "";
   if (!/^image\//i.test(file.type)) {
@@ -336,13 +273,6 @@ async function handleCoverFile(file: File | Blob, source: "picked" | "write" = "
   }
 }
 
-// 149: single-mode {write} — fetch the album's current cover (same-origin
-// getCoverArt, cookie-authed) and run it through the same canvas compressor
-// as a manual pick, instead of sending the `{write}` keyword to the server.
-// The server-side keyword path embeds the R2 bytes verbatim (only bounded by
-// a 500KB reject, no resize), so anything above that ceiling silently never
-// got embedded — fetching client-side guarantees compression and surfaces
-// failures via the same coverError the picker already uses.
 async function useAlbumCoverForWrite() {
   if (!props.existingCoverUrl) {
     coverError.value = t("tagEditor.cover.errNoAlbumCover");
@@ -361,10 +291,6 @@ async function useAlbumCoverForWrite() {
   }
 }
 
-// Batch mode keeps the legacy keyword passthrough — targets may span
-// different albums, so there's no single image the client could resolve and
-// compress up front; the server still resolves + embeds each song's own
-// album cover per-instance (unchanged behaviour).
 function onWriteKeywordClick() {
   if (coverKeyword.value === KW_WRITE || coverSource.value === "write") {
     clearCoverImageOnly();
