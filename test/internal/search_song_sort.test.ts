@@ -34,12 +34,21 @@ async function run() {
     ["title", "ORDER BY sm.sort_title ASC"],
     ["titleDesc", "ORDER BY sm.sort_title DESC"],
     ["newest", "ORDER BY sm.created_at DESC"],
+    ["oldest", "ORDER BY sm.created_at ASC"],
   ] as const) {
     const { db, calls } = makeDb();
     const q = createQueries(db as D1Database);
     await q.search("", { artistCount: 0, albumCount: 0, songCount: 1, songSort: sort });
     const songSql = calls.find((sql) => sql.includes("FROM song_masters")) || "";
     assert(songSql.includes(expected), `song sort ${sort ?? "default"} uses ${expected}`);
+  }
+
+  for (const [type, expected] of [["newest", "ORDER BY a.created_at DESC"], ["oldest", "ORDER BY a.created_at ASC"]] as const) {
+    const { db, calls } = makeDb();
+    const q = createQueries(db as D1Database);
+    await q.listAlbums(type, 10, 0);
+    const albumSql = calls.find((sql) => sql.includes("FROM albums")) || "";
+    assert(albumSql.includes(expected), `album sort ${type} uses ${expected}`);
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PASS");

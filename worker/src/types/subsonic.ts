@@ -12,6 +12,7 @@ export interface AnnotationLite {
 export interface SubsonicArtist {
   id: string; name: string; coverArt?: string;
   albumCount?: number;
+  created?: string;
   starred?: string;
   userRating?: number;
   playCount?: number;
@@ -58,6 +59,7 @@ export function mapArtist(a: Artist, annotation?: AnnotationLite): SubsonicArtis
   const obj: SubsonicArtist = {
     id: a.id, name: a.name,
     coverArt: a.image_r2_key ? `ar-${a.id}` : undefined,
+    created: formatISODate(a.created_at),
   };
   return applyAnnotation(obj, annotation);
 }
