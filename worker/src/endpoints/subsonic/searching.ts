@@ -64,10 +64,12 @@ const search23Handler = (tag: "searchResult2" | "searchResult3") =>
     const albumOffset = parseInt(c.req.query("albumOffset") || "0", 10);
     const songCount = parseInt(c.req.query("songCount") || "20", 10);
     const songOffset = parseInt(c.req.query("songOffset") || "0", 10);
+    const songSort = c.req.query("songSort");
 
     const queries = createQueries((c.env as Env).DB);
     const result = await queries.search(query, {
       artistCount, artistOffset, albumCount, albumOffset, songCount, songOffset,
+      songSort: songSort === "newest" || songSort === "titleDesc" ? songSort : "title",
     });
 
     const userId = currentUserId(c);

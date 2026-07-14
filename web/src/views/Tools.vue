@@ -578,6 +578,48 @@ function numOr(v: string | undefined, fallback: number | null): number | null {
   return Number.isFinite(n) ? n : fallback;
 }
 
+interface CloneSongRef {
+  id?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  albumArtist?: string;
+  duration?: number | null;
+  track?: number | null;
+  disc?: number | null;
+}
+
+interface CloneStarredRef extends CloneSongRef {
+  id: string;
+  type: "song" | "album" | "artist";
+  name?: string;
+  year?: number | null;
+  songCount?: number | null;
+  starredAt?: number | null;
+}
+
+function cloneSongRefFromNode(node: any): CloneSongRef {
+  return {
+    id: jget(node, "id"),
+    title: jget(node, "title"),
+    artist: jget(node, "artist"),
+    album: jget(node, "album"),
+    albumArtist: jget(node, "albumArtist"),
+    duration: numOr(jget(node, "duration"), null),
+    track: numOr(jget(node, "track"), null),
+    disc: numOr(jget(node, "discNumber") || jget(node, "disc"), null),
+  };
+}
+
+function cloneStarredAt(node: any): number | null {
+  const raw = jget(node, "starredAt") || jget(node, "starred");
+  if (!raw) return null;
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric)) return numeric > 10_000_000_000 ? Math.floor(numeric / 1000) : numeric;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? Math.floor(parsed / 1000) : null;
+}
+
 // Tiny non-crypto hash for synthesising Subsonic-style ids when the upstream
 // server omits them. Subsonic ids are opaque strings so a stable 10-char
 // hash matches the EdgeSonic convention (ar-/al-/sm- prefixes use md5[:10]).
@@ -1014,33 +1056,39 @@ function suffixToMime(suffix: string): string {
 // append. `owner` is the local target user the backend writes the playlist to.
 async function upsertPlaylistChunked(
   playlist: { id: string; name: string; owner: string; public: boolean; comment: string | null },
-  entries: string[],
-): Promise<void> {
-  const chunks: string[][] = [];
+  entries: CloneSongRef[],
+): Promise<{ unmatched: number }> {
+  const chunks: CloneSongRef[][] = [];
   for (let i = 0; i < entries.length; i += CLONE_ENTRY_CHUNK) {
     chunks.push(entries.slice(i, i + CLONE_ENTRY_CHUNK));
   }
   // Always issue at least one call so an empty playlist still gets a header.
   if (chunks.length === 0) chunks.push([]);
+  let localPlaylist = { ...playlist };
+  let unmatched = 0;
   for (let ci = 0; ci < chunks.length; ci++) {
-    if (cloneCancelRequested.value) return;
+    if (cloneCancelRequested.value) return { unmatched };
     const data = JSON.parse(await edgesonicPost("clone/upsertPlaylist", {
-      playlist,
+      playlist: localPlaylist,
       entries: chunks[ci],
       append: ci > 0,
       sourceKey: cloneSourceKey(),
     }));
     if (!data.ok) throw new Error(data.error || "upsertPlaylist rejected");
+    if (typeof data.playlistId === "string") localPlaylist = { ...localPlaylist, id: data.playlistId };
+    unmatched += Number(data.unmatched) || 0;
   }
+  return { unmatched };
 }
 
 // 176: send starred items in bounded chunks (same subrequest-budget reason).
 async function upsertStarredChunked(
   userId: string,
-  items: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }>,
-): Promise<void> {
+  items: CloneStarredRef[],
+): Promise<{ unmatched: number }> {
+  let unmatched = 0;
   for (let i = 0; i < items.length; i += CLONE_ENTRY_CHUNK) {
-    if (cloneCancelRequested.value) return;
+    if (cloneCancelRequested.value) return { unmatched };
     const chunk = items.slice(i, i + CLONE_ENTRY_CHUNK);
     const data = JSON.parse(await edgesonicPost("clone/upsertStarred", {
       userId,
@@ -1048,7 +1096,9 @@ async function upsertStarredChunked(
       sourceKey: cloneSourceKey(),
     }));
     if (!data.ok) throw new Error(data.error || "upsertStarred rejected");
+    unmatched += Number(data.unmatched) || 0;
   }
+  return { unmatched };
 }
 
 async function clonePlaylistsStage(targetUser: string) {
@@ -1078,18 +1128,18 @@ async function clonePlaylistsStage(targetUser: string) {
       const comment = jget(p, "comment") || null;
       // Fetch the full playlist to get entry ids.
       const detail = await cloneFetchJson("getPlaylist", { id });
-      let entries: string[] = [];
+      let entries: CloneSongRef[] = [];
       if (detail?._xml) {
         const songs = parseXmlChildren(detail._xml, "entry");
-        entries = songs.map((s) => s.id).filter(Boolean);
+        entries = songs.map(cloneSongRefFromNode).filter((s) => s.id || s.title);
       } else {
         const raw = detail?.playlist?.entry || detail?.entries?.entry || [];
         const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
-        entries = arr.map((s) => jget(s, "id") || "").filter(Boolean);
+        entries = arr.map(cloneSongRefFromNode).filter((s) => s.id || s.title);
       }
-      await upsertPlaylistChunked({ id, name, owner: targetUser, public: isPublic, comment }, entries);
+      const result = await upsertPlaylistChunked({ id, name, owner: targetUser, public: isPublic, comment }, entries);
       stage.done++;
-      cloneLogPush(`playlists: ✓ ${name} (${entries.length} entries)`);
+      cloneLogPush(`playlists: ✓ ${name} (${entries.length - result.unmatched}/${entries.length} entries matched${result.unmatched ? `, ${result.unmatched} missed` : ""})`);
     } catch (e: unknown) {
       stage.failed++;
       cloneLogPush(`playlists: ✗ ${jget(p, "name") || "?"} — ${e instanceof Error ? e.message : String(e)}`);
@@ -1107,11 +1157,11 @@ async function cloneStarredStage(targetUser: string) {
   }
   stage.status = "running";
   const resp = await cloneFetchJson("getStarred2");
-  const items: Array<{ id: string; type: "song" | "album" | "artist"; starredAt?: number | null }> = [];
+  const items: CloneStarredRef[] = [];
   if (resp?._xml) {
-    for (const s of parseXmlChildren(resp._xml, "song")) items.push({ id: s.id, type: "song" });
-    for (const a of parseXmlChildren(resp._xml, "album")) items.push({ id: a.id, type: "album" });
-    for (const ar of parseXmlChildren(resp._xml, "artist")) items.push({ id: ar.id, type: "artist" });
+    for (const s of parseXmlChildren(resp._xml, "song")) items.push({ ...cloneSongRefFromNode(s), id: s.id, type: "song", starredAt: cloneStarredAt(s) });
+    for (const a of parseXmlChildren(resp._xml, "album")) items.push({ ...cloneSongRefFromNode(a), id: a.id, type: "album", name: a.name, artist: a.artist, year: numOr(a.year, null), songCount: numOr(a.songCount, null), starredAt: cloneStarredAt(a) });
+    for (const ar of parseXmlChildren(resp._xml, "artist")) items.push({ ...cloneSongRefFromNode(ar), id: ar.id, type: "artist", name: ar.name, starredAt: cloneStarredAt(ar) });
   } else {
     const sr = resp?.starred2 || resp?.starred || {};
     for (const bucket of ["song", "album", "artist"] as const) {
@@ -1119,7 +1169,10 @@ async function cloneStarredStage(targetUser: string) {
       const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
       for (const n of arr) {
         const id = jget(n, "id");
-        if (id) items.push({ id, type: bucket });
+        if (!id) continue;
+        if (bucket === "song") items.push({ ...cloneSongRefFromNode(n), id, type: bucket, starredAt: cloneStarredAt(n) });
+        else if (bucket === "album") items.push({ ...cloneSongRefFromNode(n), id, type: bucket, name: jget(n, "name"), artist: jget(n, "artist"), year: numOr(jget(n, "year"), null), songCount: numOr(jget(n, "songCount"), null), starredAt: cloneStarredAt(n) });
+        else items.push({ ...cloneSongRefFromNode(n), id, type: bucket, name: jget(n, "name"), starredAt: cloneStarredAt(n) });
       }
     }
   }
@@ -1128,9 +1181,10 @@ async function cloneStarredStage(targetUser: string) {
 
   if (items.length > 0) {
     try {
-      await upsertStarredChunked(targetUser, items);
-      stage.done = items.length;
-      cloneLogPush(`starred: ✓ ${items.length} applied`);
+      const result = await upsertStarredChunked(targetUser, items);
+      stage.done = items.length - result.unmatched;
+      stage.failed = result.unmatched;
+      cloneLogPush(`starred: ✓ ${items.length - result.unmatched}/${items.length} applied${result.unmatched ? `, ${result.unmatched} missed` : ""}`);
     } catch (e: unknown) {
       stage.failed = items.length;
       stage.status = "error";
@@ -1153,11 +1207,11 @@ async function cloneStarredStage(targetUser: string) {
 async function cloneUserStarredAndPlaylists(username: string, password: string): Promise<void> {
   if (cloneStarredEnabled.value) try {
     const resp = await cloneFetchJsonAs(username, password, "getStarred2");
-    const items: Array<{ id: string; type: "song" | "album" | "artist" }> = [];
+    const items: CloneStarredRef[] = [];
     if (resp?._xml) {
-      for (const s of parseXmlChildren(resp._xml, "song")) items.push({ id: s.id, type: "song" });
-      for (const a of parseXmlChildren(resp._xml, "album")) items.push({ id: a.id, type: "album" });
-      for (const ar of parseXmlChildren(resp._xml, "artist")) items.push({ id: ar.id, type: "artist" });
+      for (const s of parseXmlChildren(resp._xml, "song")) items.push({ ...cloneSongRefFromNode(s), id: s.id, type: "song", starredAt: cloneStarredAt(s) });
+      for (const a of parseXmlChildren(resp._xml, "album")) items.push({ ...cloneSongRefFromNode(a), id: a.id, type: "album", name: a.name, artist: a.artist, year: numOr(a.year, null), songCount: numOr(a.songCount, null), starredAt: cloneStarredAt(a) });
+      for (const ar of parseXmlChildren(resp._xml, "artist")) items.push({ ...cloneSongRefFromNode(ar), id: ar.id, type: "artist", name: ar.name, starredAt: cloneStarredAt(ar) });
     } else {
       const sr = resp?.starred2 || resp?.starred || {};
       for (const bucket of ["song", "album", "artist"] as const) {
@@ -1165,13 +1219,16 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
         const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
         for (const n of arr) {
           const id = jget(n, "id");
-          if (id) items.push({ id, type: bucket });
+          if (!id) continue;
+          if (bucket === "song") items.push({ ...cloneSongRefFromNode(n), id, type: bucket, starredAt: cloneStarredAt(n) });
+          else if (bucket === "album") items.push({ ...cloneSongRefFromNode(n), id, type: bucket, name: jget(n, "name"), artist: jget(n, "artist"), year: numOr(jget(n, "year"), null), songCount: numOr(jget(n, "songCount"), null), starredAt: cloneStarredAt(n) });
+          else items.push({ ...cloneSongRefFromNode(n), id, type: bucket, name: jget(n, "name"), starredAt: cloneStarredAt(n) });
         }
       }
     }
     if (items.length > 0) {
-      await upsertStarredChunked(username, items);
-      cloneLogPush(`users: ✓ ${username} — ${items.length} starred item(s)`);
+      const result = await upsertStarredChunked(username, items);
+      cloneLogPush(`users: ✓ ${username} — ${items.length - result.unmatched}/${items.length} starred item(s)${result.unmatched ? `, ${result.unmatched} missed` : ""}`);
     }
   } catch (e: unknown) {
     cloneLogPush(`users: ✗ ${username} (starred) — ${e instanceof Error ? e.message : String(e)}`);
@@ -1200,17 +1257,18 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
       const isPublic = jget(p, "public") === "true";
       const comment = jget(p, "comment") || null;
       const detail = await cloneFetchJsonAs(username, password, "getPlaylist", { id });
-      let entries: string[] = [];
+      let entries: CloneSongRef[] = [];
       if (detail?._xml) {
         const songs = parseXmlChildren(detail._xml, "entry");
-        entries = songs.map((s) => s.id).filter(Boolean);
+        entries = songs.map(cloneSongRefFromNode).filter((s) => s.id || s.title);
       } else {
         const raw = detail?.playlist?.entry || detail?.entries?.entry || [];
         const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
-        entries = arr.map((s) => jget(s, "id") || "").filter(Boolean);
+        entries = arr.map(cloneSongRefFromNode).filter((s) => s.id || s.title);
       }
-      await upsertPlaylistChunked({ id, name, owner: username, public: isPublic, comment }, entries);
+      const result = await upsertPlaylistChunked({ id, name, owner: username, public: isPublic, comment }, entries);
       count++;
+      if (result.unmatched) cloneLogPush(`users: ! ${username}/${name} — ${result.unmatched} playlist item(s) not matched by name`);
     }
     if (count > 0) cloneLogPush(`users: ✓ ${username} — ${count} playlist(s)`);
   } catch (e: unknown) {

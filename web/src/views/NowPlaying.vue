@@ -16,10 +16,11 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from "vue";
 import { usePlayerStore } from "../stores/player";
-import { useAuth, parseXmlInner } from "../api";
+import { useAuth } from "../api";
+import { getTrackLyrics } from "../lib/trackPrefetch";
 
 const player = usePlayerStore();
-const { coverArtUrl, authFetch } = useAuth();
+const { coverArtUrl, authFetch, username } = useAuth();
 
 // ---- Lyrics: original + translation (dual axis) ----
 interface LyricLine { time: number; text: string; tr?: string }
@@ -138,29 +139,37 @@ function extractTranslation(text: string): string | null {
 }
 
 // Fetch lyrics when track changes
+let lyricsRequest = 0;
+function resetLyricsScroll() {
+  lyricsScrollEl.value?.scrollTo({ top: 0, behavior: "auto" });
+}
+
 watch(() => player.current?.id, async (id) => {
+  const request = ++lyricsRequest;
+  const trackAtChange = player.current;
+  userScrolled.value = false;
+  suppressScrollUntil.value = Date.now() + 600;
+  autoScrolling.value = false;
   lyrics.value = [];
   lyricsError.value = "";
-  if (!id) return;
-  lyricsLoading.value = true;
-  try {
-    const xml = await authFetch("getLyricsBySongId", { id });
-    const inner = parseXmlInner(xml, "structuredLyrics");
-    if (inner) {
-      lyrics.value = parseStructuredLines(inner);
-    } else {
-      // fallback: getLyrics by artist+title
-      const t = player.current;
-      if (t) {
-        const xml2 = await authFetch("getLyrics", { artist: t.artist, title: t.title });
-        const inner2 = parseXmlInner(xml2, "lyrics");
-        if (inner2) lyrics.value = parseLrcDual(decodeEntities(inner2));
-      }
-    }
-  } catch {
-    lyricsError.value = "歌词加载失败";
-  } finally {
+  lyricsLoading.value = !!id;
+  resetLyricsScroll();
+  await nextTick();
+  if (request !== lyricsRequest) return;
+  resetLyricsScroll();
+  if (!id || !trackAtChange || trackAtChange.id !== id) {
     lyricsLoading.value = false;
+    return;
+  }
+  try {
+    const payload = await getTrackLyrics(trackAtChange, { authFetch, scope: username.value });
+    if (request !== lyricsRequest) return;
+    if (payload.structured) lyrics.value = parseStructuredLines(payload.structured);
+    else if (payload.lrc) lyrics.value = parseLrcDual(decodeEntities(payload.lrc));
+  } catch {
+    if (request === lyricsRequest) lyricsError.value = "歌词加载失败";
+  } finally {
+    if (request === lyricsRequest) lyricsLoading.value = false;
   }
 }, { immediate: true });
 

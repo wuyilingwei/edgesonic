@@ -30,6 +30,7 @@ const routes = [
   { path: "/login", component: Login, meta: { title: "Login", public: true } },
   { path: "/", component: Dashboard, meta: { title: "Dashboard" } },
   { path: "/library", component: Library, meta: { title: "Library" } },
+  { path: "/starred", component: Library, props: { starredOnly: true }, meta: { title: "Liked" } },
   { path: "/sources", component: Sources, meta: { title: "Sources" } },
   { path: "/files", component: Files, meta: { title: "Files" } },
   { path: "/users", component: Users, meta: { title: "Users" } },

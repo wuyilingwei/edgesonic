@@ -14,7 +14,7 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 <script setup lang="ts">
-import { ref, computed, watch } from "vue";
+import { ref, computed, watch, onBeforeUnmount } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter, useRoute } from "vue-router";
 import { usePlayerStore } from "../stores/player";
@@ -56,10 +56,6 @@ const coverSrc = computed(() => {
 });
 watch(coverSrc, () => { coverFailed.value = false; });
 
-const progressPct = computed(() =>
-  player.duration > 0 ? (player.currentTime / player.duration) * 100 : 0,
-);
-
 const bufferedSegments = computed(() => {
   if (player.duration <= 0) return [] as { left: number; width: number }[];
   return player.bufferedRanges.map(([s, e]) => ({
@@ -70,6 +66,12 @@ const bufferedSegments = computed(() => {
 
 const progressEl = ref<HTMLElement | null>(null);
 const dragging = ref(false);
+const dragTime = ref<number | null>(null);
+
+const displayTime = computed(() => dragTime.value ?? player.currentTime);
+const progressPct = computed(() =>
+  player.duration > 0 ? (displayTime.value / player.duration) * 100 : 0,
+);
 
 // Resting display stays mm:ss (formatDuration); while dragging the seek bar
 // a floating tooltip shows hundredths precision at the thumb position.
@@ -81,27 +83,42 @@ function fmtPrecise(sec: number): string {
   return `${m}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
 }
 
-function seekFromEvent(e: MouseEvent) {
+function seekFromEvent(e: MouseEvent): number | null {
   const el = progressEl.value;
-  if (!el || player.duration <= 0) return;
+  if (!el || player.duration <= 0) return null;
   const rect = el.getBoundingClientRect();
   const ratio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1);
-  player.seek(ratio * player.duration);
+  return ratio * player.duration;
+}
+
+let removeDragListeners: (() => void) | null = null;
+
+function stopProgressDrag(commit: boolean) {
+  const target = dragTime.value;
+  dragTime.value = null;
+  dragging.value = false;
+  removeDragListeners?.();
+  removeDragListeners = null;
+  if (commit && target !== null) player.seek(target);
 }
 
 function onProgressDown(e: MouseEvent) {
   if (!player.hasTrack) return;
+  e.preventDefault();
+  stopProgressDrag(false);
   dragging.value = true;
-  seekFromEvent(e);
-  const move = (ev: MouseEvent) => seekFromEvent(ev);
-  const up = () => {
-    dragging.value = false;
+  dragTime.value = seekFromEvent(e);
+  const move = (ev: MouseEvent) => { dragTime.value = seekFromEvent(ev); };
+  const up = () => stopProgressDrag(true);
+  window.addEventListener("mousemove", move);
+  window.addEventListener("mouseup", up);
+  removeDragListeners = () => {
     window.removeEventListener("mousemove", move);
     window.removeEventListener("mouseup", up);
   };
-  window.addEventListener("mousemove", move);
-  window.addEventListener("mouseup", up);
 }
+
+onBeforeUnmount(() => stopProgressDrag(false));
 
 function onVolume(e: Event) {
   player.setVolume(parseFloat((e.target as HTMLInputElement).value));
@@ -159,7 +176,7 @@ function removeFromQueue(i: number) {
         </button>
       </div>
       <div class="pb-progress-row">
-        <span class="pb-time">{{ formatDuration(Math.floor(player.currentTime)) }}</span>
+        <span class="pb-time">{{ formatDuration(Math.floor(displayTime)) }}</span>
         <div ref="progressEl" class="pb-progress" :class="{ disabled: !player.hasTrack }" @mousedown="onProgressDown">
           <div
             v-for="(seg, i) in bufferedSegments"
@@ -171,7 +188,7 @@ function removeFromQueue(i: number) {
           <div class="pb-progress-thumb" :class="{ active: dragging }" :style="{ left: progressPct + '%' }">
             <component :is="activeThemeDef?.progressThumb" v-if="activeThemeDef?.progressThumb" />
           </div>
-          <div v-if="dragging" class="pb-progress-tooltip" :style="{ left: progressPct + '%' }">{{ fmtPrecise(player.currentTime) }}</div>
+          <div v-if="dragging" class="pb-progress-tooltip" :style="{ left: progressPct + '%' }">{{ fmtPrecise(displayTime) }}</div>
         </div>
         <span class="pb-time">{{ formatDuration(Math.floor(player.duration)) }}</span>
       </div>

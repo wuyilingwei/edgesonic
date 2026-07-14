@@ -21,6 +21,7 @@ import { usePlayerStore, type Track } from "../stores/player";
 import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
 import SongRowMenu from "../components/SongRowMenu.vue";
+import StarButton from "../components/StarButton.vue";
 import type { ScrapeResult } from "../lib/scrape";
 
 const { t } = useI18n();
@@ -32,13 +33,25 @@ const BATCH_MAX = 50;
 const props = withDefaults(defineProps<{ starredOnly?: boolean }>(), { starredOnly: false });
 const starredOnly = props.starredOnly;
 
-interface Artist { id: string; name: string; albumCount: string; }
-interface Album { id: string; name: string; artist: string; year: string; coverArt: string; songCount: string; }
+interface Artist { id: string; name: string; albumCount: string; starred: boolean; starredAt?: string; }
+interface Album {
+  id: string;
+  name: string;
+  artist: string;
+  year: string;
+  coverArt: string;
+  songCount: string;
+  starred: boolean;
+  starredAt?: string;
+  createdAt?: string;
+}
 
-type Tab = "artists" | "albums" | "songs" | "starred";
-// users land on tracks (the most common entry point). Switching tabs is still
+type Tab = "artists" | "albums" | "songs";
+type SortMode = "newest" | "nameAsc" | "nameDesc";
+// Users land on tracks (the most common entry point). Switching tabs is still
 // honored for the current session, but a re-mount resets to songs.
-const tab = ref<Tab>(props.starredOnly ? "starred" : "songs");
+const tab = ref<Tab>("songs");
+const sortMode = ref<SortMode>("newest");
 
 const artists = ref<Artist[]>([]);
 const albums = ref<Album[]>([]);
@@ -53,6 +66,48 @@ const starredLists = ref<StarredLists>({ artists: [], albums: [], songs: [] });
 const starredLoading = ref(false);
 const starredLoaded = ref(false);
 let starredRequest = 0;
+
+function timeValue(value?: string): number {
+  const parsed = value ? Date.parse(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function nameOrder(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: "base" });
+}
+
+function sortArtists(items: Artist[]): Artist[] {
+  return [...items].sort((a, b) => {
+    if (sortMode.value === "newest") {
+      const byStarred = timeValue(b.starredAt) - timeValue(a.starredAt);
+      if (byStarred) return byStarred;
+    }
+    const byName = nameOrder(a.name, b.name);
+    return sortMode.value === "nameDesc" ? -byName : byName;
+  });
+}
+
+function sortAlbums(items: Album[]): Album[] {
+  return [...items].sort((a, b) => {
+    if (sortMode.value === "newest") {
+      const byDate = timeValue(b.starredAt || b.createdAt) - timeValue(a.starredAt || a.createdAt);
+      if (byDate) return byDate;
+    }
+    const byName = nameOrder(a.name, b.name);
+    return sortMode.value === "nameDesc" ? -byName : byName;
+  });
+}
+
+function sortSongs(items: Track[]): Track[] {
+  return [...items].sort((a, b) => {
+    if (sortMode.value === "newest") {
+      const byDate = timeValue(b.starredAt || b.createdAt) - timeValue(a.starredAt || a.createdAt);
+      if (byDate) return byDate;
+    }
+    const byName = nameOrder(a.title, b.title);
+    return sortMode.value === "nameDesc" ? -byName : byName;
+  });
+}
 
 interface ArtistInfo {
   biography: string;
@@ -76,6 +131,7 @@ const ALBUM_PAGE = 100;
 const allAlbums = ref<Album[]>([]);
 const albumOffset = ref(0);
 const albumsDone = ref(false);
+let albumLoadRequest = 0;
 
 // 154: waterfall grid columns. Went through CSS multi-column (`columns:`)
 // first, but that fills strictly column-first — item order on screen no
@@ -121,6 +177,11 @@ const SONG_PAGE = 1000;
 const allSongs = ref<Track[]>([]);
 const songOffset = ref(0);
 const songsDone = ref(false);
+let songLoadRequest = 0;
+
+const displayArtists = computed(() => sortArtists(starredOnly ? starredLists.value.artists : artists.value));
+const displayAlbums = computed(() => starredOnly ? sortAlbums(starredLists.value.albums) : allAlbums.value);
+const displaySongs = computed(() => starredOnly ? sortSongs(starredLists.value.songs) : allSongs.value);
 
 // IntersectionObserver sentinel elements for the two paged tabs. A single
 // observer watches whichever sentinel is currently in the DOM (only one is
@@ -177,10 +238,13 @@ function switchTab(next: Tab) {
   artistInfo.value = null;
   artistInfoError.value = "";
   artistInfoRequest++;
-  if (next === "artists" && !artists.value.length) loadArtists();
-  if (next === "albums" && !allAlbums.value.length) loadMoreAlbums();
-  if (next === "songs" && !allSongs.value.length) loadMoreSongs();
-  if (next === "starred") void loadStarred(true);
+  if (starredOnly) {
+    void loadStarred();
+  } else {
+    if (next === "artists" && !artists.value.length) loadArtists();
+    if (next === "albums" && !allAlbums.value.length) loadMoreAlbums();
+    if (next === "songs" && !allSongs.value.length) loadMoreSongs();
+  }
 }
 
 async function loadArtists() {
@@ -190,6 +254,7 @@ async function loadArtists() {
     const xml = await authFetch("getArtists");
     artists.value = parseXmlAttrs(xml, "artist").map((a) => ({
       id: a.id || "", name: a.name || "", albumCount: a.albumCount || "",
+      starred: !!a.starred, starredAt: a.starred || undefined,
     }));
   } catch {
     error.value = t("library.loadFailed");
@@ -223,10 +288,12 @@ async function loadStarred(force = false) {
     starredLists.value = {
       artists: parseXmlAttrs(xml, "artist").map((a) => ({
         id: a.id || "", name: a.name || "", albumCount: a.albumCount || "",
+        starred: true, starredAt: a.starred || undefined,
       })),
       albums: parseXmlAttrs(xml, "album").map((a) => ({
         id: a.id || "", name: a.name || "", artist: a.artist || "", year: a.year || "",
-        coverArt: a.coverArt || "", songCount: a.songCount || "",
+        coverArt: a.coverArt || "", songCount: a.songCount || "", starred: true,
+        starredAt: a.starred || undefined, createdAt: a.created || undefined,
       })),
       songs: parseXmlAttrs(xml, "song").map(mapSongRow),
     };
@@ -239,20 +306,29 @@ async function loadStarred(force = false) {
 }
 
 async function loadMoreAlbums() {
+  const request = albumLoadRequest;
   loading.value = true;
   try {
     const xml = await authFetch("getAlbumList2", {
-      type: "alphabeticalByName", size: String(ALBUM_PAGE), offset: String(albumOffset.value),
+      type: sortMode.value === "newest"
+        ? "newest"
+        : sortMode.value === "nameDesc" ? "alphabeticalByNameDesc" : "alphabeticalByName",
+      size: String(ALBUM_PAGE), offset: String(albumOffset.value),
     });
     const page = parseXmlAttrs(xml, "album").map((a) => ({
       id: a.id || "", name: a.name || "", artist: a.artist || "",
       year: a.year || "", coverArt: a.coverArt || "", songCount: a.songCount || "",
+      starred: !!a.starred, starredAt: a.starred || undefined, createdAt: a.created || undefined,
     }));
+    if (request !== albumLoadRequest) return;
     allAlbums.value.push(...page);
     albumOffset.value += page.length;
     if (page.length < ALBUM_PAGE) albumsDone.value = true;
-  } catch { error.value = t("library.loadFailed"); }
-  loading.value = false;
+  } catch {
+    if (request === albumLoadRequest) error.value = t("library.loadFailed");
+  } finally {
+    if (request === albumLoadRequest) loading.value = false;
+  }
 }
 
 function mapSongRow(s: Record<string, string>): Track {
@@ -263,23 +339,46 @@ function mapSongRow(s: Record<string, string>): Track {
     album: s.album || "",
     coverArt: s.coverArt || undefined,
     duration: parseInt(s.duration || "0"),
+    starred: !!s.starred,
+    starredAt: s.starred || undefined,
+    createdAt: s.created || undefined,
   };
 }
 
 async function loadMoreSongs() {
+  const request = songLoadRequest;
   loading.value = true;
   try {
     const xml = await authFetch("search3", {
       query: "", artistCount: "0", albumCount: "0",
       songCount: String(SONG_PAGE), songOffset: String(songOffset.value),
+      songSort: sortMode.value === "newest" ? "newest" : sortMode.value === "nameDesc" ? "titleDesc" : "title",
     });
     const page = parseXmlAttrs(xml, "song").map(mapSongRow);
+    if (request !== songLoadRequest) return;
     allSongs.value.push(...page);
     songOffset.value += page.length;
     if (page.length < SONG_PAGE) songsDone.value = true;
-  } catch { error.value = t("library.loadFailed"); }
-  loading.value = false;
+  } catch {
+    if (request === songLoadRequest) error.value = t("library.loadFailed");
+  } finally {
+    if (request === songLoadRequest) loading.value = false;
+  }
 }
+
+watch(sortMode, () => {
+  if (starredOnly) return;
+  albumLoadRequest++;
+  songLoadRequest++;
+  allAlbums.value = [];
+  albumOffset.value = 0;
+  albumsDone.value = false;
+  allSongs.value = [];
+  songOffset.value = 0;
+  songsDone.value = false;
+  if (tab.value === "albums") void loadMoreAlbums();
+  if (tab.value === "songs") void loadMoreSongs();
+});
 
 // === Library-wide search (search3), independent of the paged tab lists ===
 // Debounced so keystrokes don't hammer the API; searching a non-empty query
@@ -300,14 +399,17 @@ async function runSearch(query: string) {
   try {
     const xml = await authFetch("search3", {
       query, artistCount: "20", albumCount: "20", songCount: "100",
+      songSort: sortMode.value === "newest" ? "newest" : sortMode.value === "nameDesc" ? "titleDesc" : "title",
     });
     searchResults.value = {
       artists: parseXmlAttrs(xml, "artist").map((a) => ({
         id: a.id || "", name: a.name || "", albumCount: a.albumCount || "",
+        starred: !!a.starred, starredAt: a.starred || undefined,
       })),
       albums: parseXmlAttrs(xml, "album").map((a) => ({
         id: a.id || "", name: a.name || "", artist: a.artist || "",
         year: a.year || "", coverArt: a.coverArt || "", songCount: a.songCount || "",
+        starred: !!a.starred, starredAt: a.starred || undefined, createdAt: a.created || undefined,
       })),
       songs: parseXmlAttrs(xml, "song").map(mapSongRow),
     };
@@ -346,6 +448,7 @@ async function openArtist(artist: Artist) {
     albums.value = parseXmlAttrs(xml, "album").map((a) => ({
       id: a.id || "", name: a.name || a.title || "", artist: a.artist || artist.name,
       year: a.year || "", coverArt: a.coverArt || "", songCount: a.songCount || "",
+      starred: !!a.starred, starredAt: a.starred || undefined, createdAt: a.created || undefined,
     }));
   } catch { albums.value = []; }
   loading.value = false;
@@ -386,6 +489,9 @@ async function openAlbum(album: Album) {
       album: s.album || album.name,
       coverArt: s.coverArt || album.coverArt || undefined,
       duration: parseInt(s.duration || "0"),
+      starred: !!s.starred,
+      starredAt: s.starred || undefined,
+      createdAt: s.created || undefined,
     }));
   } catch { songs.value = []; }
   loading.value = false;
@@ -396,15 +502,33 @@ function playSong(i: number) {
 }
 
 function playFromAll(i: number) {
-  player.setQueue(allSongs.value, i);
+  player.setQueue(displaySongs.value, i);
 }
 
 function playFromStarred(i: number) {
-  player.setQueue(starredLists.value.songs, i);
+  player.setQueue(displaySongs.value, i);
 }
 
 function playAlbumFromStart() {
   if (songs.value.length) player.setQueue(songs.value, 0);
+}
+
+type StarEntity = Artist | Album | Track;
+type StarKind = "artist" | "album" | "song";
+
+function removeStarred(kind: StarKind, id: string) {
+  if (kind === "artist") starredLists.value.artists = starredLists.value.artists.filter((item) => item.id !== id);
+  else if (kind === "album") starredLists.value.albums = starredLists.value.albums.filter((item) => item.id !== id);
+  else starredLists.value.songs = starredLists.value.songs.filter((item) => item.id !== id);
+}
+
+function onStarChanged(kind: StarKind, item: StarEntity, value: boolean) {
+  item.starred = value;
+  if (starredOnly && !value) removeStarred(kind, item.id);
+}
+
+function onStarError() {
+  error.value = t("library.starUpdateFailed");
 }
 
 // === Tag editor (single + batch) ===
@@ -606,9 +730,9 @@ function backToAlbums() {
 const songsHintFaded = ref(false);
 
 onMounted(() => {
-  if (tab.value === "artists") loadArtists();
+  if (starredOnly) void loadStarred();
+  else if (tab.value === "artists") loadArtists();
   else if (tab.value === "albums") loadMoreAlbums();
-  else if (tab.value === "starred") void loadStarred();
   else loadMoreSongs();
   setTimeout(() => { songsHintFaded.value = true; }, 5000);
   // set up the infinite-scroll observer now that the first sentinel
@@ -632,7 +756,17 @@ watch(() => tab.value, () => {
 }, { flush: "post" });
 
 watch(() => player.starred, () => {
-  if (tab.value === "starred") void loadStarred(true);
+  const currentId = player.current?.id;
+  if (currentId) {
+    const rows = [
+      ...allSongs.value,
+      ...starredLists.value.songs,
+      ...(searchResults.value?.songs ?? []),
+    ];
+    const row = rows.find((item) => item.id === currentId);
+    if (row) row.starred = player.starred;
+  }
+  if (starredOnly) void loadStarred(true);
 });
 
 onUnmounted(() => {
@@ -891,11 +1025,21 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
     </div>
 
     <template v-if="!searchResults">
-    <!-- View tabs (hidden while drilled into an artist/album) -->
-    <div v-if="!starredOnly && !currentArtist && !currentAlbum" class="view-tabs">
+    <!-- View tabs and sorting (hidden while drilled into an artist/album) -->
+    <div v-if="!currentArtist && !currentAlbum" class="library-controls">
+      <div class="view-tabs">
       <button :class="['view-tab', { active: tab === 'songs' }]" @click="switchTab('songs')">{{ t("library.tabSongs") }}</button>
       <button :class="['view-tab', { active: tab === 'albums' }]" @click="switchTab('albums')">{{ t("library.tabAlbums") }}</button>
       <button :class="['view-tab', { active: tab === 'artists' }]" @click="switchTab('artists')">{{ t("library.tabArtists") }}</button>
+      </div>
+      <label class="sort-control">
+        <span class="mono-label">{{ t("library.sortLabel") }}</span>
+        <select v-model="sortMode" class="form-input sort-select">
+          <option value="newest">{{ t("library.sortNewest") }}</option>
+          <option value="nameAsc">{{ t("library.sortNameAsc") }}</option>
+          <option value="nameDesc">{{ t("library.sortNameDesc") }}</option>
+        </select>
+      </label>
     </div>
 
     <div v-if="error" class="status-badge error">{{ error }}</div>
@@ -904,9 +1048,9 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
     <!-- The trailing 32px track holds the per-row "⋮" menu (SongRowMenu) —
          `auto` tracks are banned since each .table-row is its own grid, so
          content-sized tracks would misalign across rows. -->
-    <div v-if="currentAlbum" class="table-wrap song-table" style="--grid-cols: 36px 2fr 1fr 64px 32px">
+    <div v-if="currentAlbum" class="table-wrap song-table" style="--grid-cols: 36px 2fr 1fr 64px 32px 32px">
       <div class="table-header">
-        <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span>
+        <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span><span></span>
       </div>
       <!-- 061: album-level share affordance, sits above the track table. -->
       <button v-if="currentAlbum" class="album-share-btn" :title="t('library.share')" @click.stop="openShare('album', currentAlbum.id, currentAlbum.name)">⤴ {{ t("library.share") }}</button>
@@ -919,9 +1063,17 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       >
        <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
         <span class="song-title">{{ s.title }}</span>
-        <span class="song-artist">{{ s.artist }}</span>
-        <span class="song-time">{{ formatDuration(s.duration) }}</span>
-        <SongRowMenu
+         <span class="song-artist">{{ s.artist }}</span>
+         <span class="song-time">{{ formatDuration(s.duration) }}</span>
+         <StarButton
+           class="row-like-btn"
+           :id="s.id"
+           kind="song"
+           :starred="!!s.starred"
+           @update:starred="onStarChanged('song', s, $event)"
+           @error="onStarError"
+         />
+         <SongRowMenu
           :song-id="s.id"
           :title="s.title"
           :is-admin="isAdmin"
@@ -968,9 +1120,17 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
         <div class="album-body">
           <div class="album-name">{{ al.name }}</div>
           <div class="mono-label">{{ al.year || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
-        </div>
-        <!-- 061: per-album share. -->
-        <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
+         </div>
+         <!-- 061: per-album share. -->
+         <StarButton
+           class="card-like-btn"
+           :id="al.id"
+           kind="album"
+           :starred="al.starred"
+           @update:starred="onStarChanged('album', al, $event)"
+           @error="onStarError"
+         />
+         <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
         <div class="corner corner-tr"></div>
         <div class="corner corner-bl"></div>
       </div>
@@ -982,95 +1142,102 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       </div>
     </div>
 
-    <!-- Tab: starred -->
-    <div v-else-if="tab === 'starred'" class="starred-view">
-      <div v-if="starredLoading" class="empty-state">{{ t("common.loading") }}</div>
-      <template v-else>
-        <div v-if="starredLists.artists.length" class="search-section">
-          <div class="search-section-title">{{ t("library.tabArtists") }}</div>
-          <div class="artist-grid">
-            <div v-for="a in starredLists.artists" :key="a.id" class="card hoverable artist-card" @click="openArtist(a)">
-              <div class="artist-glyph">{{ a.name.charAt(0).toUpperCase() || "?" }}</div>
-              <div class="artist-name">{{ a.name }}</div>
-              <div class="mono-label" v-if="a.albumCount">{{ t("library.albumCount", { n: a.albumCount }) }}</div>
-              <div class="corner corner-tr"></div>
-              <div class="corner corner-bl"></div>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="starredLists.albums.length" class="search-section">
-          <div class="search-section-title">{{ t("library.tabAlbums") }}</div>
-          <div class="album-grid">
-            <div v-for="al in starredLists.albums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
-              <div class="album-cover">
-                <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
-                <span v-else class="album-cover-placeholder">♪</span>
-              </div>
-              <div class="album-body">
-                <div class="album-name">{{ al.name }}</div>
-                <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
-              </div>
-              <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
-              <div class="corner corner-tr"></div>
-              <div class="corner corner-bl"></div>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="starredLists.songs.length" class="search-section">
-          <div class="search-section-title">{{ t("library.tabSongs") }}</div>
-          <div class="table-wrap song-table" style="--grid-cols: 36px 2fr 1.5fr 1fr 64px 32px">
-            <div class="table-header">
-              <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span>
-            </div>
-            <div
-              v-for="(s, i) in starredLists.songs"
-              :key="s.id"
-              class="table-row song-row"
-              :class="{ playing: player.current?.id === s.id }"
-              @click="playFromStarred(i)"
-            >
-              <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
-              <span class="song-title">{{ s.title }}</span>
-              <span class="song-album">{{ s.album }}</span>
-              <span class="song-artist">{{ s.artist }}</span>
-              <span class="song-time">{{ formatDuration(s.duration) }}</span>
-              <SongRowMenu
-                :song-id="s.id"
-                :title="s.title"
-                :is-admin="isAdmin"
-                :open="openMenuId === s.id"
-                @toggle="toggleRowMenu(s.id)"
-                @close="closeRowMenu"
-                @edit="openEditor(s)"
-                @share="openShare('song', s.id, s.title)"
-                @add-playlist="openAddToPlaylist(s.id, s.title)"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div v-if="!starredLists.artists.length && !starredLists.albums.length && !starredLists.songs.length" class="empty-state">
-          <div class="empty-state-icon">♡</div>
-          <div>{{ t("library.noStarred") }}</div>
-        </div>
-      </template>
-    </div>
-
     <!-- Tab: artists -->
     <div v-else-if="tab === 'artists'" class="artist-grid">
-      <div v-for="a in artists" :key="a.id" class="card hoverable artist-card" @click="openArtist(a)">
+      <div v-for="a in displayArtists" :key="a.id" class="card hoverable artist-card" @click="openArtist(a)">
         <div class="artist-glyph">{{ a.name.charAt(0).toUpperCase() || "?" }}</div>
         <div class="artist-name">{{ a.name }}</div>
         <div class="mono-label" v-if="a.albumCount">{{ t("library.albumCount", { n: a.albumCount }) }}</div>
+        <StarButton
+          class="card-like-btn artist-like-btn"
+          :id="a.id"
+          kind="artist"
+          :starred="a.starred"
+          @update:starred="onStarChanged('artist', a, $event)"
+          @error="onStarError"
+        />
         <div class="corner corner-tr"></div>
         <div class="corner corner-bl"></div>
       </div>
-      <div v-if="loading" class="empty-state" style="grid-column: 1/-1">{{ t("common.loading") }}</div>
-      <div v-else-if="!artists.length && !error" class="empty-state" style="grid-column: 1/-1">
+      <div v-if="starredOnly ? starredLoading : loading" class="empty-state" style="grid-column: 1/-1">{{ t("common.loading") }}</div>
+      <div v-else-if="!displayArtists.length && !error" class="empty-state" style="grid-column: 1/-1">
         <div class="empty-state-icon">♪</div>
-        <div>{{ t("library.noArtists") }}</div>
+        <div>{{ starredOnly ? t("library.noStarred") : t("library.noArtists") }}</div>
+      </div>
+    </div>
+
+    <!-- Liked albums and songs stay as single-category tabs, matching Library. -->
+    <div v-else-if="starredOnly && tab === 'albums'" class="album-grid">
+      <div v-for="al in displayAlbums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
+        <div class="album-cover">
+          <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
+          <span v-else class="album-cover-placeholder">♪</span>
+        </div>
+        <div class="album-body">
+          <div class="album-name">{{ al.name }}</div>
+          <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
+        </div>
+        <StarButton
+          class="card-like-btn"
+          :id="al.id"
+          kind="album"
+          :starred="al.starred"
+          @update:starred="onStarChanged('album', al, $event)"
+          @error="onStarError"
+        />
+        <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
+        <div class="corner corner-tr"></div>
+        <div class="corner corner-bl"></div>
+      </div>
+      <div v-if="starredLoading" class="empty-state" style="grid-column: 1/-1">{{ t("common.loading") }}</div>
+      <div v-else-if="!displayAlbums.length" class="empty-state" style="grid-column: 1/-1">
+        <div class="empty-state-icon">♡</div>
+        <div>{{ t("library.noStarred") }}</div>
+      </div>
+    </div>
+
+    <div v-else-if="starredOnly && tab === 'songs'">
+      <div class="table-wrap song-table" style="--grid-cols: 36px 2fr 1.5fr 1fr 64px 32px 32px">
+        <div class="table-header">
+          <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span><span></span>
+        </div>
+        <div
+          v-for="(s, i) in displaySongs"
+          :key="s.id"
+          class="table-row song-row"
+          :class="{ playing: player.current?.id === s.id }"
+          @click="playFromStarred(i)"
+        >
+          <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
+          <span class="song-title">{{ s.title }}</span>
+          <span class="song-album">{{ s.album }}</span>
+          <span class="song-artist">{{ s.artist }}</span>
+          <span class="song-time">{{ formatDuration(s.duration) }}</span>
+          <StarButton
+            class="row-like-btn"
+            :id="s.id"
+            kind="song"
+            :starred="!!s.starred"
+            @update:starred="onStarChanged('song', s, $event)"
+            @error="onStarError"
+          />
+          <SongRowMenu
+            :song-id="s.id"
+            :title="s.title"
+            :is-admin="isAdmin"
+            :open="openMenuId === s.id"
+            @toggle="toggleRowMenu(s.id)"
+            @close="closeRowMenu"
+            @edit="openEditor(s)"
+            @share="openShare('song', s.id, s.title)"
+            @add-playlist="openAddToPlaylist(s.id, s.title)"
+          />
+        </div>
+        <div v-if="starredLoading" class="empty-state">{{ t("common.loading") }}</div>
+        <div v-else-if="!displaySongs.length" class="empty-state">
+          <div class="empty-state-icon">♡</div>
+          <div>{{ t("library.noStarred") }}</div>
+        </div>
       </div>
     </div>
 
@@ -1079,7 +1246,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
          buckets (round-robin by index, see albumWaterfallCols) so on-screen
          order always matches fetch/alphabetical order and a late-loading
          cover only grows its own column, never reflows the whole grid. -->
-    <div v-else-if="tab === 'albums'">
+    <div v-else-if="!starredOnly && tab === 'albums'">
       <div class="album-grid album-waterfall" ref="albumWaterfallEl">
         <div v-for="(col, ci) in albumWaterfallCols" :key="ci" class="waterfall-col">
           <div v-for="al in col" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
@@ -1092,6 +1259,14 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
               <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
             </div>
             <!-- 061: per-album share. -->
+            <StarButton
+              class="card-like-btn"
+              :id="al.id"
+              kind="album"
+              :starred="al.starred"
+              @update:starred="onStarChanged('album', al, $event)"
+              @error="onStarError"
+            />
             <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
             <div class="corner corner-tr"></div>
             <div class="corner corner-bl"></div>
@@ -1113,7 +1288,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
     </div>
 
     <!-- Tab: all songs -->
-    <div v-else-if="tab === 'songs'">
+    <div v-else-if="!starredOnly && tab === 'songs'">
       <!-- 101: edit mode toggle. Admins default to browse mode; click to reveal
            checkboxes / batch toolbar. The button lives at the top-right of the
            songs tab so it's discoverable without cluttering the song list. -->
@@ -1163,13 +1338,13 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       </div>
       <!-- 102: no `auto` tracks (per-row grids misalign); artist/time get
            fixed-share tracks so columns line up across every row. -->
-      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin && editMode ? '24px ' : ''}36px 2fr 1.5fr 1fr 64px 32px`">
+      <div class="table-wrap song-table" :style="`--grid-cols: ${isAdmin && editMode ? '24px ' : ''}36px 2fr 1.5fr 1fr 64px 32px 32px`">
         <div class="table-header">
           <span v-if="isAdmin && editMode"></span>
-          <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span>
+          <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span><span></span>
         </div>
         <div
-          v-for="(s, i) in allSongs"
+           v-for="(s, i) in displaySongs"
           :key="s.id"
           class="table-row song-row"
           :class="{ playing: player.current?.id === s.id, selected: selectedSet.has(s.id) }"
@@ -1186,9 +1361,17 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
           <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
           <span class="song-title">{{ s.title }}</span>
           <span class="song-album">{{ s.album }}</span>
-          <span class="song-artist">{{ s.artist }}</span>
-          <span class="song-time">{{ formatDuration(s.duration) }}</span>
-          <SongRowMenu
+           <span class="song-artist">{{ s.artist }}</span>
+           <span class="song-time">{{ formatDuration(s.duration) }}</span>
+           <StarButton
+             class="row-like-btn"
+             :id="s.id"
+             kind="song"
+             :starred="!!s.starred"
+             @update:starred="onStarChanged('song', s, $event)"
+             @error="onStarError"
+           />
+           <SongRowMenu
             :song-id="s.id"
             :title="s.title"
             :is-admin="isAdmin"
@@ -1200,7 +1383,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
             @add-playlist="openAddToPlaylist(s.id, s.title)"
           />
         </div>
-        <div v-if="!allSongs.length && !loading" class="empty-state">{{ t("library.noTracks") }}</div>
+         <div v-if="!displaySongs.length && !loading" class="empty-state">{{ t("library.noTracks") }}</div>
       </div>
       <div class="load-more">
         <span v-if="loading" class="mono-label">{{ t("common.loading") }}</span>
@@ -1230,6 +1413,14 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
               <div class="artist-glyph">{{ a.name.charAt(0).toUpperCase() || "?" }}</div>
               <div class="artist-name">{{ a.name }}</div>
               <div class="mono-label" v-if="a.albumCount">{{ t("library.albumCount", { n: a.albumCount }) }}</div>
+              <StarButton
+                class="card-like-btn artist-like-btn"
+                :id="a.id"
+                kind="artist"
+                :starred="a.starred"
+                @update:starred="onStarChanged('artist', a, $event)"
+                @error="onStarError"
+              />
               <div class="corner corner-tr"></div>
               <div class="corner corner-bl"></div>
             </div>
@@ -1253,6 +1444,14 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
                 <div class="album-name">{{ al.name }}</div>
                 <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
               </div>
+              <StarButton
+                class="card-like-btn"
+                :id="al.id"
+                kind="album"
+                :starred="al.starred"
+                @update:starred="onStarChanged('album', al, $event)"
+                @error="onStarError"
+              />
               <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
               <div class="corner corner-tr"></div>
               <div class="corner corner-bl"></div>
@@ -1262,9 +1461,9 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 
         <div v-if="searchResults.songs.length" class="search-section">
           <div class="search-section-title">{{ t("library.tabSongs") }}</div>
-          <div class="table-wrap song-table" style="--grid-cols: 36px 2fr 1.5fr 1fr 64px 32px">
+          <div class="table-wrap song-table" style="--grid-cols: 36px 2fr 1.5fr 1fr 64px 32px 32px">
             <div class="table-header">
-              <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span>
+              <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span><span></span>
             </div>
             <div
               v-for="(s, i) in searchResults.songs"
@@ -1278,6 +1477,14 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
               <span class="song-album">{{ s.album }}</span>
               <span class="song-artist">{{ s.artist }}</span>
               <span class="song-time">{{ formatDuration(s.duration) }}</span>
+              <StarButton
+                class="row-like-btn"
+                :id="s.id"
+                kind="song"
+                :starred="!!s.starred"
+                @update:starred="onStarChanged('song', s, $event)"
+                @error="onStarError"
+              />
               <SongRowMenu
                 :song-id="s.id"
                 :title="s.title"
@@ -1424,9 +1631,22 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 /* view tabs */
 .view-tabs {
   display: flex; gap: 0;
-  margin-bottom: 1.25rem;
   border-bottom: 1px solid var(--color-border-subtle);
 }
+.library-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+}
+.sort-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.sort-select { min-width: 150px; padding-top: 0.45rem; padding-bottom: 0.45rem; }
 .view-tab {
   padding: 0.55rem 1.3rem;
   background: none; border: none; cursor: pointer;
@@ -1479,7 +1699,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 
 /* artists */
 .artist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 1rem; align-items: start; }
-.artist-card { text-align: center; padding: 1.5rem 1rem 1.1rem; }
+.artist-card { position: relative; text-align: center; padding: 1.5rem 1rem 1.1rem; }
 .artist-glyph {
   width: 56px; height: 56px; margin: 0 auto 0.7rem;
   display: flex; align-items: center; justify-content: center;
@@ -1511,7 +1731,6 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 }
 .artist-info-link { color: var(--color-accent-primary); font-family: var(--font-mono); font-size: var(--fs-sm); }
 .artist-info-error { color: var(--color-text-muted); }
-.starred-view { display: flex; flex-direction: column; gap: 0.2rem; }
 
 /* albums */
 .album-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1rem; align-items: start; }
@@ -1638,6 +1857,13 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 .song-row:hover :deep(.row-menu-btn) { opacity: 1; }
 
 .album-card { position: relative; }
+.card-like-btn {
+  position: absolute;
+  top: 0.45rem;
+  left: 0.5rem;
+  z-index: 2;
+}
+.artist-like-btn { left: auto; right: 0.5rem; }
 .card-share-btn {
   position: absolute;
   top: 0.45rem;
@@ -1744,6 +1970,9 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 }
 
 @media (max-width: 560px) {
+  .library-controls { align-items: stretch; flex-direction: column; gap: 0.7rem; }
+  .sort-control { justify-content: space-between; }
+  .sort-select { flex: 1; }
   .view-tab { padding-left: 0.7rem; padding-right: 0.7rem; font-size: var(--fs-xs); }
   .artist-info { flex-direction: column; }
   .artist-info-image { width: 88px; height: 88px; flex-basis: 88px; }

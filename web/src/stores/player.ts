@@ -16,6 +16,7 @@
 import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { useAuth, parseXmlAttrs } from "../api";
+import { getTrackMetadataXml, preloadTrack } from "../lib/trackPrefetch";
 
 export interface Track {
   id: string;
@@ -24,6 +25,9 @@ export interface Track {
   album: string;
   coverArt?: string;
   duration: number;
+  starred?: boolean;
+  starredAt?: string;
+  createdAt?: string;
 }
 
 interface IncrementalFallbackState {
@@ -34,6 +38,18 @@ interface IncrementalFallbackState {
   stepIndex: number;
   contentType: string;
   shouldPlay: boolean;
+  phase: "range" | "full";
+}
+
+interface FullDownloadState {
+  trackId: string;
+  controller: AbortController;
+}
+
+interface PreloadedTrack {
+  el: HTMLAudioElement;
+  index: number;
+  ready: boolean;
 }
 
 /**
@@ -85,8 +101,8 @@ export const usePlayerStore = defineStore("player", () => {
   const starred = ref(false);
   async function _refreshStarred(id: string) {
     try {
-      const { authFetch } = useAuth();
-      const xml = await authFetch("getSong", { id });
+      const { authFetch, username } = useAuth();
+      const xml = await getTrackMetadataXml({ id }, { authFetch, scope: username.value });
       if (current.value?.id !== id) return;
       starred.value = !!parseXmlAttrs(xml, "song")[0]?.starred;
     } catch {
@@ -114,13 +130,17 @@ export const usePlayerStore = defineStore("player", () => {
   let elA: HTMLAudioElement | null = null;
   let elB: HTMLAudioElement | null = null;
   let active: HTMLAudioElement | null = null;
-  let preloaded: { el: HTMLAudioElement; index: number } | null = null;
+  let preloaded: PreloadedTrack | null = null;
   // Pending seek position to restore after loadedmetadata fires (page-reload resume).
   let _pendingRestoreTime: number | null = null;
   const FALLBACK_RANGE_STEPS = [1_200_000, 2_400_000, 4_800_000, 9_600_000];
   const blobSrcByElement = new WeakMap<HTMLAudioElement, string>();
   const fallbackAttemptByElement = new WeakMap<HTMLAudioElement, string>();
   const fallbackStateByElement = new WeakMap<HTMLAudioElement, IncrementalFallbackState>();
+  const fallbackTerminalTrackByElement = new WeakMap<HTMLAudioElement, string>();
+  const fullDownloadByElement = new WeakMap<HTMLAudioElement, FullDownloadState>();
+  const fullBlobOriginByElement = new WeakMap<HTMLAudioElement, "background" | "fallback">();
+  const fullyLoadedByElement = new WeakSet<HTMLAudioElement>();
   const fallbackInFlight = new WeakSet<HTMLAudioElement>();
 
   function revokeBlobSrc(el: HTMLAudioElement) {
@@ -131,10 +151,22 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
+  function abortFullDownload(el: HTMLAudioElement) {
+    const state = fullDownloadByElement.get(el);
+    if (!state) return;
+    state.controller.abort();
+    fullDownloadByElement.delete(el);
+  }
+
   function resetFallbackState(el: HTMLAudioElement) {
+    abortFullDownload(el);
     revokeBlobSrc(el);
     fallbackAttemptByElement.delete(el);
     fallbackStateByElement.delete(el);
+    fallbackInFlight.delete(el);
+    fallbackTerminalTrackByElement.delete(el);
+    fullBlobOriginByElement.delete(el);
+    fullyLoadedByElement.delete(el);
   }
 
   async function blobHeadHex(blob: Blob): Promise<string> {
@@ -180,27 +212,40 @@ export const usePlayerStore = defineStore("player", () => {
     return blob.slice(flacOffset, blob.size, blob.type || "audio/flac");
   }
 
-  async function fetchFullBlob(trackId: string): Promise<Blob> {
+  async function fetchFullBlob(trackId: string, signal?: AbortSignal): Promise<Blob> {
     const { streamUrl, downloadUrl } = useAuth();
     let lastError: unknown = null;
     for (const [label, url] of [["download-full", downloadUrl(trackId)], ["stream-full", streamUrl(trackId)]] as const) {
       try {
-        const resp = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+        const resp = await fetch(url, { credentials: "same-origin", cache: "no-store", signal });
         if (!resp.ok) throw new Error(`fallback fetch failed: ${resp.status}`);
         const blob = await resp.blob();
         await logFallbackBlob(label, resp, blob);
         return blob;
       } catch (e) {
+        if (signal?.aborted) throw e;
         lastError = e;
       }
     }
     throw lastError ?? new Error("fallback fetch failed");
   }
 
-  async function playFallbackBlob(el: HTMLAudioElement, blob: Blob, resumeAt: number, shouldPlay: boolean) {
+  function playPreparedBlob(
+    el: HTMLAudioElement,
+    blob: Blob,
+    resumeAt: number,
+    shouldPlay: boolean,
+    completeOrigin: "background" | "fallback" | null,
+  ) {
     revokeBlobSrc(el);
-    const playableBlob = await normalizePlayableBlob(blob);
-    const blobSrc = URL.createObjectURL(playableBlob);
+    if (completeOrigin) {
+      fullyLoadedByElement.add(el);
+      fullBlobOriginByElement.set(el, completeOrigin);
+    } else {
+      fullyLoadedByElement.delete(el);
+      fullBlobOriginByElement.delete(el);
+    }
+    const blobSrc = URL.createObjectURL(blob);
     blobSrcByElement.set(el, blobSrc);
     el.src = blobSrc;
     el.load();
@@ -214,14 +259,47 @@ export const usePlayerStore = defineStore("player", () => {
     if (shouldPlay) void el.play().catch(() => { playing.value = false; });
   }
 
-  async function fallbackToFullBlob(el: HTMLAudioElement, trackId: string, resumeAt: number, shouldPlay: boolean) {
+  async function playFallbackBlob(
+    el: HTMLAudioElement,
+    blob: Blob,
+    resumeAt: number,
+    shouldPlay: boolean,
+    completeOrigin: "background" | "fallback" | null = null,
+  ) {
+    const playableBlob = await normalizePlayableBlob(blob);
+    playPreparedBlob(el, playableBlob, resumeAt, shouldPlay, completeOrigin);
+  }
+
+  function advanceAfterFallbackFailure(el: HTMLAudioElement, trackId: string, reason: unknown) {
+    if (el !== active || current.value?.id !== trackId) return;
+    if (fallbackTerminalTrackByElement.get(el) === trackId) return;
+    fallbackTerminalTrackByElement.set(el, trackId);
+    abortFullDownload(el);
+    revokeBlobSrc(el);
+    fallbackAttemptByElement.delete(el);
+    fallbackStateByElement.delete(el);
+    fullBlobOriginByElement.delete(el);
+    fullyLoadedByElement.delete(el);
+    playing.value = false;
+    console.error("[Player] all playback attempts failed, skipping track:", reason);
+    next();
+  }
+
+  async function fallbackToFullBlob(
+    el: HTMLAudioElement,
+    state: IncrementalFallbackState,
+    resumeAt: number,
+    shouldPlay: boolean,
+  ) {
+    state.phase = "full";
     try {
-      const blob = await fetchFullBlob(trackId);
-      if (el !== active || current.value?.id !== trackId) return;
+      const blob = await fetchFullBlob(state.trackId);
+      if (el !== active || current.value?.id !== state.trackId) return;
+      await playFallbackBlob(el, blob, resumeAt, state.shouldPlay || shouldPlay, "fallback");
       fallbackStateByElement.delete(el);
-      await playFallbackBlob(el, blob, resumeAt, shouldPlay);
     } catch (e) {
       console.error("[Player] full-file fallback failed:", e);
+      advanceAfterFallbackFailure(el, state.trackId, e);
     }
   }
 
@@ -263,54 +341,103 @@ export const usePlayerStore = defineStore("player", () => {
       }
     } catch (e) {
       console.warn("[Player] incremental fallback failed, trying full file:", e);
-      fallbackStateByElement.delete(el);
+      state.stepIndex = FALLBACK_RANGE_STEPS.length;
     } finally {
-      fallbackInFlight.delete(el);
+      if (fallbackStateByElement.get(el) === state) fallbackInFlight.delete(el);
     }
 
     if (el === active && current.value?.id === state.trackId) {
-      await fallbackToFullBlob(el, state.trackId, resumeAt, state.shouldPlay || shouldPlay);
+      await fallbackToFullBlob(el, state, resumeAt, state.shouldPlay || shouldPlay);
     }
   }
 
-  function fallbackAfterDemuxError(el: HTMLAudioElement, failedSrc: string, shouldPlay: boolean) {
-    if (el !== active || !failedSrc) return;
+  function beginIncrementalFallback(el: HTMLAudioElement, trackId: string, resumeAt: number, shouldPlay: boolean) {
+    const { streamUrl } = useAuth();
+    const state: IncrementalFallbackState = {
+      trackId,
+      sourceUrl: streamUrl(trackId),
+      chunks: [],
+      downloaded: 0,
+      stepIndex: 0,
+      contentType: "",
+      shouldPlay,
+      phase: "range",
+    };
+    fallbackStateByElement.set(el, state);
+    void continueIncrementalFallback(el, state, resumeAt, shouldPlay);
+  }
+
+  function fallbackAfterMediaError(el: HTMLAudioElement, failedSrc: string, shouldPlay: boolean) {
+    if (!failedSrc) return;
     const track = current.value;
     if (!track) return;
     const resumeAt = Number.isFinite(el.currentTime) ? el.currentTime : currentTime.value;
 
     if (failedSrc.startsWith("blob:")) {
       const state = fallbackStateByElement.get(el);
-      if (state) void continueIncrementalFallback(el, state, resumeAt, shouldPlay);
+      if (blobSrcByElement.get(el) !== failedSrc) return;
+      if (state?.phase === "range") {
+        void continueIncrementalFallback(el, state, resumeAt, shouldPlay);
+      } else if (state?.phase === "full") {
+        advanceAfterFallbackFailure(el, track.id, new Error("full fallback blob is not playable"));
+      } else if (fullBlobOriginByElement.get(el) === "background") {
+        fullyLoadedByElement.delete(el);
+        fullBlobOriginByElement.delete(el);
+        beginIncrementalFallback(el, track.id, resumeAt, shouldPlay);
+      } else {
+        advanceAfterFallbackFailure(el, track.id, new Error("playback blob is not playable"));
+      }
       return;
     }
 
+    if (el !== active) return;
+    abortFullDownload(el);
+    if (fallbackTerminalTrackByElement.get(el) === track.id) return;
     if (fallbackAttemptByElement.get(el) === failedSrc) return;
     fallbackAttemptByElement.set(el, failedSrc);
-    const { streamUrl } = useAuth();
-    const state: IncrementalFallbackState = {
-      trackId: track.id,
-      sourceUrl: streamUrl(track.id),
-      chunks: [],
-      downloaded: 0,
-      stepIndex: 0,
-      contentType: "",
-      shouldPlay,
+    beginIncrementalFallback(el, track.id, resumeAt, shouldPlay);
+  }
+
+  function startFullDownload(
+    el: HTMLAudioElement,
+    trackId: string,
+    onComplete: (blob: Blob) => Promise<void> | void,
+    onFailure: (error: unknown) => void,
+  ) {
+    abortFullDownload(el);
+    const state: FullDownloadState = {
+      trackId,
+      controller: new AbortController(),
     };
-    fallbackStateByElement.set(el, state);
-    void continueIncrementalFallback(el, state, resumeAt, shouldPlay);
+    fullDownloadByElement.set(el, state);
+    void fetchFullBlob(trackId, state.controller.signal)
+      .then(async (blob) => {
+        if (fullDownloadByElement.get(el) !== state) return;
+        await onComplete(blob);
+        if (fullDownloadByElement.get(el) === state) fullDownloadByElement.delete(el);
+      })
+      .catch((error: unknown) => {
+        if (fullDownloadByElement.get(el) !== state) return;
+        fullDownloadByElement.delete(el);
+        if (!state.controller.signal.aborted) onFailure(error);
+      });
   }
 
   function syncBuffered(el: HTMLAudioElement) {
     if (el !== active) return;
     const next: [number, number][] = [];
-    try {
-      for (let i = 0; i < el.buffered.length; i++) {
-        const start = el.buffered.start(i);
-        const end = el.buffered.end(i);
-        if (end - start > 0.05) next.push([start, end]);
-      }
-    } catch { /* buffered not ready yet */ }
+    const dur = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : duration.value;
+    if (fullyLoadedByElement.has(el) && dur > 0) {
+      next.push([0, dur]);
+    } else {
+      try {
+        for (let i = 0; i < el.buffered.length; i++) {
+          const start = el.buffered.start(i);
+          const end = el.buffered.end(i);
+          if (end - start > 0.05) next.push([start, end]);
+        }
+      } catch { /* buffered not ready yet */ }
+    }
     // Shallow-compare to avoid ref churn when nothing moved.
     const prev = bufferedRanges.value;
     if (prev.length !== next.length ||
@@ -320,20 +447,14 @@ export const usePlayerStore = defineStore("player", () => {
   }
 
   // Preload the next track once the current one is within this many seconds
-  // of ending, or past this fraction played — whichever comes first (so a
-  // short track that's under NEXT_TRACK_PRELOAD_SECONDS total still starts
-  // preloading right away instead of waiting for a 75% mark it may never
-  // meaningfully clear). That timing gate is ANDed with "current track has
-  // finished downloading" — both current and next now buffer the whole file
-  // (preload="auto"), so starting the next download while the current one is
-  // still mid-flight would have the two fight over the same connection's
-  // bandwidth; waiting for the current track's own buffered range to reach
-  // its end means the next-track fetch only starts once it has the pipe to
-  // itself.
+  // of ending, or past this fraction played — whichever comes first. The
+  // timing gate is ANDed with "current track has finished downloading" so the
+  // next full-file fetch cannot compete with the current track's fetch.
   const NEXT_TRACK_PRELOAD_SECONDS = 30;
   const NEXT_TRACK_PRELOAD_FRACTION = 0.75;
 
   function isFullyBuffered(el: HTMLAudioElement, dur: number): boolean {
+    if (fullyLoadedByElement.has(el)) return true;
     try {
       const n = el.buffered.length;
       return n > 0 && el.buffered.end(n - 1) >= dur - 0.5;
@@ -344,11 +465,9 @@ export const usePlayerStore = defineStore("player", () => {
 
   function makeAudio(): HTMLAudioElement {
     const el = new Audio();
-    // Buffer the currently-playing track aggressively (whole file, not just
-    // on-demand byte ranges) — reliable full playback matters more than
-    // trimming memory use for the active track. The R2 presign 302 cache
-    // means only the first request hits the Worker either way; the rest go
-    // direct to R2.
+    // `preload="auto"` is only a browser hint and Chromium may stop around a
+    // short ahead-buffer. loadCurrent() also consumes a full response and
+    // promotes it to a Blob so the active track really becomes fully local.
     el.preload = "auto";
     el.volume = volume.value;
     el.addEventListener("timeupdate", () => {
@@ -362,7 +481,10 @@ export const usePlayerStore = defineStore("player", () => {
       }
     });
     el.addEventListener("durationchange", () => {
-      if (el === active && isFinite(el.duration)) duration.value = el.duration;
+      if (el === active && isFinite(el.duration)) {
+        duration.value = el.duration;
+        syncBuffered(el);
+      }
     });
     el.addEventListener("play", () => {
       console.log("[Player] play event, src =", el.src);
@@ -385,9 +507,16 @@ export const usePlayerStore = defineStore("player", () => {
       } : e, "src =", el.src);
       if (el === active) {
         playing.value = false;
-        if (el.error?.code === 4 && failedSrc) {
-          fallbackAfterDemuxError(el, failedSrc, shouldPlay);
+        const code = el.error?.code;
+        if (failedSrc && (code === 2 || code === 3 || code === 4)) {
+          fallbackAfterMediaError(el, failedSrc, shouldPlay);
         }
+      } else if (preloaded?.el === el) {
+        // Do not skip the currently-playing song because a speculative next
+        // track failed early. Drop the candidate and retry it normally if the
+        // user eventually selects it.
+        preloaded.ready = false;
+        abortFullDownload(el);
       }
     });
     el.addEventListener("stalled", () => {
@@ -433,14 +562,35 @@ export const usePlayerStore = defineStore("player", () => {
     if (ni >= queue.value.length) { invalidatePreload(); return; }
     if (preloaded?.index === ni) return;
     invalidatePreload();
-    const { streamUrl } = useAuth();
+    const nextTrack = queue.value[ni];
+    const { authFetch, coverArtUrl, username } = useAuth();
+    preloadTrack(nextTrack, { authFetch, coverArtUrl, scope: username.value });
     const el = inactiveEl();
-    // preload="auto" — whole file, same as the active track — so the
-    // cross-fade swap on next()/ended is instant and gapless.
-    el.preload = "auto";
-    el.src = streamUrl(queue.value[ni].id);
+    resetFallbackState(el);
+    el.pause();
+    el.removeAttribute("src");
     el.load();
-    preloaded = { el, index: ni };
+    el.preload = "auto";
+    const candidate: PreloadedTrack = { el, index: ni, ready: false };
+    preloaded = candidate;
+    // A native audio element may stop an auto preload after a small buffer.
+    // Consume the complete response ourselves, then hand the ready Blob to
+    // the inactive element for an instant swap.
+    startFullDownload(
+      el,
+      nextTrack.id,
+      async (blob) => {
+        const playableBlob = await normalizePlayableBlob(blob);
+        if (preloaded !== candidate || el === active) return;
+        playPreparedBlob(el, playableBlob, 0, false, "background");
+        candidate.ready = true;
+      },
+      (error) => {
+        if (preloaded === candidate) {
+          console.warn("[Player] next-track full preload failed:", error);
+        }
+      },
+    );
   }
 
   function loadCurrent(autoplay = true) {
@@ -452,7 +602,7 @@ export const usePlayerStore = defineStore("player", () => {
     duration.value = track.duration || 0;
     bufferedRanges.value = [];
 
-    if (preloaded && preloaded.index === index.value) {
+    if (preloaded && preloaded.index === index.value && preloaded.ready) {
       // Swap in the prebuffered element — instant start
       const next = preloaded.el;
       preloaded = null;
@@ -461,12 +611,32 @@ export const usePlayerStore = defineStore("player", () => {
       active!.removeAttribute("src");
       active!.load();
       active = next;
+      syncBuffered(active);
     } else {
       invalidatePreload();
       const { streamUrl } = useAuth();
       active!.pause();
       resetFallbackState(active!);
-      active!.src = streamUrl(track.id);
+      const targetEl = active!;
+      const sourceUrl = streamUrl(track.id);
+      targetEl.src = sourceUrl;
+      targetEl.load();
+      startFullDownload(
+        targetEl,
+        track.id,
+        async (blob) => {
+          if (active !== targetEl || current.value?.id !== track.id) return;
+          const playableBlob = await normalizePlayableBlob(blob);
+          if (active !== targetEl || current.value?.id !== track.id) return;
+          const resumeAt = Number.isFinite(targetEl.currentTime) ? targetEl.currentTime : currentTime.value;
+          const shouldContinue = !targetEl.paused && !targetEl.ended;
+          playPreparedBlob(targetEl, playableBlob, resumeAt, shouldContinue, "background");
+          syncBuffered(targetEl);
+        },
+        (error) => {
+          console.warn("[Player] complete current-track preload failed; native stream remains active:", error);
+        },
+      );
     }
     active!.volume = volume.value;
 

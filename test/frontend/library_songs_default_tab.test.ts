@@ -41,10 +41,11 @@ const SRC = readFileSync(
 
 console.log("Library.vue default tab:");
 {
-  // 1. tab ref must be hard-initialised to "songs" — no getItem branch.
+  // 1. Every Library mode starts on the songs tab; liked now shares the same
+  // three-tab layout instead of using a special combined tab.
   assert(
     /const\s+tab\s*=\s*ref<Tab>\(\s*"songs"\s*\)/.test(SRC),
-    'tab ref defaults to "songs"',
+    'Library defaults to "songs"',
   );
 
   // 2. No localStorage *reads* of the library_tab key — those are what made
