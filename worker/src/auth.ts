@@ -147,15 +147,15 @@ export async function sha256(input: string): Promise<string> {
 // ============================================================================
 // Subsonic Credential Lookup
 // ============================================================================
-// the sole authority; the KV "faster lookup" was a micro-optimisation that
-// burned KV quota. Sessions still live in D1 exclusively.
+// Only check subsonic_credentials table. Session-based authentication must use
+// the HTTP-only session cookie, not Subsonic token/password parameters.
 async function findSubsonicCredential(
   db: D1Database,
   username: string,
   token: string,
   salt: string,
-): Promise<{ credential: string; kind: "subsonic_cred" | "session"; streamProxyStrategy: string } | null> {
-  // 1. Check subsonic_credentials table
+): Promise<{ credential: string; kind: "subsonic_cred"; streamProxyStrategy: string } | null> {
+  // Only check subsonic_credentials table
   const creds = await db
     .prepare("SELECT password, stream_proxy_strategy FROM subsonic_credentials WHERE username = ?")
     .bind(username)
@@ -176,23 +176,6 @@ async function findSubsonicCredential(
     }
   }
 
-  // 2. Check active sessions (session token as Subsonic password)
-  const sessions = await db
-    .prepare("SELECT token FROM sessions WHERE username = ? AND expires_at > ?")
-    .bind(username, Math.floor(Date.now() / 1000))
-    .all<{ token: string }>();
-
-  for (const sess of sessions.results) {
-    if (md5(sess.token + salt) === token) {
-      // of hard-dying 24h after login (which users perceived as "the deploy
-      // logged me out" — the 081 update banner made them reload right onto
-      // the expired session). Bump only when under 20h remain so a busy tab
-      // costs at most one D1 write every ~4h.
-      await renewSessionIfNeeded(db, sess.token);
-      return { credential: sess.token, kind: "session", streamProxyStrategy: "always" };
-    }
-  }
-
   return null;
 }
 
@@ -207,14 +190,13 @@ async function renewSessionIfNeeded(db: D1Database, token: string): Promise<void
     .run();
 }
 
-// clients (and "force plain-text auth" toggles) never send t/s; before 105
-// those requests fell through to "Wrong username or password". Order mirrors
-// findSubsonicCredential: subsonic_credentials first, then session tokens.
+// Only check subsonic_credentials table. Session-based authentication must use
+// the HTTP-only session cookie, not Subsonic password parameters.
 async function findSubsonicCredentialByPassword(
   db: D1Database,
   username: string,
   rawPassword: string,
-): Promise<{ credential: string; kind: "subsonic_cred" | "session"; streamProxyStrategy: string } | null> {
+): Promise<{ credential: string; kind: "subsonic_cred"; streamProxyStrategy: string } | null> {
   let plain = rawPassword;
   if (plain.startsWith("enc:")) {
     const hex = plain.substring(4);
@@ -241,17 +223,6 @@ async function findSubsonicCredentialByPassword(
         ? strat
         : "always";
       return { credential: cred.password, kind: "subsonic_cred", streamProxyStrategy: strategy };
-    }
-  }
-
-  const sessions = await db
-    .prepare("SELECT token FROM sessions WHERE username = ? AND expires_at > ?")
-    .bind(username, Math.floor(Date.now() / 1000))
-    .all<{ token: string }>();
-  for (const sess of sessions.results) {
-    if (sess.token === plain) {
-      await renewSessionIfNeeded(db, sess.token);
-      return { credential: sess.token, kind: "session", streamProxyStrategy: "always" };
     }
   }
 
