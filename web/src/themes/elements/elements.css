@@ -1,0 +1,140 @@
+/* SP element theme layer. The per-element atmosphere comes from each
+   theme's --deco-a/b/c triad (palette.css), so this single .el-bg rule paints
+   a different sky for every element — star's purple/gold/cobalt, night's
+   violet/magenta, water's blue/pink, etc. The WebGL crystal drift and the
+   2D particle field mount into this host on top of the gradient. */
+
+.el-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 22%, color-mix(in srgb, var(--deco-c) 26%, transparent), transparent 30rem),
+    radial-gradient(circle at 82% 12%, color-mix(in srgb, var(--deco-b) 26%, transparent), transparent 28rem),
+    radial-gradient(circle at 60% 92%, color-mix(in srgb, var(--deco-a) 20%, transparent), transparent 32rem),
+    linear-gradient(150deg, color-mix(in srgb, var(--color-bg-primary) 90%, var(--deco-c)), var(--color-bg-primary));
+}
+/* Dark celestial elements (Star, Night) carry a deeper, higher-contrast sky. */
+:root[data-theme="sp-gold"] .el-bg,
+:root[data-theme="sp-crimson"] .el-bg {
+  background:
+    radial-gradient(circle at 16% 20%, color-mix(in srgb, var(--deco-c) 42%, transparent), transparent 30rem),
+    radial-gradient(circle at 84% 10%, color-mix(in srgb, var(--deco-b) 40%, transparent), transparent 30rem),
+    radial-gradient(circle at 58% 94%, color-mix(in srgb, var(--deco-a) 26%, transparent), transparent 32rem),
+    var(--color-bg-primary);
+}
+
+.el-fall-layer { position: fixed; inset: 0; z-index: 250; pointer-events: none; }
+.el-bg .crystal-canvas, .el-fall-layer .crystal-canvas { display: block; width: 100%; height: 100%; }
+/* 2D element particle field — sits above the gradient/crystal, below content. */
+.el-particle-canvas { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+
+:root[data-theme^="sp-"] .sidebar { background: linear-gradient(to bottom, var(--color-bg-secondary) 0%, var(--color-bg-secondary) calc(100% - 84px), transparent 100%); }
+
+/* --- player bar: play button + progress meter --- */
+:root[data-theme^="sp-"] .pb-play {
+  border-color: transparent;
+  color: var(--color-text-inverse);
+  background: linear-gradient(135deg, var(--color-accent-primary), color-mix(in srgb, var(--color-accent-primary) 55%, var(--deco-b)));
+  box-shadow: 0 0 18px color-mix(in srgb, var(--deco-a) 40%, transparent);
+}
+:root[data-theme^="sp-"] .pb-progress { height: 22px; overflow: visible; }
+:root[data-theme^="sp-"] .pb-progress::before { height: 9px; border-radius: 999px; background: color-mix(in srgb, var(--color-accent-primary) 14%, #ffffff); border: 1px solid color-mix(in srgb, var(--color-accent-primary) 34%, transparent); }
+/* Progress fill: shared base + a distinct, element-natural animation.
+   These are organic (flicker / ripple / gust / twinkle), not a uniform
+   left→right band scroll; some effects deliberately spill past the bar. */
+:root[data-theme^="sp-"] .pb-progress-fill {
+  position: absolute; left: 0; height: 9px; border-radius: 999px; overflow: visible;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-accent-primary) 40%, var(--deco-b)), var(--color-accent-primary));
+  box-shadow: 0 0 16px color-mix(in srgb, var(--deco-a) 55%, transparent);
+}
+/* No shared head glow — the WebGL crystal marker is the head; a pseudo dot
+   here sat to the marker's left and fought it. Star/Fire add their own. */
+
+/* Star — comet-trajectory colour gradient (the tumbling marker is the head). */
+:root[data-theme="sp-gold"] .pb-progress-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--deco-b) 35%, transparent), color-mix(in srgb, var(--deco-a) 55%, var(--deco-b)) 55%, var(--deco-a));
+}
+
+/* Water — an occasional ripple sweeps the bar, then rests. */
+:root[data-theme="sp-ocean"] .pb-progress-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--deco-b) 55%, #fff), var(--deco-a));
+}
+:root[data-theme="sp-ocean"] .pb-progress-fill::before {
+  content: ""; position: absolute; inset: 0; border-radius: 999px; overflow: hidden;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.55) 10%, rgba(255,255,255,.18) 20%, transparent 32%);
+  background-size: 220% 100%; background-repeat: no-repeat;
+  animation: elRipple 3.6s ease-in-out infinite;
+}
+@keyframes elRipple {
+  0% { background-position: -45% 0; opacity: 0; }
+  12% { opacity: 1; }
+  46% { background-position: 140% 0; opacity: 1; }
+  58%, 100% { background-position: 140% 0; opacity: 0; }
+}
+
+/* Fire — burning: flickering body. */
+:root[data-theme="sp-scarlet"] .pb-progress-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--deco-c) 55%, transparent), var(--deco-b) 55%, var(--deco-a));
+  animation: elFire .5s ease-in-out infinite alternate;
+}
+@keyframes elFire { from { filter: brightness(.95); } to { filter: brightness(1.18); } }
+
+/* Wind — gusts of wisps sweep across in bursts, then ease off. */
+:root[data-theme="sp-sky"] .pb-progress-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--deco-b) 50%, #fff), var(--deco-a));
+}
+:root[data-theme="sp-sky"] .pb-progress-fill::before {
+  content: ""; position: absolute; inset: 0; border-radius: 999px; overflow: hidden;
+  background: repeating-linear-gradient(72deg, transparent 0 7px, rgba(255,255,255,.5) 7px 9px, transparent 9px 18px);
+  background-size: 220% 100%;
+  animation: elWind 2.6s ease-in-out infinite;
+}
+@keyframes elWind {
+  0% { background-position: -45% 0; opacity: 0; }
+  14% { opacity: .9; }
+  50% { background-position: 145% 0; opacity: .9; }
+  64%, 100% { background-position: 145% 0; opacity: 0; }
+}
+
+/* Earth — solid: static grain with a slow warm breathe, no scroll. */
+:root[data-theme="sp-earth"] .pb-progress-fill {
+  background:
+    repeating-linear-gradient(90deg, rgba(90,58,110,.12) 0 3px, transparent 3px 7px),
+    linear-gradient(90deg, color-mix(in srgb, var(--deco-b) 55%, #fff), var(--deco-a));
+  background-size: 14px 100%, 100% 100%;
+  animation: elEarth 3.4s ease-in-out infinite;
+}
+@keyframes elEarth { 0%, 100% { filter: brightness(.97); } 50% { filter: brightness(1.08); } }
+
+/* Night — twinkling stars along the fill + a slow glow pulse. */
+:root[data-theme="sp-crimson"] .pb-progress-fill {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--deco-b) 45%, transparent), var(--deco-a));
+  animation: elNight 2.6s ease-in-out infinite;
+}
+:root[data-theme="sp-crimson"] .pb-progress-fill::before {
+  content: ""; position: absolute; inset: 0; border-radius: 999px;
+  background:
+    radial-gradient(circle at 18% 50%, rgba(255,255,255,.9) 0 1px, transparent 2.5px),
+    radial-gradient(circle at 44% 50%, rgba(255,255,255,.72) 0 1px, transparent 2.5px),
+    radial-gradient(circle at 68% 50%, rgba(255,255,255,.9) 0 1px, transparent 2.5px),
+    radial-gradient(circle at 88% 50%, rgba(255,255,255,.7) 0 1px, transparent 2.5px);
+  animation: elNightTwinkle 2.2s ease-in-out infinite;
+}
+@keyframes elNightTwinkle { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
+@keyframes elNight {
+  0%, 100% { box-shadow: 0 0 10px color-mix(in srgb, var(--deco-a) 40%, transparent); }
+  50% { box-shadow: 0 0 22px color-mix(in srgb, var(--deco-a) 82%, transparent); }
+}
+
+/* SP progress marker wrapper (WebGL solid mounts inside — see CrystalProgressThumb). */
+:root[data-theme^="sp-"] .pb-progress-thumb {
+  width: 20px; height: 20px; opacity: 1; border: none; background: transparent;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  overflow: visible;
+}
+
+@media (prefers-reduced-motion: reduce) { .el-particle-canvas { display: none; } }

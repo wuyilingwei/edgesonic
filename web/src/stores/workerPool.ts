@@ -110,10 +110,10 @@ export const useWorkerPool = defineStore("workerPool", () => {
   const { level, edgesonicFetch, edgesonicPost, restUrl } = useAuth();
 
   // --- reactive state ---
-  // Opt-in: persists in localStorage so the user's preference survives reload.
-  // The Settings UI is the only place that flips this; the store reads it on
-  // start.
-  const enabled = ref(localStorage.getItem(STORAGE_KEY) !== "false");
+  // Opt-in (default off): only enabled once the user explicitly turns it on;
+  // the choice persists in localStorage so it survives reload. The Settings UI
+  // is the only place that flips this; the store reads it on start.
+  const enabled = ref(localStorage.getItem(STORAGE_KEY) === "true");
   // Run-time poll cadence; hydrated from features/list once on start so the
   // server-side default propagates. We never poll faster than 30s even if
   // mis-configured — feature_strings.worker_poll_interval_seconds is clamped

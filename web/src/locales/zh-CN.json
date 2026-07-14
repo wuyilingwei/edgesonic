@@ -17,6 +17,7 @@
   "app": {
     "groups": {
       "library": "媒体库",
+      "starred": "我喜欢",
       "management": "管理"
     },
     "menu": {
@@ -122,6 +123,8 @@
   "library": {
     "title": "媒体库",
     "breadcrumb": "媒体库",
+    "starredTitle": "我喜欢",
+    "starredBreadcrumb": "我喜欢",
     "playAlbum": "▶ 播放专辑",
     "loadFailed": "加载艺术家失败",
     "albumCount": "{n} 张专辑",
@@ -135,6 +138,13 @@
     "tabArtists": "歌手",
     "tabAlbums": "专辑",
     "tabSongs": "歌曲",
+    "tabStarred": "我喜欢",
+    "noStarred": "暂无我喜欢的内容",
+    "starredLoadFailed": "加载我喜欢失败",
+    "artistInfoTitle": "艺术家信息",
+    "artistInfoLoading": "正在自动搜刮艺术家信息…",
+    "artistInfoUnavailable": "暂无艺术家信息，请配置 Last.fm API 密钥后重试。",
+    "artistInfoOpen": "打开 Last.fm 主页",
     "loadMore": "加载更多",
     "colAlbum": "专辑",
     "editSong": "编辑歌曲信息",
@@ -404,8 +414,7 @@
         "black": "黑",
         "red": "红",
         "green": "绿",
-        "yellow": "黄",
-        "stardust": "星尘"
+        "yellow": "黄"
       },
       "externalTheme": {
         "title": "外部主题",

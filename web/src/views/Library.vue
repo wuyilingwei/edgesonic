@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
-import { useAuth, parseXmlAttrs, formatDuration } from "../api";
+import { useAuth, parseXmlAttrs, parseXmlInner, formatDuration } from "../api";
 import { usePlayerStore, type Track } from "../stores/player";
 import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
@@ -14,17 +14,41 @@ const { authFetch, writeTags, batchWriteTags, rescanSongs, coverArtUrl, download
 const player = usePlayerStore();
 const BATCH_MAX = 50;
 
+const props = withDefaults(defineProps<{ starredOnly?: boolean }>(), { starredOnly: false });
+const starredOnly = props.starredOnly;
+
 interface Artist { id: string; name: string; albumCount: string; }
 interface Album { id: string; name: string; artist: string; year: string; coverArt: string; songCount: string; }
 
-type Tab = "artists" | "albums" | "songs";
+type Tab = "artists" | "albums" | "songs" | "starred";
 // users land on tracks (the most common entry point). Switching tabs is still
 // honored for the current session, but a re-mount resets to songs.
-const tab = ref<Tab>("songs");
+const tab = ref<Tab>(props.starredOnly ? "starred" : "songs");
 
 const artists = ref<Artist[]>([]);
 const albums = ref<Album[]>([]);
 const songs = ref<Track[]>([]);
+
+interface StarredLists {
+  artists: Artist[];
+  albums: Album[];
+  songs: Track[];
+}
+const starredLists = ref<StarredLists>({ artists: [], albums: [], songs: [] });
+const starredLoading = ref(false);
+const starredLoaded = ref(false);
+let starredRequest = 0;
+
+interface ArtistInfo {
+  biography: string;
+  imageUrl: string;
+  lastFmUrl: string;
+  mbid: string;
+}
+const artistInfo = ref<ArtistInfo | null>(null);
+const artistInfoLoading = ref(false);
+const artistInfoError = ref("");
+let artistInfoRequest = 0;
 
 const currentArtist = ref<Artist | null>(null);
 const currentAlbum = ref<Album | null>(null);
@@ -32,9 +56,7 @@ const loading = ref(false);
 const error = ref("");
 
 // === Albums tab (paged grid over the whole library) ===
-// 153: bumped 48 → 100 per Rosmontis ("首次加载100首") — first page and every
-// subsequent page both use this size, so the requirement is met on load 1
-// and every infinite-scroll page after it stays consistent.
+// First page and every infinite-scroll page use the same size.
 const ALBUM_PAGE = 100;
 const allAlbums = ref<Album[]>([]);
 const albumOffset = ref(0);
@@ -137,9 +159,13 @@ function switchTab(next: Tab) {
   albums.value = [];
   songs.value = [];
   error.value = "";
+  artistInfo.value = null;
+  artistInfoError.value = "";
+  artistInfoRequest++;
   if (next === "artists" && !artists.value.length) loadArtists();
   if (next === "albums" && !allAlbums.value.length) loadMoreAlbums();
   if (next === "songs" && !allSongs.value.length) loadMoreSongs();
+  if (next === "starred") void loadStarred(true);
 }
 
 async function loadArtists() {
@@ -155,6 +181,46 @@ async function loadArtists() {
     artists.value = [];
   }
   loading.value = false;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;|&#39;/g, "'");
+}
+
+function artistInfoField(xml: string, tag: string): string {
+  return decodeXmlEntities(parseXmlInner(xml, tag).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+async function loadStarred(force = false) {
+  if (starredLoading.value || (!force && starredLoaded.value)) return;
+  const request = ++starredRequest;
+  starredLoading.value = true;
+  error.value = "";
+  try {
+    const xml = await authFetch("getStarred2");
+    if (/status="failed"/.test(xml)) throw new Error("getStarred2 failed");
+    if (request !== starredRequest) return;
+    starredLists.value = {
+      artists: parseXmlAttrs(xml, "artist").map((a) => ({
+        id: a.id || "", name: a.name || "", albumCount: a.albumCount || "",
+      })),
+      albums: parseXmlAttrs(xml, "album").map((a) => ({
+        id: a.id || "", name: a.name || "", artist: a.artist || "", year: a.year || "",
+        coverArt: a.coverArt || "", songCount: a.songCount || "",
+      })),
+      songs: parseXmlAttrs(xml, "song").map(mapSongRow),
+    };
+    starredLoaded.value = true;
+  } catch {
+    if (request === starredRequest) error.value = t("library.starredLoadFailed");
+  } finally {
+    if (request === starredRequest) starredLoading.value = false;
+  }
 }
 
 async function loadMoreAlbums() {
@@ -256,7 +322,10 @@ async function openArtist(artist: Artist) {
   currentArtist.value = artist;
   currentAlbum.value = null;
   songs.value = [];
+  artistInfo.value = null;
+  artistInfoError.value = "";
   loading.value = true;
+  void loadArtistInfo(artist);
   try {
     const xml = await authFetch("getArtist", { id: artist.id });
     albums.value = parseXmlAttrs(xml, "album").map((a) => ({
@@ -265,6 +334,29 @@ async function openArtist(artist: Artist) {
     }));
   } catch { albums.value = []; }
   loading.value = false;
+}
+
+async function loadArtistInfo(artist: Artist) {
+  const request = ++artistInfoRequest;
+  artistInfoLoading.value = true;
+  artistInfoError.value = "";
+  try {
+    const xml = await authFetch("getArtistInfo", { id: artist.id, count: "1" });
+    if (/status="failed"/.test(xml)) throw new Error("artist info unavailable");
+    if (request !== artistInfoRequest) return;
+    const info: ArtistInfo = {
+      biography: artistInfoField(xml, "biography"),
+      imageUrl: artistInfoField(xml, "largeImageUrl") || artistInfoField(xml, "mediumImageUrl"),
+      lastFmUrl: artistInfoField(xml, "lastFmUrl"),
+      mbid: artistInfoField(xml, "musicBrainzId"),
+    };
+    artistInfo.value = info.biography || info.imageUrl || info.lastFmUrl || info.mbid ? info : null;
+    if (!artistInfo.value) artistInfoError.value = t("library.artistInfoUnavailable");
+  } catch {
+    if (request === artistInfoRequest) artistInfoError.value = t("library.artistInfoUnavailable");
+  } finally {
+    if (request === artistInfoRequest) artistInfoLoading.value = false;
+  }
 }
 
 async function openAlbum(album: Album) {
@@ -290,6 +382,10 @@ function playSong(i: number) {
 
 function playFromAll(i: number) {
   player.setQueue(allSongs.value, i);
+}
+
+function playFromStarred(i: number) {
+  player.setQueue(starredLists.value.songs, i);
 }
 
 function playAlbumFromStart() {
@@ -479,6 +575,9 @@ function backToList() {
   currentAlbum.value = null;
   albums.value = [];
   songs.value = [];
+  artistInfo.value = null;
+  artistInfoError.value = "";
+  artistInfoRequest++;
 }
 
 function backToAlbums() {
@@ -494,6 +593,7 @@ const songsHintFaded = ref(false);
 onMounted(() => {
   if (tab.value === "artists") loadArtists();
   else if (tab.value === "albums") loadMoreAlbums();
+  else if (tab.value === "starred") void loadStarred();
   else loadMoreSongs();
   setTimeout(() => { songsHintFaded.value = true; }, 5000);
   // set up the infinite-scroll observer now that the first sentinel
@@ -515,6 +615,10 @@ onMounted(() => {
 watch(() => tab.value, () => {
   refreshTargets();
 }, { flush: "post" });
+
+watch(() => player.starred, () => {
+  if (tab.value === "starred") void loadStarred(true);
+});
 
 onUnmounted(() => {
   if (io) { io.disconnect(); io = null; }
@@ -756,24 +860,24 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
     <div class="page-header">
       <div>
         <div class="mono-label breadcrumb">
-          <a @click="backToList">{{ t("library.breadcrumb") }}</a>
+          <a @click="backToList">{{ starredOnly ? t("library.starredBreadcrumb") : t("library.breadcrumb") }}</a>
           <template v-if="currentArtist"> / <a @click="backToAlbums">{{ currentArtist.name }}</a></template>
           <template v-if="currentAlbum"> / <span>{{ currentAlbum.name }}</span></template>
         </div>
-        <h1 class="page-title">{{ currentAlbum?.name || currentArtist?.name || t("library.title") }}</h1>
+        <h1 class="page-title">{{ currentAlbum?.name || currentArtist?.name || (starredOnly ? t("library.starredTitle") : t("library.title")) }}</h1>
       </div>
       <button v-if="currentAlbum && songs.length" class="btn-primary" @click="playAlbumFromStart">{{ t("library.playAlbum") }}</button>
     </div>
 
     <!-- Library-wide search — always visible, independent of tabs/drilldown. -->
-    <div class="library-search">
+    <div v-if="!starredOnly" class="library-search">
       <input v-model="searchQuery" class="form-input search-input" :placeholder="t('library.searchPlaceholder')" />
       <button v-if="searchQuery" class="search-clear" :title="t('common.close')" @click="clearSearch">✕</button>
     </div>
 
     <template v-if="!searchResults">
     <!-- View tabs (hidden while drilled into an artist/album) -->
-    <div v-if="!currentArtist && !currentAlbum" class="view-tabs">
+    <div v-if="!starredOnly && !currentArtist && !currentAlbum" class="view-tabs">
       <button :class="['view-tab', { active: tab === 'songs' }]" @click="switchTab('songs')">{{ t("library.tabSongs") }}</button>
       <button :class="['view-tab', { active: tab === 'albums' }]" @click="switchTab('albums')">{{ t("library.tabAlbums") }}</button>
       <button :class="['view-tab', { active: tab === 'artists' }]" @click="switchTab('artists')">{{ t("library.tabArtists") }}</button>
@@ -819,7 +923,28 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
     </div>
 
     <!-- Drill-down: albums of an artist -->
-    <div v-else-if="currentArtist" class="album-grid">
+    <div v-else-if="currentArtist" class="artist-detail">
+      <div class="artist-info card">
+        <img
+          v-if="artistInfo?.imageUrl"
+          class="artist-info-image"
+          :src="artistInfo.imageUrl"
+          :alt="currentArtist.name"
+          loading="lazy"
+          @error="artistInfo.imageUrl = ''"
+        />
+        <div class="artist-info-body">
+          <div class="search-section-title">{{ t("library.artistInfoTitle") }}</div>
+          <div v-if="artistInfoLoading" class="mono-label">{{ t("library.artistInfoLoading") }}</div>
+          <p v-if="artistInfo?.biography" class="artist-biography">{{ artistInfo.biography }}</p>
+          <div v-if="artistInfo?.mbid" class="mono-label">MBID: {{ artistInfo.mbid }}</div>
+          <a v-if="artistInfo?.lastFmUrl" class="artist-info-link" :href="artistInfo.lastFmUrl" target="_blank" rel="noopener noreferrer">
+            {{ t("library.artistInfoOpen") }}
+          </a>
+          <div v-if="artistInfoError" class="mono-label artist-info-error">{{ artistInfoError }}</div>
+        </div>
+      </div>
+      <div class="album-grid">
       <div v-for="al in albums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
         <div class="album-cover">
           <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
@@ -834,11 +959,88 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
         <div class="corner corner-tr"></div>
         <div class="corner corner-bl"></div>
       </div>
+    </div>
       <div v-if="loading" class="empty-state" style="grid-column: 1/-1">{{ t("common.loading") }}</div>
       <div v-else-if="!albums.length" class="empty-state" style="grid-column: 1/-1">
         <div class="empty-state-icon">◌</div>
         <div>{{ t("library.noAlbums") }}</div>
       </div>
+    </div>
+
+    <!-- Tab: starred -->
+    <div v-else-if="tab === 'starred'" class="starred-view">
+      <div v-if="starredLoading" class="empty-state">{{ t("common.loading") }}</div>
+      <template v-else>
+        <div v-if="starredLists.artists.length" class="search-section">
+          <div class="search-section-title">{{ t("library.tabArtists") }}</div>
+          <div class="artist-grid">
+            <div v-for="a in starredLists.artists" :key="a.id" class="card hoverable artist-card" @click="openArtist(a)">
+              <div class="artist-glyph">{{ a.name.charAt(0).toUpperCase() || "?" }}</div>
+              <div class="artist-name">{{ a.name }}</div>
+              <div class="mono-label" v-if="a.albumCount">{{ t("library.albumCount", { n: a.albumCount }) }}</div>
+              <div class="corner corner-tr"></div>
+              <div class="corner corner-bl"></div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="starredLists.albums.length" class="search-section">
+          <div class="search-section-title">{{ t("library.tabAlbums") }}</div>
+          <div class="album-grid">
+            <div v-for="al in starredLists.albums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
+              <div class="album-cover">
+                <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
+                <span v-else class="album-cover-placeholder">♪</span>
+              </div>
+              <div class="album-body">
+                <div class="album-name">{{ al.name }}</div>
+                <div class="mono-label">{{ al.artist || "—" }}<template v-if="al.songCount"> · {{ t("library.trackCount", { n: al.songCount }) }}</template></div>
+              </div>
+              <button class="card-share-btn" :title="t('library.share')" @click.stop="openShare('album', al.id, al.name)">⤴</button>
+              <div class="corner corner-tr"></div>
+              <div class="corner corner-bl"></div>
+            </div>
+          </div>
+        </div>
+
+        <div v-if="starredLists.songs.length" class="search-section">
+          <div class="search-section-title">{{ t("library.tabSongs") }}</div>
+          <div class="table-wrap song-table" style="--grid-cols: 36px 2fr 1.5fr 1fr 64px 32px">
+            <div class="table-header">
+              <span>#</span><span>{{ t("library.colTitle") }}</span><span>{{ t("library.colAlbum") }}</span><span>{{ t("library.colArtist") }}</span><span>{{ t("library.colTime") }}</span><span></span>
+            </div>
+            <div
+              v-for="(s, i) in starredLists.songs"
+              :key="s.id"
+              class="table-row song-row"
+              :class="{ playing: player.current?.id === s.id }"
+              @click="playFromStarred(i)"
+            >
+              <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
+              <span class="song-title">{{ s.title }}</span>
+              <span class="song-album">{{ s.album }}</span>
+              <span class="song-artist">{{ s.artist }}</span>
+              <span class="song-time">{{ formatDuration(s.duration) }}</span>
+              <SongRowMenu
+                :song-id="s.id"
+                :title="s.title"
+                :is-admin="isAdmin"
+                :open="openMenuId === s.id"
+                @toggle="toggleRowMenu(s.id)"
+                @close="closeRowMenu"
+                @edit="openEditor(s)"
+                @share="openShare('song', s.id, s.title)"
+                @add-playlist="openAddToPlaylist(s.id, s.title)"
+              />
+            </div>
+          </div>
+        </div>
+
+        <div v-if="!starredLists.artists.length && !starredLists.albums.length && !starredLists.songs.length" class="empty-state">
+          <div class="empty-state-icon">♡</div>
+          <div>{{ t("library.noStarred") }}</div>
+        </div>
+      </template>
     </div>
 
     <!-- Tab: artists -->
@@ -1278,6 +1480,24 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
+.artist-detail { display: flex; flex-direction: column; gap: 1rem; }
+.artist-info {
+  display: flex; gap: 1rem; align-items: flex-start;
+  padding: 1rem;
+}
+.artist-info-image {
+  width: 120px; height: 120px; flex: 0 0 120px;
+  object-fit: cover; border: 1px solid var(--color-border-subtle);
+}
+.artist-info-body { min-width: 0; }
+.artist-biography {
+  margin: 0 0 0.7rem; color: var(--color-text-secondary);
+  line-height: 1.6; white-space: pre-wrap;
+}
+.artist-info-link { color: var(--color-accent-primary); font-family: var(--font-mono); font-size: var(--fs-sm); }
+.artist-info-error { color: var(--color-text-muted); }
+.starred-view { display: flex; flex-direction: column; gap: 0.2rem; }
+
 /* albums */
 .album-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 1rem; align-items: start; }
 .album-card { padding: 0; overflow: hidden; }
@@ -1506,5 +1726,11 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 .create-new-row:hover {
   background: var(--color-bg-tertiary);
   border-color: var(--color-accent-primary);
+}
+
+@media (max-width: 560px) {
+  .view-tab { padding-left: 0.7rem; padding-right: 0.7rem; font-size: var(--fs-xs); }
+  .artist-info { flex-direction: column; }
+  .artist-info-image { width: 88px; height: 88px; flex-basis: 88px; }
 }
 </style>

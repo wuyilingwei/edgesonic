@@ -1,0 +1,118 @@
+/* =====================================================
+   decor.css — per-element decorative layer
+   Applies to BOTH the static (color-*) and animated (sp-*) variant of each
+   五维介质 element, keyed off the [data-theme$="element"] suffix so one rule
+   covers the pair. Reads each theme's --deco-a/b/c signature triad from
+   palette.css. Star (gold) & Night (crimson) are dark celestial themes and
+   get the full treatment; Water/Fire/Wind/Earth are light and get a softer
+   tinted lift that keeps text legible. Each theme gets its own atmosphere,
+   surfaces, buttons and glass rather than just an accent swap.
+   ===================================================== */
+
+/* ---------- body atmosphere ---------- */
+:root[data-theme$="gold"] body,
+:root[data-theme$="crimson"] body {
+  background:
+    radial-gradient(circle at 12% 8%, color-mix(in srgb, var(--deco-a) 22%, transparent), transparent 24rem),
+    radial-gradient(circle at 86% 12%, color-mix(in srgb, var(--deco-b) 30%, transparent), transparent 28rem),
+    radial-gradient(circle at 55% 96%, color-mix(in srgb, var(--deco-c) 26%, transparent), transparent 30rem),
+    var(--color-bg-primary);
+  background-attachment: fixed;
+}
+:root[data-theme$="ocean"] body,
+:root[data-theme$="scarlet"] body,
+:root[data-theme$="sky"] body,
+:root[data-theme$="earth"] body {
+  background:
+    radial-gradient(circle at 14% 6%, color-mix(in srgb, var(--deco-a) 16%, transparent), transparent 26rem),
+    radial-gradient(circle at 88% 14%, color-mix(in srgb, var(--deco-c) 15%, transparent), transparent 24rem),
+    radial-gradient(circle at 60% 98%, color-mix(in srgb, var(--deco-b) 11%, transparent), transparent 30rem),
+    var(--color-bg-primary);
+  background-attachment: fixed;
+}
+
+/* ---------- navbar + player-bar glass ---------- */
+:root[data-theme$="gold"] .navbar, :root[data-theme$="gold"] .player-bar,
+:root[data-theme$="crimson"] .navbar, :root[data-theme$="crimson"] .player-bar {
+  background: color-mix(in srgb, var(--color-bg-primary) 76%, transparent);
+  border-color: color-mix(in srgb, var(--deco-a) 22%, transparent);
+  box-shadow: 0 10px 34px rgba(0,0,0,.34), 0 0 26px color-mix(in srgb, var(--deco-b) 18%, transparent);
+  backdrop-filter: blur(14px);
+}
+:root[data-theme$="ocean"] .navbar, :root[data-theme$="ocean"] .player-bar,
+:root[data-theme$="scarlet"] .navbar, :root[data-theme$="scarlet"] .player-bar,
+:root[data-theme$="sky"] .navbar, :root[data-theme$="sky"] .player-bar,
+:root[data-theme$="earth"] .navbar, :root[data-theme$="earth"] .player-bar {
+  background: color-mix(in srgb, var(--color-bg-secondary) 84%, transparent);
+  border-color: color-mix(in srgb, var(--deco-a) 26%, transparent);
+  box-shadow: 0 10px 30px rgba(0,0,0,.07), 0 0 22px color-mix(in srgb, var(--deco-a) 12%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+/* ---------- cards / sections / modals ---------- */
+:root[data-theme$="gold"] .card,
+:root[data-theme$="gold"] .settings-section,
+:root[data-theme$="gold"] .modal,
+:root[data-theme$="gold"] .browser-card,
+:root[data-theme$="gold"] .sub-section,
+:root[data-theme$="crimson"] .card,
+:root[data-theme$="crimson"] .settings-section,
+:root[data-theme$="crimson"] .modal,
+:root[data-theme$="crimson"] .browser-card,
+:root[data-theme$="crimson"] .sub-section {
+  background: linear-gradient(150deg, color-mix(in srgb, var(--color-bg-secondary) 88%, var(--deco-b)), color-mix(in srgb, var(--color-bg-primary) 80%, transparent));
+  border-color: color-mix(in srgb, var(--deco-a) 18%, transparent);
+  box-shadow: 0 18px 48px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.06);
+}
+:root[data-theme$="ocean"] .card,
+:root[data-theme$="ocean"] .browser-card,
+:root[data-theme$="scarlet"] .card,
+:root[data-theme$="scarlet"] .browser-card,
+:root[data-theme$="sky"] .card,
+:root[data-theme$="sky"] .browser-card,
+:root[data-theme$="earth"] .card,
+:root[data-theme$="earth"] .browser-card {
+  border-color: color-mix(in srgb, var(--deco-a) 30%, transparent);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--deco-b) 12%, transparent);
+}
+:root[data-theme$="ocean"] .card.hoverable:hover,
+:root[data-theme$="scarlet"] .card.hoverable:hover,
+:root[data-theme$="sky"] .card.hoverable:hover,
+:root[data-theme$="earth"] .card.hoverable:hover {
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--deco-b) 22%, transparent);
+}
+
+/* ---------- primary buttons (all elements) ----------
+   Gradient toward deco-b for richness; keeps each theme's own text-inverse
+   so contrast is preserved even on the light yellow-based accents. */
+:root[data-theme$="gold"] .btn-primary,
+:root[data-theme$="ocean"] .btn-primary,
+:root[data-theme$="scarlet"] .btn-primary,
+:root[data-theme$="sky"] .btn-primary,
+:root[data-theme$="earth"] .btn-primary,
+:root[data-theme$="crimson"] .btn-primary {
+  background: linear-gradient(135deg, var(--color-accent-primary), color-mix(in srgb, var(--color-accent-primary) 62%, var(--deco-b)));
+  border-color: transparent;
+  color: var(--color-text-inverse);
+}
+:root[data-theme$="gold"] .btn-primary:hover:not(:disabled),
+:root[data-theme$="ocean"] .btn-primary:hover:not(:disabled),
+:root[data-theme$="scarlet"] .btn-primary:hover:not(:disabled),
+:root[data-theme$="sky"] .btn-primary:hover:not(:disabled),
+:root[data-theme$="earth"] .btn-primary:hover:not(:disabled),
+:root[data-theme$="crimson"] .btn-primary:hover:not(:disabled) {
+  box-shadow: 0 0 22px color-mix(in srgb, var(--deco-a) 55%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-accent-primary) 88%, #fff), var(--deco-b));
+}
+:root[data-theme$="gold"] .btn-secondary:hover:not(:disabled),
+:root[data-theme$="ocean"] .btn-secondary:hover:not(:disabled),
+:root[data-theme$="scarlet"] .btn-secondary:hover:not(:disabled),
+:root[data-theme$="sky"] .btn-secondary:hover:not(:disabled),
+:root[data-theme$="earth"] .btn-secondary:hover:not(:disabled),
+:root[data-theme$="crimson"] .btn-secondary:hover:not(:disabled) {
+  border-color: var(--deco-a);
+  background: color-mix(in srgb, var(--deco-a) 16%, transparent);
+}
+
+/* ---------- accent links / active nav underline pick up deco-a already via
+   --color-accent-primary; nothing extra needed. ---------- */

@@ -1,21 +1,34 @@
 // Catalog of built-in themes. Importing this module (done once from
 // theme.ts) registers the plain palette themes immediately — they're just
 // a few bytes of metadata, no behaviour, so there's no reason to defer
-// them. Stardust has real weight (two components + its own stylesheet), so
-// it's loaded lazily via dynamic import, exactly the same
+// them. The animated SP themes have real weight (WebGL + particles + their
+// own stylesheet), so they're loaded lazily via dynamic import, the same
 // "import a module that calls registerTheme" path `loadExternalTheme` uses
 // for a runtime URL — see registry.ts.
 import { registerTheme, getTheme } from "./registry";
 
-export const BUILTIN_THEME_IDS = ["black", "red", "green", "yellow", "stardust"] as const;
+export const THEME_PICKER_ROWS = [
+  ["black", "color-gold", "color-ocean", "color-scarlet", "color-sky", "color-earth", "color-crimson"],
+  ["white", "sp-gold", "sp-ocean", "sp-scarlet", "sp-sky", "sp-earth", "sp-crimson"],
+] as const;
+export const BUILTIN_THEME_IDS = THEME_PICKER_ROWS.flat();
 
 registerTheme({ id: "black", label: "Black", swatchPreview: "#0a0a0b" });
-registerTheme({ id: "red", label: "Red", swatchPreview: "#e53d3d" });
-registerTheme({ id: "green", label: "Green", swatchPreview: "#1ed760" });
-registerTheme({ id: "yellow", label: "Yellow", swatchPreview: "#f5c518" });
+registerTheme({ id: "white", label: "White", swatchPreview: "#f7f8fc" });
+registerTheme({ id: "color-gold", label: "Gold", swatchPreview: "#ffd64a" });
+registerTheme({ id: "color-scarlet", label: "Scarlet", swatchPreview: "#f43d4f" });
+registerTheme({ id: "color-ocean", label: "Ocean", swatchPreview: "#65c7ec" });
+registerTheme({ id: "color-sky", label: "Sky", swatchPreview: "#65bd8c" });
+registerTheme({ id: "color-earth", label: "Earth", swatchPreview: "#df9541" });
+registerTheme({ id: "color-crimson", label: "Crimson", swatchPreview: "#bf3967" });
 
 const lazyBuiltins: Record<string, () => Promise<unknown>> = {
-  stardust: () => import("./stardust"),
+  "sp-gold": () => import("./elements"),
+  "sp-scarlet": () => import("./elements"),
+  "sp-ocean": () => import("./elements"),
+  "sp-sky": () => import("./elements"),
+  "sp-earth": () => import("./elements"),
+  "sp-crimson": () => import("./elements"),
 };
 
 /** No-ops once a theme is already registered (covers both "already lazy-loaded" and "not a lazy built-in"). */

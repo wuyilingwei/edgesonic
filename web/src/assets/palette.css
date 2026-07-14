@@ -48,9 +48,9 @@
 }
 
 /* --- Theme variants ---
-   "black" (default) is the palette above. Red/green/yellow are light themes
-   with white base surfaces and a single accent; Stardust is a black celestial
-   theme with its own geometry treatment. */
+   "black" (default) is the palette above. The element themes (color-* static
+   and sp-* animated) each set their own surfaces, accent and --deco triad
+   below; the animated variants add a WebGL background and progress marker. */
 :root[data-theme="red"] {
   --color-bg-primary: #fffafa;
   --color-bg-secondary: #fff1f1;
@@ -108,33 +108,32 @@
   --glow: 0 0 20px rgba(245, 197, 24, 0.25);
 }
 
-/* "stardust" is a fuller reskin, not just an accent retint: a black celestial
-   theme for the Stardust virtual singer, keyed to gray-white hair, cobalt-blue
-   glow, yellow eyes/star light, dark blue dress tones, and octahedral geometry. */
-:root[data-theme="stardust"] {
-  --color-bg-primary: #050611;
-  --color-bg-secondary: #0b1024;
-  --color-bg-tertiary: #12193a;
-  --color-bg-elevated: rgba(15, 21, 48, 0.84);
-  --color-bg-overlay: rgba(5, 6, 17, 0.72);
-
-  --color-text-primary: #f4f7ff;
-  --color-text-secondary: #c4ccff;
-  --color-text-muted: #7f8ac4;
-  --color-text-inverse: #050611;
-
-  --color-accent-primary: #4d5dff;
-  --color-accent-dim: rgba(77, 93, 255, 0.2);
-  --color-stardust-blue: #1c7bff;
-  --color-stardust-violet: #7a4dff;
-  --color-stardust-gold: #ffd64a;
-
-  --color-border-subtle: rgba(77, 93, 255, 0.18);
-  --color-border-default: rgba(77, 93, 255, 0.34);
-  --color-border-strong: rgba(77, 93, 255, 0.56);
-
-  --glow: 0 0 30px rgba(28, 123, 255, 0.36), 0 0 20px rgba(255, 214, 74, 0.28);
+:root[data-theme="white"] {
+  --color-bg-primary: #f7f8fc;
+  --color-bg-secondary: #ffffff;
+  --color-bg-tertiary: #e9edf6;
+  --color-bg-elevated: #ffffff;
+  --color-text-primary: #182033;
+  --color-text-secondary: #536178;
+  --color-text-muted: #8190a6;
+  --color-text-inverse: #ffffff;
+  --color-accent-primary: #374d7a;
+  --color-accent-dim: rgba(55, 77, 122, 0.16);
+  --color-border-subtle: rgba(55, 77, 122, 0.14);
+  --color-border-default: rgba(55, 77, 122, 0.26);
+  --color-border-strong: rgba(55, 77, 122, 0.42);
 }
+
+/* --deco-a/b/c: each element's three signature colours.
+   Shared by decor.css (surface/glow treatment for both color-* and sp-*)
+   and elements.css (the SP crystal-drift sky gradient). Star uses a
+   gold / cobalt / violet triad. */
+:root[data-theme="color-gold"], :root[data-theme="sp-gold"] { --color-bg-primary: #080a18; --color-bg-secondary: #121a38; --color-bg-tertiary: #1a2550; --color-bg-elevated: #172042; --color-text-primary: #f5f7ff; --color-text-secondary: #c6d0ff; --color-text-muted: #8493cf; --color-text-inverse: #080a18; --color-accent-primary: #d7ae37; --color-accent-dim: rgba(215,174,55,.2); --color-border-subtle: rgba(215,174,55,.18); --color-border-default: rgba(215,174,55,.34); --color-border-strong: rgba(215,174,55,.52); --deco-a: #ffd64a; --deco-b: #1c7bff; --deco-c: #7a4dff; }
+:root[data-theme="color-scarlet"], :root[data-theme="sp-scarlet"] { --color-bg-primary: #fffafb; --color-bg-secondary: #ffffff; --color-bg-tertiary: #fff0f2; --color-bg-elevated: #ffffff; --color-text-primary: #3a1b27; --color-text-secondary: #8e4558; --color-text-muted: #b77b89; --color-text-inverse: #ffffff; --color-accent-primary: #e65361; --color-accent-dim: rgba(230,83,97,.16); --color-border-subtle: rgba(230,83,97,.18); --color-border-default: rgba(230,83,97,.34); --color-border-strong: rgba(246,183,44,.7); --deco-a: #ff5a3c; --deco-b: #ff9d3d; --deco-c: #b0324e; }
+:root[data-theme="color-ocean"], :root[data-theme="sp-ocean"] { --color-bg-primary: #f7fcff; --color-bg-secondary: #ffffff; --color-bg-tertiary: #edf8ff; --color-bg-elevated: #ffffff; --color-text-primary: #23465e; --color-text-secondary: #5c88a7; --color-text-muted: #93b3c9; --color-text-inverse: #ffffff; --color-accent-primary: #65c7ec; --color-accent-dim: rgba(101,199,236,.18); --color-border-subtle: rgba(101,199,236,.24); --color-border-default: rgba(231,154,184,.5); --color-border-strong: rgba(101,199,236,.72); --deco-a: #65c7ec; --deco-b: #2f8fd0; --deco-c: #f2a8c6; }
+:root[data-theme="color-sky"], :root[data-theme="sp-sky"] { --color-bg-primary: #f8fffa; --color-bg-secondary: #ffffff; --color-bg-tertiary: #edf9f0; --color-bg-elevated: #ffffff; --color-text-primary: #244937; --color-text-secondary: #5c8970; --color-text-muted: #91b89e; --color-text-inverse: #ffffff; --color-accent-primary: #65bd8c; --color-accent-dim: rgba(101,189,140,.18); --color-border-subtle: rgba(101,189,140,.22); --color-border-default: rgba(101,189,140,.42); --color-border-strong: rgba(180,221,193,.8); --deco-a: #65bd8c; --deco-b: #3fb6a0; --deco-c: #c5e6a0; }
+:root[data-theme="color-earth"], :root[data-theme="sp-earth"] { --color-bg-primary: #fff9e8; --color-bg-secondary: #fffef9; --color-bg-tertiary: #fff0be; --color-bg-elevated: #ffffff; --color-text-primary: #403142; --color-text-secondary: #6e5364; --color-text-muted: #a78982; --color-text-inverse: #ffffff; --color-accent-primary: #ffc45a; --color-accent-dim: rgba(255,196,90,.2); --color-border-subtle: rgba(255,196,90,.28); --color-border-default: rgba(219,142,49,.48); --color-border-strong: rgba(65,48,67,.62); --deco-a: #ffc45a; --deco-b: #e0a233; --deco-c: #5a3a6e; }
+:root[data-theme="color-crimson"], :root[data-theme="sp-crimson"] { --color-bg-primary: #25183e; --color-bg-secondary: #332252; --color-bg-tertiary: #493168; --color-bg-elevated: #3b285c; --color-text-primary: #faf6ff; --color-text-secondary: #dacdf5; --color-text-muted: #ad9ace; --color-text-inverse: #181024; --color-accent-primary: #9b78e5; --color-accent-dim: rgba(155,120,229,.24); --color-border-subtle: rgba(155,120,229,.28); --color-border-default: rgba(155,120,229,.46); --color-border-strong: rgba(224,149,207,.64); --deco-a: #9b78e5; --deco-b: #7a2a68; --deco-c: #c9a8f0; }
 
 /* .navbar/.player-bar paint hardcoded rgba() backgrounds, so non-default
    themes need explicit glass overrides. */
@@ -149,44 +148,6 @@
   box-shadow: 0 10px 34px rgba(0, 0, 0, 0.06);
 }
 
-:root[data-theme="stardust"] .navbar,
-:root[data-theme="stardust"] .player-bar {
-  background: rgba(5, 6, 17, 0.76);
-  border-color: rgba(255, 214, 74, 0.18);
-  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.32), 0 0 26px rgba(22, 120, 255, 0.12);
-}
-
-:root[data-theme="stardust"] body {
-  background:
-    radial-gradient(circle at 12% 8%, rgba(255, 214, 74, 0.2), transparent 24rem),
-    radial-gradient(circle at 86% 14%, rgba(28, 123, 255, 0.34), transparent 28rem),
-    radial-gradient(circle at 55% 95%, rgba(122, 77, 255, 0.3), transparent 30rem),
-    var(--color-bg-primary);
-}
-
-:root[data-theme="stardust"] .card,
-:root[data-theme="stardust"] .settings-section,
-:root[data-theme="stardust"] .modal,
-:root[data-theme="stardust"] .browser-card {
-  background: linear-gradient(145deg, rgba(15,21,48,0.9), rgba(5,6,17,0.78));
-  border-color: rgba(255, 214, 74, 0.16);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255,255,255,0.08);
-  backdrop-filter: blur(16px);
-}
-
-:root[data-theme="stardust"] .btn-primary {
-  background: linear-gradient(135deg, var(--color-accent-primary), var(--color-stardust-violet));
-  border-color: transparent;
-  color: #fffefd;
-}
-:root[data-theme="stardust"] .btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, #4d75ff, #735ce0);
-  box-shadow: var(--glow);
-}
-:root[data-theme="stardust"] .btn-secondary:hover:not(:disabled) {
-  background: rgba(255, 214, 74, 0.2);
-  border-color: var(--color-stardust-gold);
-}
 
 /* --- Reset & Base --- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -205,6 +166,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 }
+
+body .pb-progress-thumb { opacity: 1 !important; }
 
 a { color: var(--color-accent-primary); text-decoration: none; transition: color 0.2s; }
 a:hover { color: var(--color-text-secondary); }
