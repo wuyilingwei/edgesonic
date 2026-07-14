@@ -13,20 +13,7 @@ interface Credit {
   license?: string;
 }
 
-interface Dependency {
-  name: string;
-  version: string;
-  url: string;
-  license: string;
-}
-
 const credits: Credit[] = [
-  {
-    name: "FFmpeg",
-    description: "Multimedia framework for audio processing and transcoding",
-    url: "https://ffmpeg.org",
-    license: "LGPL-2.1+ / GPL-2+"
-  },
   {
     name: "Music Tag Web",
     description: "Web-based music metadata editor",
@@ -38,45 +25,6 @@ const credits: Credit[] = [
     description: "Subsonic-compatible music server",
     url: "https://www.navidrome.org",
     license: "GPL-3.0"
-  },
-];
-
-const dependencies: Dependency[] = [
-  {
-    name: "Vue.js",
-    version: "3.5.34",
-    url: "https://vuejs.org",
-    license: "MIT"
-  },
-  {
-    name: "Vue Router",
-    version: "5.0.7",
-    url: "https://router.vuejs.org",
-    license: "MIT"
-  },
-  {
-    name: "Pinia",
-    version: "3.0.4",
-    url: "https://pinia.vuejs.org",
-    license: "MIT"
-  },
-  {
-    name: "Vue I18n",
-    version: "11.4.5",
-    url: "https://vue-i18n.intlify.dev",
-    license: "MIT"
-  },
-  {
-    name: "FFmpeg.wasm",
-    version: "0.12.15",
-    url: "https://github.com/ffmpegwasm/ffmpeg.wasm",
-    license: "LGPL-2.1"
-  },
-  {
-    name: "music-metadata",
-    version: "11.13.0",
-    url: "https://github.com/Borewit/music-metadata",
-    license: "MIT"
   },
 ];
 </script>
@@ -130,7 +78,7 @@ const dependencies: Dependency[] = [
 
     <!-- References Section -->
     <section class="about-section">
-      <h2>Referenced Projects</h2>
+      <h2>Credits & References</h2>
       <p class="section-description">
         EdgeSonic is inspired by and compatible with these excellent projects:
       </p>
@@ -143,43 +91,19 @@ const dependencies: Dependency[] = [
       </div>
     </section>
 
-    <!-- Dependencies Section -->
+    <!-- Compatibility Section -->
     <section class="about-section">
-      <h2>Core Dependencies</h2>
-      <p class="section-description">
-        Built with these wonderful open-source libraries:
-      </p>
-      <div class="deps-list">
-        <div v-for="dep in dependencies" :key="dep.name" class="dep-item">
-          <div class="dep-header">
-            <h3>
-              <a :href="dep.url" target="_blank" rel="noopener noreferrer">{{ dep.name }}</a>
-            </h3>
-            <span class="dep-version">{{ dep.version }}</span>
-          </div>
-          <p class="dep-license">{{ dep.license }}</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- Subsonic Compatibility -->
-    <section class="about-section">
-      <h2>Subsonic Compatibility</h2>
+      <h2>Compatibility</h2>
       <div class="compatibility-box">
         <p>
-          EdgeSonic implements the
-          <a href="https://www.subsonic.org/pages/api.jsp" target="_blank" rel="noopener noreferrer">
-            Subsonic REST API
-          </a>
-          and extends it with
+          <strong>Subsonic API v1.16.1 compatible</strong>
+        </p>
+        <p>
+          EdgeSonic implements the Subsonic REST API (v1.16.1) and extends it with
           <a href="https://opensubsonic.netlify.app" target="_blank" rel="noopener noreferrer">
             OpenSubsonic
           </a>
           protocol enhancements.
-        </p>
-        <p>
-          This means you can use EdgeSonic with any Subsonic-compatible client, including
-          <strong>music-tag-web</strong>, <strong>Navidrome clients</strong>, and many others.
         </p>
       </div>
     </section>
@@ -206,12 +130,14 @@ const dependencies: Dependency[] = [
 }
 
 .logo-container {
-  margin-bottom: 1rem;
+  margin-bottom: 1.5rem;
+  display: flex;
+  justify-content: center;
 }
 
 .about-logo {
-  width: 120px;
-  height: 120px;
+  width: 200px;
+  height: 200px;
   object-fit: contain;
 }
 
@@ -266,7 +192,8 @@ const dependencies: Dependency[] = [
 }
 
 .license-box p:first-child,
-.copyright-box p:first-child {
+.copyright-box p:first-child,
+.compatibility-box p:first-child {
   font-weight: 500;
 }
 
@@ -326,56 +253,6 @@ const dependencies: Dependency[] = [
   margin-top: 0.75rem !important;
 }
 
-.deps-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-}
-
-.dep-item {
-  background: var(--color-background-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 1.25rem;
-}
-
-.dep-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 1rem;
-  margin-bottom: 0.5rem;
-}
-
-.dep-item h3 {
-  margin: 0;
-  font-size: 1.1rem;
-}
-
-.dep-item h3 a {
-  color: var(--color-primary);
-  text-decoration: none;
-}
-
-.dep-item h3 a:hover {
-  text-decoration: underline;
-}
-
-.dep-version {
-  color: var(--color-text-tertiary);
-  font-size: 0.9rem;
-  white-space: nowrap;
-  background: var(--color-background-tertiary);
-  padding: 0.25rem 0.75rem;
-  border-radius: 4px;
-}
-
-.dep-license {
-  margin: 0;
-  font-size: 0.9rem;
-  color: var(--color-text-secondary);
-}
-
 .about-footer {
   text-align: center;
   margin-top: 3rem;
@@ -406,17 +283,12 @@ const dependencies: Dependency[] = [
   }
 
   .about-logo {
-    width: 80px;
-    height: 80px;
+    width: 150px;
+    height: 150px;
   }
 
   .credits-grid {
     grid-template-columns: 1fr;
-  }
-
-  .dep-header {
-    flex-direction: column;
-    align-items: flex-start;
   }
 }
 
@@ -425,8 +297,7 @@ const dependencies: Dependency[] = [
   .license-box,
   .copyright-box,
   .compatibility-box,
-  .credit-card,
-  .dep-item {
+  .credit-card {
     background: var(--color-background-secondary);
   }
 }
