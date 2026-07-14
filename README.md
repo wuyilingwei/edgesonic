@@ -39,7 +39,7 @@ EdgeSonic serves two roles simultaneously:
 No local toolchain required — deploy straight from a fork using the precompiled release:
 
 1. **Fork** this repository to your own GitHub account.
-2. **Create a Cloudflare API token** ([dash.cloudflare.com → API Tokens](https://dash.cloudflare.com/profile/api-tokens) → *Create Token*) with `Workers Scripts:Edit`, `D1:Edit`, and `Workers R2 Storage:Edit`, and note your **Account ID**.
+2. **Create a Cloudflare API token** ([dash.cloudflare.com → API Tokens](https://dash.cloudflare.com/?to=/:account/api-tokens) → *Create Token*) with `Workers Scripts:Edit`, `D1:Edit`, and `Workers R2 Storage:Edit`, and note your **Account ID**.
 3. In your fork, open **Actions → Deploy EdgeSonic → Run workflow**, paste the token and account ID, choose the **`stable`** or **`prerelease`** channel, and run it.
 
 The workflow downloads the latest precompiled release (prebuilt frontend + Worker — **no build step**), auto-creates any missing D1/KV/R2 resources, and deploys. Full input reference: [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md).
