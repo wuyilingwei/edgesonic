@@ -69,7 +69,7 @@ const search23Handler = (tag: "searchResult2" | "searchResult3") =>
     const queries = createQueries((c.env as Env).DB);
     const result = await queries.search(query, {
       artistCount, artistOffset, albumCount, albumOffset, songCount, songOffset,
-      songSort: songSort === "newest" || songSort === "titleDesc" ? songSort : "title",
+      songSort: songSort === "newest" || songSort === "oldest" || songSort === "titleDesc" ? songSort : "title",
     });
 
     const userId = currentUserId(c);

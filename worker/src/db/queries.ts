@@ -166,6 +166,9 @@ export function createQueries(db: D1Database) {
         case "recent":
           order = "play_date DESC, a.created_at DESC";
           break;
+        case "oldest":
+          order = "a.created_at ASC";
+          break;
         // newest / unknown
         default:
           order = "a.created_at DESC";
@@ -355,8 +358,8 @@ export function createQueries(db: D1Database) {
       // 154: EdgeSonic-only extension, not part of the Subsonic spec. Defaults
       // to the original alphabetical order so third-party Subsonic clients
       // (which never send this) see no behavior change; the web Songs tab
-      // passes "newest" to browse most-recently-added-to-library first.
-      songSort?: "title" | "titleDesc" | "newest";
+      // passes "newest"/"oldest" to browse by library insertion time.
+      songSort?: "title" | "titleDesc" | "newest" | "oldest";
     } = {}): Promise<{
       artists: Artist[];
       albums: Album[];
@@ -365,9 +368,11 @@ export function createQueries(db: D1Database) {
       const like = `%${query}%`;
       const songOrder = opts.songSort === "newest"
         ? "sm.created_at DESC"
-        : opts.songSort === "titleDesc"
-          ? "sm.sort_title DESC"
-          : "sm.sort_title ASC";
+        : opts.songSort === "oldest"
+          ? "sm.created_at ASC"
+          : opts.songSort === "titleDesc"
+            ? "sm.sort_title DESC"
+            : "sm.sort_title ASC";
       const [artists, albums, songs] = await Promise.all([
         db.prepare(
           "SELECT * FROM artists WHERE name LIKE ? ORDER BY sort_name ASC LIMIT ? OFFSET ?"

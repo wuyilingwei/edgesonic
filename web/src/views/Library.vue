@@ -33,7 +33,7 @@ const BATCH_MAX = 50;
 const props = withDefaults(defineProps<{ starredOnly?: boolean }>(), { starredOnly: false });
 const starredOnly = props.starredOnly;
 
-interface Artist { id: string; name: string; albumCount: string; starred: boolean; starredAt?: string; }
+interface Artist { id: string; name: string; albumCount: string; starred: boolean; starredAt?: string; createdAt?: string; }
 interface Album {
   id: string;
   name: string;
@@ -47,7 +47,7 @@ interface Album {
 }
 
 type Tab = "artists" | "albums" | "songs";
-type SortMode = "newest" | "nameAsc" | "nameDesc";
+type SortMode = "newest" | "oldestStarred" | "newestAdded" | "oldestAdded" | "nameAsc" | "nameDesc";
 // Users land on tracks (the most common entry point). Switching tabs is still
 // honored for the current session, but a re-mount resets to songs.
 const tab = ref<Tab>("songs");
@@ -72,15 +72,43 @@ function timeValue(value?: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+type DatedItem = { starredAt?: string; createdAt?: string };
+type DateSort = { field: "starredAt" | "createdAt"; descending: boolean };
+
+function activeDateSort(): DateSort | null {
+  if (starredOnly && sortMode.value === "newest") {
+    return { field: "starredAt", descending: true };
+  }
+  if (starredOnly && sortMode.value === "oldestStarred") {
+    return { field: "starredAt", descending: false };
+  }
+  if (sortMode.value === "newestAdded" || (!starredOnly && sortMode.value === "newest")) {
+    return { field: "createdAt", descending: true };
+  }
+  if (sortMode.value === "oldestAdded") {
+    return { field: "createdAt", descending: false };
+  }
+  return null;
+}
+
+function compareDates(a: DatedItem, b: DatedItem, sort: DateSort): number {
+  const av = timeValue(a[sort.field]);
+  const bv = timeValue(b[sort.field]);
+  if (av === 0 && bv !== 0) return 1;
+  if (bv === 0 && av !== 0) return -1;
+  return sort.descending ? bv - av : av - bv;
+}
+
 function nameOrder(a: string, b: string): number {
   return a.localeCompare(b, undefined, { sensitivity: "base" });
 }
 
 function sortArtists(items: Artist[]): Artist[] {
   return [...items].sort((a, b) => {
-    if (sortMode.value === "newest") {
-      const byStarred = timeValue(b.starredAt) - timeValue(a.starredAt);
-      if (byStarred) return byStarred;
+    const dateSort = activeDateSort();
+    if (dateSort) {
+      const byDate = compareDates(a, b, dateSort);
+      if (byDate) return byDate;
     }
     const byName = nameOrder(a.name, b.name);
     return sortMode.value === "nameDesc" ? -byName : byName;
@@ -89,8 +117,9 @@ function sortArtists(items: Artist[]): Artist[] {
 
 function sortAlbums(items: Album[]): Album[] {
   return [...items].sort((a, b) => {
-    if (sortMode.value === "newest") {
-      const byDate = timeValue(b.starredAt || b.createdAt) - timeValue(a.starredAt || a.createdAt);
+    const dateSort = activeDateSort();
+    if (dateSort) {
+      const byDate = compareDates(a, b, dateSort);
       if (byDate) return byDate;
     }
     const byName = nameOrder(a.name, b.name);
@@ -100,8 +129,9 @@ function sortAlbums(items: Album[]): Album[] {
 
 function sortSongs(items: Track[]): Track[] {
   return [...items].sort((a, b) => {
-    if (sortMode.value === "newest") {
-      const byDate = timeValue(b.starredAt || b.createdAt) - timeValue(a.starredAt || a.createdAt);
+    const dateSort = activeDateSort();
+    if (dateSort) {
+      const byDate = compareDates(a, b, dateSort);
       if (byDate) return byDate;
     }
     const byName = nameOrder(a.title, b.title);
@@ -254,7 +284,7 @@ async function loadArtists() {
     const xml = await authFetch("getArtists");
     artists.value = parseXmlAttrs(xml, "artist").map((a) => ({
       id: a.id || "", name: a.name || "", albumCount: a.albumCount || "",
-      starred: !!a.starred, starredAt: a.starred || undefined,
+      starred: !!a.starred, starredAt: a.starred || undefined, createdAt: a.created || undefined,
     }));
   } catch {
     error.value = t("library.loadFailed");
@@ -288,7 +318,7 @@ async function loadStarred(force = false) {
     starredLists.value = {
       artists: parseXmlAttrs(xml, "artist").map((a) => ({
         id: a.id || "", name: a.name || "", albumCount: a.albumCount || "",
-        starred: true, starredAt: a.starred || undefined,
+        starred: true, starredAt: a.starred || undefined, createdAt: a.created || undefined,
       })),
       albums: parseXmlAttrs(xml, "album").map((a) => ({
         id: a.id || "", name: a.name || "", artist: a.artist || "", year: a.year || "",
@@ -312,6 +342,8 @@ async function loadMoreAlbums() {
     const xml = await authFetch("getAlbumList2", {
       type: sortMode.value === "newest"
         ? "newest"
+        : sortMode.value === "newestAdded" ? "newest"
+        : sortMode.value === "oldestAdded" ? "oldest"
         : sortMode.value === "nameDesc" ? "alphabeticalByNameDesc" : "alphabeticalByName",
       size: String(ALBUM_PAGE), offset: String(albumOffset.value),
     });
@@ -352,7 +384,10 @@ async function loadMoreSongs() {
     const xml = await authFetch("search3", {
       query: "", artistCount: "0", albumCount: "0",
       songCount: String(SONG_PAGE), songOffset: String(songOffset.value),
-      songSort: sortMode.value === "newest" ? "newest" : sortMode.value === "nameDesc" ? "titleDesc" : "title",
+      songSort: sortMode.value === "newest" || sortMode.value === "newestAdded"
+        ? "newest"
+        : sortMode.value === "oldestAdded" ? "oldest"
+        : sortMode.value === "nameDesc" ? "titleDesc" : "title",
     });
     const page = parseXmlAttrs(xml, "song").map(mapSongRow);
     if (request !== songLoadRequest) return;
@@ -399,12 +434,15 @@ async function runSearch(query: string) {
   try {
     const xml = await authFetch("search3", {
       query, artistCount: "20", albumCount: "20", songCount: "100",
-      songSort: sortMode.value === "newest" ? "newest" : sortMode.value === "nameDesc" ? "titleDesc" : "title",
+      songSort: sortMode.value === "newest" || sortMode.value === "newestAdded"
+        ? "newest"
+        : sortMode.value === "oldestAdded" ? "oldest"
+        : sortMode.value === "nameDesc" ? "titleDesc" : "title",
     });
     searchResults.value = {
       artists: parseXmlAttrs(xml, "artist").map((a) => ({
         id: a.id || "", name: a.name || "", albumCount: a.albumCount || "",
-        starred: !!a.starred, starredAt: a.starred || undefined,
+        starred: !!a.starred, starredAt: a.starred || undefined, createdAt: a.created || undefined,
       })),
       albums: parseXmlAttrs(xml, "album").map((a) => ({
         id: a.id || "", name: a.name || "", artist: a.artist || "",
@@ -1035,7 +1073,10 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       <label class="sort-control">
         <span class="mono-label">{{ t("library.sortLabel") }}</span>
         <select v-model="sortMode" class="form-input sort-select">
-          <option value="newest">{{ t("library.sortNewest") }}</option>
+          <option value="newest">{{ t(starredOnly ? "library.sortNewest" : "library.sortNewestAdded") }}</option>
+          <option v-if="starredOnly" value="oldestStarred">{{ t("library.sortOldestStarred") }}</option>
+          <option v-if="starredOnly" value="newestAdded">{{ t("library.sortNewestAdded") }}</option>
+          <option value="oldestAdded">{{ t("library.sortOldestAdded") }}</option>
           <option value="nameAsc">{{ t("library.sortNameAsc") }}</option>
           <option value="nameDesc">{{ t("library.sortNameDesc") }}</option>
         </select>
