@@ -561,22 +561,22 @@ onUnmounted(() => {
             <option value="s3">{{ t("sources.typeS3") }}</option>
           </select>
         </div>
-        <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="form.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
+        <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="form.name" maxlength="256" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
         <div class="form-group">
           <label class="form-label">{{ t("sources.baseUrl") }}</label>
-          <input v-model="form.base_url" class="form-input" :placeholder="form.type === 's3' ? t('sources.s3EndpointPlaceholder') : 'https://...'" />
+          <input v-model="form.base_url" maxlength="512" class="form-input" :placeholder="form.type === 's3' ? t('sources.s3EndpointPlaceholder') : 'https://...'" />
         </div>
-        <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="form.username" class="form-input" /></div>
-        <div class="form-group"><label class="form-label">{{ t("sources.password") }}</label><input v-model="form.password" type="password" class="form-input" /></div>
+        <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="form.username" maxlength="64" class="form-input" /></div>
+        <div class="form-group"><label class="form-label">{{ t("sources.password") }}</label><input v-model="form.password" type="password" maxlength="256" class="form-input" /></div>
         <div class="form-group span-all">
           <label class="form-label">{{ t("sources.rootPath") }}</label>
-          <input v-model="form.root_path" class="form-input" :placeholder="form.type === 's3' ? 'bucket' : '/music'" />
+          <input v-model="form.root_path" maxlength="256" class="form-input" :placeholder="form.type === 's3' ? 'bucket' : '/music'" />
           <span class="field-hint">{{ form.type === 's3' ? t('sources.s3BucketHint') : t('sources.rootPathHint') }}</span>
         </div>
         <!-- 096: region field (S3 only) -->
         <div v-if="form.type === 's3'" class="form-group span-all">
           <label class="form-label">{{ t("sources.s3Region") }}</label>
-          <input v-model="form.region" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
+          <input v-model="form.region" maxlength="256" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
           <span class="field-hint">{{ t("sources.s3RegionHint") }}</span>
         </div>
         <!-- P4: mode selector -->
@@ -590,8 +590,8 @@ onUnmounted(() => {
         </div>
         <div v-if="form.type === 'webdav'" class="form-group span-all">
           <label class="form-label">{{ t("sources.presignCreds") }} <span class="field-hint-inline">({{ t("common.optional", "可选") }})</span></label>
-          <input v-model="form.presign_username" class="form-input" :placeholder="t('sources.presignUsername')" autocomplete="off" />
-          <input v-model="form.presign_password" type="password" class="form-input" style="margin-top:0.4rem" :placeholder="t('sources.presignPassword')" autocomplete="new-password" />
+          <input v-model="form.presign_username" maxlength="64" class="form-input" :placeholder="t('sources.presignUsername')" autocomplete="off" />
+          <input v-model="form.presign_password" type="password" maxlength="256" class="form-input" style="margin-top:0.4rem" :placeholder="t('sources.presignPassword')" autocomplete="new-password" />
           <span class="field-hint">{{ t("sources.presignCredsHint") }}</span>
         </div>
         <button class="btn-primary span-all" @click="addSource">{{ t("sources.save") }}</button>
@@ -746,22 +746,22 @@ onUnmounted(() => {
       <div class="modal">
         <div class="modal-title">{{ t("sources.editSource") }}</div>
         <div class="form-grid-2">
-          <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="editForm.name" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
+          <div class="form-group"><label class="form-label">{{ t("sources.alias") }}</label><input v-model="editForm.name" maxlength="256" class="form-input" :placeholder="t('sources.aliasPlaceholder')" /></div>
           <!-- R2 is accessed via the native MUSIC_BUCKET binding, never HTTP
                base_url/username/password are meaningless for it and only
                confused the editing experience. Only show them for the
                storage types that actually use them. -->
           <template v-if="editing?.type !== 'r2'">
-            <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="editForm.base_url" class="form-input" placeholder="https://..." /></div>
-            <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="editForm.username" class="form-input" /></div>
+            <div class="form-group"><label class="form-label">{{ t("sources.baseUrl") }}</label><input v-model="editForm.base_url" maxlength="512" class="form-input" placeholder="https://..." /></div>
+            <div class="form-group"><label class="form-label">{{ t("sources.username") }}</label><input v-model="editForm.username" maxlength="64" class="form-input" /></div>
             <div class="form-group">
               <label class="form-label">{{ t("sources.password") }}</label>
-              <input v-model="editForm.password" type="password" class="form-input" :placeholder="t('sources.passwordKeep')" />
+              <input v-model="editForm.password" type="password" maxlength="256" class="form-input" :placeholder="t('sources.passwordKeep')" />
             </div>
           </template>
           <div class="form-group span-all">
             <label class="form-label">{{ t("sources.rootPath") }}</label>
-            <input v-model="editForm.root_path" class="form-input" placeholder="/music" />
+            <input v-model="editForm.root_path" maxlength="256" class="form-input" placeholder="/music" />
             <span class="field-hint">{{ t("sources.rootPathHint") }}</span>
           </div>
           <!-- P4: mode selector in edit modal -->
@@ -776,17 +776,17 @@ onUnmounted(() => {
           <!-- 096: region field in edit modal (shown for all types; only meaningful for s3) -->
           <div v-if="editing?.type === 's3'" class="form-group span-all">
             <label class="form-label">{{ t("sources.s3Region") }}</label>
-            <input v-model="editForm.region" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
+            <input v-model="editForm.region" maxlength="256" class="form-input" :placeholder="t('sources.s3RegionPlaceholder')" />
             <span class="field-hint">{{ t("sources.s3RegionHint") }}</span>
           </div>
           <div v-if="editing?.type === 'webdav'" class="presign-always-section span-all">
             <div class="form-group">
               <label class="form-label">{{ t("sources.presignCreds") }} <span class="field-hint-inline">({{ t("common.optional", "可选") }})</span></label>
-              <input v-model="editForm.presignUsername" class="form-input" :placeholder="t('sources.presignUsername')" autocomplete="off" />
+              <input v-model="editForm.presignUsername" maxlength="64" class="form-input" :placeholder="t('sources.presignUsername')" autocomplete="off" />
             </div>
             <div class="form-group">
               <label class="form-label">{{ t("sources.presignPassword") }}</label>
-              <input v-model="editForm.presignPassword" type="password" class="form-input" :placeholder="editForm.presignUsername ? t('sources.passwordKeep') : t('sources.presignPassword')" autocomplete="new-password" />
+              <input v-model="editForm.presignPassword" type="password" maxlength="256" class="form-input" :placeholder="editForm.presignUsername ? t('sources.passwordKeep') : t('sources.presignPassword')" autocomplete="new-password" />
             </div>
             <span class="field-hint">{{ t("sources.presignCredsHint") }}</span>
           </div>

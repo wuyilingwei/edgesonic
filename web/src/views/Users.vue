@@ -240,8 +240,8 @@ onMounted(load);
     <div v-if="showForm" class="card" style="margin-bottom:1.25rem; max-width:450px">
       <div class="card-header"><span class="card-title">{{ t("users.newUser") }}</span></div>
       <div style="display:flex; flex-direction:column; gap:0.8rem">
-        <div class="form-group"><label class="form-label">{{ t("users.username") }}</label><input v-model="form.username" class="form-input" /></div>
-        <div class="form-group"><label class="form-label">{{ t("users.password") }}</label><input v-model="form.password" type="password" class="form-input" /></div>
+        <div class="form-group"><label class="form-label">{{ t("users.username") }}</label><input v-model="form.username" maxlength="64" class="form-input" /></div>
+        <div class="form-group"><label class="form-label">{{ t("users.password") }}</label><input v-model="form.password" type="password" maxlength="256" class="form-input" /></div>
         <div class="form-group">
           <label class="form-label">{{ t("users.level") }}</label>
           <select v-model="form.level" class="form-select">

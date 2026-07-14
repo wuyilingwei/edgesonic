@@ -371,7 +371,7 @@ function cloneSourceKey(): string {
 }
 function loadCloneCache(): { metadataDone: Set<string>; audioDone: Set<string> } {
   try {
-    const raw = localStorage.getItem(cloneCacheKey());
+    const raw = sessionStorage.getItem(cloneCacheKey());
     if (!raw) return { metadataDone: new Set(), audioDone: new Set() };
     const parsed = JSON.parse(raw) as CloneCache;
     return {
@@ -388,16 +388,16 @@ let cloneCacheFlushTimer: ReturnType<typeof setTimeout> | null = null;
 function saveCloneCacheNow() {
   cloneCacheDirty = false;
   try {
-    localStorage.setItem(cloneCacheKey(), JSON.stringify({
+    sessionStorage.setItem(cloneCacheKey(), JSON.stringify({
       metadataDone: Array.from(cloneCache.metadataDone),
       audioDone: Array.from(cloneCache.audioDone),
     } satisfies CloneCache));
   } catch {
-    // localStorage full/disabled — resume just won't work next time, not fatal.
+    // sessionStorage full/disabled — resume just won't work next time, not fatal.
   }
 }
 // Debounced so a fast library (hundreds of items/sec once cache-hit-skipping
-// kicks in) doesn't hammer localStorage with a synchronous write per item.
+// kicks in) doesn't hammer sessionStorage with a synchronous write per item.
 function markCloneCacheDirty() {
   cloneCacheDirty = true;
   if (cloneCacheFlushTimer) return;
@@ -409,7 +409,7 @@ function markCloneCacheDirty() {
 const cloneCacheClearedAt = ref(0); // bump to re-render the "N cached" hint after clearing
 function clearCloneCache() {
   if (cloneCacheFlushTimer) { clearTimeout(cloneCacheFlushTimer); cloneCacheFlushTimer = null; }
-  try { localStorage.removeItem(cloneCacheKey()); } catch { /* ignore */ }
+  try { sessionStorage.removeItem(cloneCacheKey()); } catch { /* ignore */ }
   cloneCache = { metadataDone: new Set(), audioDone: new Set() };
   cloneCacheDirty = false;
   cloneCacheClearedAt.value = Date.now();
@@ -1350,7 +1350,7 @@ async function runClone() {
   cloneCancelRequested.value = false;
   cloneLog.value = [];
   cloneFilterSongIds.value = null;
-  // 159: reload from localStorage (not just reuse the module-level var) in
+  // 159: reload from sessionStorage (not just reuse the module-level var) in
   // case the URL field changed since last load — cache is scoped per URL.
   cloneCache = loadCloneCache();
   if (cloneCache.metadataDone.size || cloneCache.audioDone.size) {
@@ -1652,6 +1652,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                   class="form-input"
                   :placeholder="t('settings.common.clone.urlPlaceholder')"
                   :disabled="cloneRunning || pushRunning"
+                  maxlength="512"
                   autocomplete="off"
                 />
               </label>
@@ -1664,6 +1665,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                   class="form-input"
                   :placeholder="t('settings.common.clone.usernamePlaceholder')"
                   :disabled="cloneRunning || pushRunning"
+                  maxlength="64"
                   autocomplete="off"
                 />
               </label>
@@ -1676,6 +1678,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                   class="form-input"
                   :placeholder="t('settings.common.clone.passwordPlaceholder')"
                   :disabled="cloneRunning || pushRunning"
+                  maxlength="256"
                   autocomplete="off"
                 />
               </label>

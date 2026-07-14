@@ -56,11 +56,11 @@ async function submit() {
 
         <div class="form-group">
           <label class="form-label">{{ t("login.username") }}</label>
-          <input v-model="username" class="form-input" autocomplete="username" :disabled="loading" />
+          <input v-model="username" maxlength="64" class="form-input" autocomplete="username" :disabled="loading" />
         </div>
         <div class="form-group">
           <label class="form-label">{{ t("login.password") }}</label>
-          <input v-model="password" type="password" class="form-input" autocomplete="current-password" :disabled="loading" />
+          <input v-model="password" type="password" maxlength="256" class="form-input" autocomplete="current-password" :disabled="loading" />
         </div>
 
         <button type="submit" class="btn-primary login-btn" :disabled="loading || !username || !password">

@@ -1164,6 +1164,7 @@ onMounted(() => {
             <input
               v-model="externalThemeUrl"
               type="text"
+              maxlength="512"
               class="form-input"
               :placeholder="t('settings.common.externalTheme.placeholder')"
               autocomplete="off"
@@ -1200,6 +1201,7 @@ onMounted(() => {
             <input
               v-model="lastfmKeyInput"
               type="password"
+              maxlength="256"
               class="form-input"
               :placeholder="t('settings.common.lastfm.placeholder')"
               autocomplete="off"
@@ -1326,6 +1328,7 @@ onMounted(() => {
               <input
                 v-model="externalKeyInput"
                 type="password"
+                maxlength="256"
                 class="form-input"
                 :placeholder="t('settings.common.transcode.externalKeyPlaceholder')"
                 :disabled="!isSuperAdmin"
@@ -1515,6 +1518,7 @@ onMounted(() => {
               <input
                 v-model="cfAccountId"
                 type="text"
+                maxlength="256"
                 class="form-input"
                 :placeholder="t('settings.common.cf.accountIdPlaceholder')"
                 autocomplete="off"
@@ -1527,6 +1531,7 @@ onMounted(() => {
               <input
                 v-model="cfToken"
                 type="password"
+                maxlength="256"
                 class="form-input"
                 :placeholder="cfStatus.configured ? '••••' + cfStatus.tokenLast4 : t('settings.common.cf.tokenPlaceholder')"
                 autocomplete="off"
