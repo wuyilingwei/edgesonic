@@ -65,6 +65,17 @@ const DEFAULT_POLL_MS = 5 * 60 * 1000;
 // (default 5 min) so idle browsers don't hammer D1.
 const FAST_POLL_MS = 30 * 1000;
 
+// Memory monitoring configuration
+const MEMORY_SAMPLE_INTERVAL_MS = 30 * 1000; // 30 秒采样一次
+const MAX_MEMORY_SAMPLES = 120; // 1 小时数据（30s 采样）
+const MEMORY_CLEANUP_THRESHOLD_BYTES = 50 * 1024 * 1024; // 50MB
+
+interface MemorySample {
+  timestamp: number;
+  heapUsed: number;
+  heapTotal: number;
+}
+
 // taskExecutor.ts AND the server-side clamp in /work/submit. Three layers of
 // 500-byte truncation is intentional: each layer protects its own surface
 // from runaway error strings (memory churn on the worker, postMessage cost
@@ -166,6 +177,69 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // / start(); the in-poll `effectiveConcurrent = 1` fallback stays as the belt
   // for tasks already in-flight when playback starts.
   const isPlaybackThrottled = ref(false);
+
+  // Memory monitoring: 30 秒采样一次内存使用情况
+  const memoryHistory = ref<MemorySample[]>([]);
+  let memoryMonitorInterval: number | null = null;
+
+  function startMemoryMonitor(): void {
+    if (memoryMonitorInterval !== null) return;
+    memoryMonitorInterval = window.setInterval(() => {
+      sampleMemory();
+    }, MEMORY_SAMPLE_INTERVAL_MS);
+  }
+
+  function stopMemoryMonitor(): void {
+    if (memoryMonitorInterval !== null) {
+      clearInterval(memoryMonitorInterval);
+      memoryMonitorInterval = null;
+    }
+  }
+
+  function sampleMemory(): void {
+    if (performance.memory) {
+      const sample: MemorySample = {
+        timestamp: Date.now(),
+        heapUsed: performance.memory.usedJSHeapSize,
+        heapTotal: performance.memory.totalJSHeapSize,
+      };
+      memoryHistory.value.push(sample);
+      if (memoryHistory.value.length > MAX_MEMORY_SAMPLES) {
+        memoryHistory.value.shift();
+      }
+      // 自动清理：超过 50MB 时触发
+      if (performance.memory.usedJSHeapSize > MEMORY_CLEANUP_THRESHOLD_BYTES) {
+        // 标记需要清理，但不强制执行垃圾回收（JS 无法直接触发）
+        // 只记录此状态供监控使用
+      }
+    }
+  }
+
+  // Response time tracking for adaptive playback throttling
+  const responseTimes = ref<number[]>([]);
+  const MAX_RESPONSE_TIME_SAMPLES = 20;
+
+  function recordResponseTime(time: number): void {
+    responseTimes.value.push(time);
+    if (responseTimes.value.length > MAX_RESPONSE_TIME_SAMPLES) {
+      responseTimes.value.shift();
+    }
+  }
+
+  function getAverageResponseTime(): number {
+    if (responseTimes.value.length === 0) return 0;
+    const sum = responseTimes.value.reduce((a, b) => a + b, 0);
+    return sum / responseTimes.value.length;
+  }
+
+  function getPlaybackThrottle(avgResponseTime: number): number {
+    // Based on average response time, return playback throttle factor
+    // Lower values mean more aggressive throttling (preserving bandwidth for playback)
+    if (avgResponseTime < 200) return 1.5; // 快速响应
+    if (avgResponseTime < 500) return 1.0; // 正常
+    if (avgResponseTime < 1000) return 0.5; // 缓慢
+    return 0.25; // 非常缓慢
+  }
 
   // - `recent` is a small FIFO ring (≤ 5) of just-finished tasks so the UI
   //  can show task chips without re-querying the server.
@@ -315,6 +389,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     // 5 minutes. User can click "force poll" in the UI to start instantly.
     poolStartedAt = Date.now();
     hadTasksLastPoll = false;
+    startMemoryMonitor();
     scheduleNext();
   }
 
@@ -323,6 +398,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
       clearTimeout(timeoutId);
       timeoutId = null;
     }
+    stopMemoryMonitor();
     nextPollAt.value = 0;
   }
 
@@ -351,6 +427,8 @@ export const useWorkerPool = defineStore("workerPool", () => {
     isDraining.value = true;
     lastError.value = null;
     lastPollAt.value = Date.now();
+    // 采样内存使用情况
+    sampleMemory();
     try {
       // 113 — the ceiling may have been lowered by an admin since the last
       // ramp-up; clamp before using it as the adaptive base.
@@ -591,6 +669,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     // stale chips for the next user.
     recent.value = [];
     completedSamples.value = [];
+    memoryHistory.value = [];
     // 113 — start the next session's adaptive ramp from scratch rather than
     // carrying over a value tuned for whatever device/network the previous
     // session had.
@@ -617,6 +696,12 @@ export const useWorkerPool = defineStore("workerPool", () => {
     recent,
     speedPerMin,
     isWorking,
+    // Memory monitoring: 内存使用趋势 (30秒采样，最多120个样本)
+    memoryHistory,
+    // Response time tracking for adaptive throttling
+    recordResponseTime,
+    getAverageResponseTime,
+    getPlaybackThrottle,
     // Tools.vue "auto-start in mm:ss" countdown next to the manual
     // poll button. 0 = nothing scheduled.
     nextPollAt,

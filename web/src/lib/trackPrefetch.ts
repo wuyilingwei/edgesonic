@@ -31,10 +31,77 @@ export interface TrackPrefetchAuth {
   scope: string;
 }
 
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+  ttl: number;
+}
+
 const MAX_CACHE_ENTRIES = 32;
-const metadataCache = new Map<string, Promise<string>>();
-const lyricsCache = new Map<string, Promise<TrackLyricsPayload>>();
-const coverCache = new Map<string, Promise<void>>();
+const TTL_METADATA_MS = 5 * 60 * 1000; // 5 分钟
+const TTL_LYRICS_MS = 10 * 60 * 1000; // 10 分钟
+const TTL_COVER_MS = 60 * 60 * 1000; // 1 小时
+
+const metadataCache = new Map<string, CacheEntry<Promise<string>>>();
+const lyricsCache = new Map<string, CacheEntry<Promise<TrackLyricsPayload>>>();
+const coverCache = new Map<string, CacheEntry<Promise<void>>>();
+
+// 缓存统计
+const cacheStats = {
+  metadataHits: 0,
+  metadataMisses: 0,
+  lyricsHits: 0,
+  lyricsMisses: 0,
+  coverHits: 0,
+  coverMisses: 0,
+};
+
+export function getCacheStats() {
+  return { ...cacheStats };
+}
+
+export function resetCacheStats() {
+  cacheStats.metadataHits = 0;
+  cacheStats.metadataMisses = 0;
+  cacheStats.lyricsHits = 0;
+  cacheStats.lyricsMisses = 0;
+  cacheStats.coverHits = 0;
+  cacheStats.coverMisses = 0;
+}
+
+function isExpired<T>(entry: CacheEntry<T>): boolean {
+  return Date.now() - entry.timestamp > entry.ttl;
+}
+
+function cleanExpiredEntries() {
+  // 清理元数据缓存
+  for (const [key, entry] of metadataCache.entries()) {
+    if (isExpired(entry)) {
+      metadataCache.delete(key);
+    }
+  }
+  // 清理歌词缓存
+  for (const [key, entry] of lyricsCache.entries()) {
+    if (isExpired(entry)) {
+      lyricsCache.delete(key);
+    }
+  }
+  // 清理封面缓存
+  for (const [key, entry] of coverCache.entries()) {
+    if (isExpired(entry)) {
+      coverCache.delete(key);
+    }
+  }
+}
+
+// 启动后台清理任务（1 分钟周期）
+if (typeof globalThis !== "undefined") {
+  const cleanupInterval = setInterval(cleanExpiredEntries, 60 * 1000);
+  if (typeof globalThis.clearInterval !== "undefined") {
+    // 存储清理定时器以备后续需要
+    (globalThis as any).__trackPrefetchCleanupInterval = cleanupInterval;
+  }
+}
 
 function extractXmlInner(xml: string, tag: string): string {
   const match = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i").exec(xml);
@@ -45,16 +112,29 @@ function cacheKey(scope: string, id: string): string {
   return `${scope}:${id}`;
 }
 
-function remember<T>(cache: Map<string, Promise<T>>, key: string, load: () => Promise<T>): Promise<T> {
+function remember<T>(
+  cache: Map<string, CacheEntry<Promise<T>>>,
+  key: string,
+  load: () => Promise<T>,
+  ttl: number,
+): Promise<T> {
   const existing = cache.get(key);
-  if (existing) return existing;
+  if (existing && !isExpired(existing)) {
+    // 命中有效缓存
+    return existing.data;
+  }
 
   let promise: Promise<T>;
   promise = load().catch((error) => {
-    if (cache.get(key) === promise) cache.delete(key);
+    if (cache.get(key)?.data === promise) cache.delete(key);
     throw error;
   });
-  cache.set(key, promise);
+  const entry: CacheEntry<Promise<T>> = {
+    data: promise,
+    timestamp: Date.now(),
+    ttl,
+  };
+  cache.set(key, entry);
   while (cache.size > MAX_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value;
     if (oldest === undefined) break;
@@ -64,11 +144,25 @@ function remember<T>(cache: Map<string, Promise<T>>, key: string, load: () => Pr
 }
 
 export function getTrackMetadataXml(track: Pick<PrefetchTrack, "id">, auth: Pick<TrackPrefetchAuth, "authFetch" | "scope">): Promise<string> {
-  return remember(metadataCache, cacheKey(auth.scope, track.id), () => auth.authFetch("getSong", { id: track.id }));
+  const key = cacheKey(auth.scope, track.id);
+  const entry = metadataCache.get(key);
+  if (entry && !isExpired(entry)) {
+    cacheStats.metadataHits++;
+    return entry.data;
+  }
+  cacheStats.metadataMisses++;
+  return remember(metadataCache, key, () => auth.authFetch("getSong", { id: track.id }), TTL_METADATA_MS);
 }
 
 export function getTrackLyrics(track: PrefetchTrack, auth: Pick<TrackPrefetchAuth, "authFetch" | "scope">): Promise<TrackLyricsPayload> {
-  return remember(lyricsCache, cacheKey(auth.scope, track.id), async () => {
+  const key = cacheKey(auth.scope, track.id);
+  const entry = lyricsCache.get(key);
+  if (entry && !isExpired(entry)) {
+    cacheStats.lyricsHits++;
+    return entry.data;
+  }
+  cacheStats.lyricsMisses++;
+  return remember(lyricsCache, key, async () => {
     const xml = await auth.authFetch("getLyricsBySongId", { id: track.id });
     const structured = extractXmlInner(xml, "structuredLyrics");
     if (structured) return { structured };
@@ -76,7 +170,7 @@ export function getTrackLyrics(track: PrefetchTrack, auth: Pick<TrackPrefetchAut
     const fallback = await auth.authFetch("getLyrics", { artist: track.artist, title: track.title });
     const lrc = extractXmlInner(fallback, "lyrics");
     return lrc ? { lrc } : {};
-  });
+  }, TTL_LYRICS_MS);
 }
 
 function preloadImage(url: string): Promise<void> {
@@ -92,7 +186,14 @@ function preloadImage(url: string): Promise<void> {
 function preloadCover(track: PrefetchTrack, auth: TrackPrefetchAuth, size: number): Promise<void> {
   if (!track.coverArt) return Promise.resolve();
   const url = auth.coverArtUrl(track.coverArt, size);
-  return remember(coverCache, cacheKey(auth.scope, url), () => preloadImage(url));
+  const key = cacheKey(auth.scope, url);
+  const entry = coverCache.get(key);
+  if (entry && !isExpired(entry)) {
+    cacheStats.coverHits++;
+    return entry.data;
+  }
+  cacheStats.coverMisses++;
+  return remember(coverCache, key, () => preloadImage(url), TTL_COVER_MS);
 }
 
 export function preloadTrack(track: PrefetchTrack, auth: TrackPrefetchAuth): void {
