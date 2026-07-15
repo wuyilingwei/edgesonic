@@ -727,10 +727,10 @@ export const usePlayerStore = defineStore("player", () => {
     else playing.value = false;
   }
 
-  function prev(force = false) {
+  function prev() {
     if (!active) return;
     // Restart current track if more than 3s in, like most players.
-    if (!force && active.currentTime > 3) { active.currentTime = 0; return; }
+    if (active.currentTime > 3) { active.currentTime = 0; return; }
     if (playMode.value === "shuffle") {
       const pos = _shuffleOrder.indexOf(index.value);
       if (pos > 0) { playAt(_shuffleOrder[pos - 1]); return; }
@@ -809,6 +809,7 @@ export const usePlayerStore = defineStore("player", () => {
         const rawTime = parseFloat(localStorage.getItem("edgesonic:currentTime") ?? "");
         queue.value = saved;
         index.value = savedIdx;
+        duration.value = saved[savedIdx].duration || 0;
         if (!isNaN(rawTime) && rawTime > 0) {
           _pendingRestoreTime = rawTime;
           currentTime.value = rawTime; // show saved position in UI immediately

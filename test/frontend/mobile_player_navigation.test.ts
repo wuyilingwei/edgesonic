@@ -9,9 +9,9 @@ const nowPlaying = fs.readFileSync(path.join(root, "web/src/views/NowPlaying.vue
 const checks: [string, boolean][] = [
   ["the mobile logo always opens navigation", app.includes("openMenuFromLogo") && app.includes("menuOpen.value = true")],
   ["the standalone hamburger is removed", !app.includes('class="hamburger"')],
-  ["the collapsed player hides controls", player.includes(".player-bar:not(.details-open) .pb-center")],
+  ["the collapsed player shows compact playback controls", player.includes(".player-bar:not(.details-open) .pb-center") && player.includes(".player-bar:not(.details-open) .pb-fav")],
   ["the detail player hides track metadata", player.includes(".player-bar.details-open .pb-track")],
-  ["track swipes advance or go back", player.includes("@touchstart=\"onTrackTouchStart\"") && player.includes("player.prev(true)")],
+  ["the collapsed player has no swipe track gesture", !player.includes("onTrackTouchStart") && !player.includes("@touchstart")],
   ["collapsed mobile playback starts square progress at twelve o'clock", player.includes('d="M24 2H46V46H2V2H24"') && player.includes("coverProgressOffset") && player.includes("stroke-dasharray: 176 176")],
   ["expanded mobile playback restores the horizontal progress", player.includes(".player-bar.details-open .pb-progress-row")],
   ["the queue button remains available in both mobile states", player.includes(".player-bar:not(.details-open) .pb-right") && player.includes(".player-bar.details-open .pb-right")],

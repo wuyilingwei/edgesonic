@@ -21,35 +21,7 @@ let lastRoute = "/library";
 watch(() => route.path, (p) => { if (p !== "/now-playing") lastRoute = p; }, { immediate: true });
 const detailsOpen = computed(() => route.path === "/now-playing");
 
-let trackTouchStart: { x: number; y: number } | null = null;
-let suppressTrackClickUntil = 0;
-
-function onTrackTouchStart(e: TouchEvent) {
-  const touch = e.changedTouches[0];
-  if (!touch) return;
-  trackTouchStart = { x: touch.clientX, y: touch.clientY };
-}
-
-function onTrackTouchEnd(e: TouchEvent) {
-  const start = trackTouchStart;
-  trackTouchStart = null;
-  if (!start || detailsOpen.value || !player.hasTrack) return;
-  const touch = e.changedTouches[0];
-  if (!touch) return;
-  const dx = touch.clientX - start.x;
-  const dy = touch.clientY - start.y;
-  if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy) * 1.2) return;
-  suppressTrackClickUntil = Date.now() + 400;
-  if (dx < 0) player.next();
-  else player.prev(true);
-}
-
-function onTrackTouchCancel() {
-  trackTouchStart = null;
-}
-
 function goNowPlaying() {
-  if (Date.now() < suppressTrackClickUntil) return;
   if (!player.hasTrack) return;
   if (route.path === "/now-playing") router.push(lastRoute);
   else router.push("/now-playing");
@@ -153,9 +125,6 @@ function removeFromQueue(i: number) {
       class="pb-track"
       :class="{ clickable: player.hasTrack }"
       @click="goNowPlaying"
-      @touchstart="onTrackTouchStart"
-      @touchend="onTrackTouchEnd"
-      @touchcancel="onTrackTouchCancel"
     >
       <div class="pb-cover" :class="{ clickable: player.hasTrack }" :title="player.hasTrack ? expandTitle : ''">
         <img v-if="coverSrc && !coverFailed" :src="coverSrc" alt="" @error="coverFailed = true" />
@@ -537,20 +506,26 @@ function removeFromQueue(i: number) {
   .pb-center { flex: 0 0 auto; }
   .pb-queue-panel { width: calc(100vw - 1rem); }
 
-  .player-bar:not(.details-open) .pb-center,
   .player-bar.details-open .pb-track { display: none; }
   .player-bar:not(.details-open) .pb-track {
     width: 100%;
     padding-left: 0.35rem;
-    padding-right: 3.25rem;
-    touch-action: pan-y;
-    user-select: none;
+    padding-right: 8rem;
   }
   .player-bar:not(.details-open) .pb-cover {
     position: relative;
     overflow: visible;
   }
   .player-bar:not(.details-open) .pb-cover-ring { display: block; }
+  .player-bar:not(.details-open) .pb-center {
+    position: absolute;
+    right: 4rem;
+    width: auto;
+    flex: 0 0 auto;
+  }
+  .player-bar:not(.details-open) .pb-controls { gap: 0.25rem; }
+  .player-bar:not(.details-open) .pb-fav,
+  .player-bar:not(.details-open) .pb-mode { display: none; }
   .player-bar:not(.details-open) .pb-right,
   .player-bar.details-open .pb-right {
     display: flex;
@@ -568,8 +543,8 @@ function removeFromQueue(i: number) {
   .player-bar.details-open .pb-center { width: 100%; flex: 1; }
   .player-bar.details-open .pb-progress-row { max-width: none; }
   .player-bar.details-open .pb-right {
-    top: 50%;
-    transform: translateY(-8px);
+    top: 0.75rem;
+    transform: none;
   }
 }
 </style>
