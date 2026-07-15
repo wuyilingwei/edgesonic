@@ -82,6 +82,7 @@ const progressPct = computed(() =>
   player.duration > 0 ? (displayTime.value / player.duration) * 100 : 0,
 );
 const coverProgressPct = computed(() => Math.min(Math.max(progressPct.value, 0), 100));
+const coverProgressOffset = computed(() => 176 * (1 - coverProgressPct.value / 100));
 
 function fmtPrecise(sec: number): string {
   if (!isFinite(sec) || sec < 0) return "0:00.00";
@@ -160,8 +161,8 @@ function removeFromQueue(i: number) {
         <img v-if="coverSrc && !coverFailed" :src="coverSrc" alt="" @error="coverFailed = true" />
         <svg v-else viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
         <svg v-if="player.hasTrack" class="pb-cover-ring" viewBox="0 0 48 48" aria-hidden="true">
-          <path class="pb-cover-ring-track" d="M24 2H46V46H2V2H24" pathLength="100" />
-          <path class="pb-cover-ring-fill" d="M24 2H46V46H2V2H24" pathLength="100" :style="{ strokeDashoffset: 100 - coverProgressPct }" />
+          <path class="pb-cover-ring-track" d="M24 2H46V46H2V2H24" pathLength="176" />
+          <path class="pb-cover-ring-fill" d="M24 2H46V46H2V2H24" pathLength="176" :style="{ strokeDashoffset: coverProgressOffset }" />
         </svg>
       </div>
       <div v-if="player.current" class="pb-meta" :class="{ clickable: player.hasTrack }" :title="expandTitle">
@@ -311,7 +312,7 @@ function removeFromQueue(i: number) {
 .pb-cover-ring-track { stroke: var(--color-border-subtle); }
 .pb-cover-ring-fill {
   stroke: var(--color-accent-primary);
-  stroke-dasharray: 100 100;
+  stroke-dasharray: 176 176;
   stroke-linecap: round;
   stroke-linejoin: round;
   transition: stroke-dashoffset 0.15s linear;

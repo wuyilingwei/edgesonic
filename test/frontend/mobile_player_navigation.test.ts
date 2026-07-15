@@ -12,7 +12,7 @@ const checks: [string, boolean][] = [
   ["the collapsed player hides controls", player.includes(".player-bar:not(.details-open) .pb-center")],
   ["the detail player hides track metadata", player.includes(".player-bar.details-open .pb-track")],
   ["track swipes advance or go back", player.includes("@touchstart=\"onTrackTouchStart\"") && player.includes("player.prev(true)")],
-  ["collapsed mobile playback starts square progress at twelve o'clock", player.includes('d="M24 2H46V46H2V2H24"')],
+  ["collapsed mobile playback starts square progress at twelve o'clock", player.includes('d="M24 2H46V46H2V2H24"') && player.includes("coverProgressOffset") && player.includes("stroke-dasharray: 176 176")],
   ["expanded mobile playback restores the horizontal progress", player.includes(".player-bar.details-open .pb-progress-row")],
   ["the queue button remains available in both mobile states", player.includes(".player-bar:not(.details-open) .pb-right") && player.includes(".player-bar.details-open .pb-right")],
   ["only mobile details show a collapse button", app.includes('class="now-playing-collapse"') && app.includes("display: none") && app.includes("@media (max-width: 960px)")],
