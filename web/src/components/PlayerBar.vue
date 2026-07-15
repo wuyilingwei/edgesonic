@@ -160,8 +160,8 @@ function removeFromQueue(i: number) {
         <img v-if="coverSrc && !coverFailed" :src="coverSrc" alt="" @error="coverFailed = true" />
         <svg v-else viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>
         <svg v-if="player.hasTrack" class="pb-cover-ring" viewBox="0 0 48 48" aria-hidden="true">
-          <rect class="pb-cover-ring-track" x="2" y="2" width="44" height="44" pathLength="100" />
-          <rect class="pb-cover-ring-fill" x="2" y="2" width="44" height="44" pathLength="100" :style="{ strokeDashoffset: 100 - coverProgressPct }" />
+          <path class="pb-cover-ring-track" d="M24 2H46V46H2V2H24" pathLength="100" />
+          <path class="pb-cover-ring-fill" d="M24 2H46V46H2V2H24" pathLength="100" :style="{ strokeDashoffset: 100 - coverProgressPct }" />
         </svg>
       </div>
       <div v-if="player.current" class="pb-meta" :class="{ clickable: player.hasTrack }" :title="expandTitle">
