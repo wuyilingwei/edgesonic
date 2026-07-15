@@ -529,6 +529,21 @@ async function openArtistById(artistId: string, artistName: string) {
   await openArtist(artist);
 }
 
+function parseArtists(artistStr: string): string[] {
+  return artistStr.split(/,|;/).map(a => a.trim()).filter(a => a.length > 0);
+}
+
+async function searchAndOpenArtist(artistName: string) {
+  const query = artistName.trim();
+  if (!query) return;
+  await runSearch(query);
+  const matches = searchResults.value?.artists || [];
+  if (matches.length > 0) {
+    await openArtist(matches[0]);
+    clearSearch();
+  }
+}
+
 type StarEntity = Artist | Album | Track;
 type StarKind = "artist" | "album" | "song";
 
@@ -1041,7 +1056,12 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       >
        <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
         <span class="song-title">{{ s.title }}</span>
-          <span class="song-artist" :class="{ clickable: s.artistId }" :data-album="s.album" @click.stop="s.artistId && openArtistById(s.artistId, s.artist)">{{ s.artist }}</span>
+          <span class="song-artist-group">
+            <template v-for="(artist, idx) in parseArtists(s.artist)" :key="idx">
+              <span v-if="idx > 0" class="artist-sep">,</span>
+              <span class="song-artist clickable" :class="{ 'has-id': s.artistId }" @click.stop="s.artistId ? openArtistById(s.artistId, artist) : searchAndOpenArtist(artist)">{{ artist }}</span>
+            </template>
+          </span>
          <span class="song-time">{{ formatDuration(s.duration) }}</span>
          <StarButton
            class="row-like-btn"
@@ -1192,7 +1212,12 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
           <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
           <span class="song-title">{{ s.title }}</span>
           <span class="song-album" :class="{ clickable: s.albumId }" @click.stop="s.albumId && openAlbumById(s.albumId, s.album)">{{ s.album }}</span>
-          <span class="song-artist" :class="{ clickable: s.artistId }" :data-album="s.album" @click.stop="s.artistId && openArtistById(s.artistId, s.artist)">{{ s.artist }}</span>
+          <span class="song-artist-group">
+            <template v-for="(artist, idx) in parseArtists(s.artist)" :key="idx">
+              <span v-if="idx > 0" class="artist-sep">,</span>
+              <span class="song-artist clickable" :class="{ 'has-id': s.artistId }" @click.stop="s.artistId ? openArtistById(s.artistId, artist) : searchAndOpenArtist(artist)">{{ artist }}</span>
+            </template>
+          </span>
           <span class="song-time">{{ formatDuration(s.duration) }}</span>
           <StarButton
             class="row-like-btn"
@@ -1345,7 +1370,12 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
           <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
           <span class="song-title">{{ s.title }}</span>
           <span class="song-album" :class="{ clickable: s.albumId }" @click.stop="s.albumId && openAlbumById(s.albumId, s.album)">{{ s.album }}</span>
-            <span class="song-artist" :class="{ clickable: s.artistId }" :data-album="s.album" @click.stop="s.artistId && openArtistById(s.artistId, s.artist)">{{ s.artist }}</span>
+            <span class="song-artist-group">
+              <template v-for="(artist, idx) in parseArtists(s.artist)" :key="idx">
+                <span v-if="idx > 0" class="artist-sep">,</span>
+                <span class="song-artist clickable" :class="{ 'has-id': s.artistId }" @click.stop="s.artistId ? openArtistById(s.artistId, artist) : searchAndOpenArtist(artist)">{{ artist }}</span>
+              </template>
+            </span>
            <span class="song-time">{{ formatDuration(s.duration) }}</span>
            <StarButton
              class="row-like-btn"
@@ -1462,7 +1492,12 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
               <span class="song-no">{{ player.current?.id === s.id && player.playing ? "▶" : i + 1 }}</span>
               <span class="song-title">{{ s.title }}</span>
               <span class="song-album" :class="{ clickable: s.albumId }" @click.stop="s.albumId && openAlbumById(s.albumId, s.album)">{{ s.album }}</span>
-               <span class="song-artist" :class="{ clickable: s.artistId }" :data-album="s.album" @click.stop="s.artistId && openArtistById(s.artistId, s.artist)">{{ s.artist }}</span>
+               <span class="song-artist-group">
+                <template v-for="(artist, idx) in parseArtists(s.artist)" :key="idx">
+                  <span v-if="idx > 0" class="artist-sep">,</span>
+                  <span class="song-artist clickable" :class="{ 'has-id': s.artistId }" @click.stop="s.artistId ? openArtistById(s.artistId, artist) : searchAndOpenArtist(artist)">{{ artist }}</span>
+                </template>
+              </span>
               <span class="song-time">{{ formatDuration(s.duration) }}</span>
               <StarButton
                 class="row-like-btn"
@@ -1780,6 +1815,8 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 .song-album { font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-album.clickable { color: var(--color-accent-primary); cursor: pointer; }
 .song-album.clickable:hover { text-decoration: underline; }
+.song-artist-group { display: flex; flex-wrap: wrap; gap: 0.2rem; min-width: 0; }
+.artist-sep { margin: 0 -0.2rem; }
 .song-artist { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-artist.clickable { color: var(--color-accent-primary); cursor: pointer; }
 .song-artist.clickable:hover { text-decoration: underline; }
