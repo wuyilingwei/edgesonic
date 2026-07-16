@@ -1204,6 +1204,10 @@ async function runClone() {
   cloneCancelRequested.value = false;
   cloneLog.value = [];
   cloneFilterSongIds.value = null;
+  // 220 — clone can fetch+re-upload audio bytes through this browser
+  // (browser mode); pause the background metadata pool for the duration so
+  // it doesn't compete for bandwidth.
+  workerPool.pauseForActivity("clone");
   // 159: reload from sessionStorage (not just reuse the module-level var) in
   // case the URL field changed since last load — cache is scoped per URL.
   cloneCache = loadCloneCache();
@@ -1232,6 +1236,7 @@ async function runClone() {
   // cancel/error, where the run stops well before the 1s debounce would.
   saveCloneCacheNow();
   cloneRunning.value = false;
+  workerPool.resumeAfterActivity("clone");
 }
 
 function cancelClone() {
@@ -1423,6 +1428,7 @@ async function runPush() {
   }
   pushRunning.value = true;
   pushCancelRequested.value = false;
+  workerPool.pauseForActivity("push");
   pushMatchCache.clear();
   for (const k of Object.keys(pushStages.value) as Array<keyof typeof pushStages.value>) {
     pushStages.value[k] = newCloneProgress();
@@ -1435,6 +1441,7 @@ async function runPush() {
     showToast(`${t("settings.common.clone.failed")}: ${e instanceof Error ? e.message : String(e)}`, "error");
   }
   pushRunning.value = false;
+  workerPool.resumeAfterActivity("push");
 }
 
 function cancelPush() {

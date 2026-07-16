@@ -5,9 +5,11 @@ import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 import { mapConcurrent } from "../lib/concurrency";
+import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
 const { isAdmin, isSuperAdmin, storageFetch, storagePost, crossCopy } = useAuth();
+const workerPool = useWorkerPool();
 
 type ScanState = "idle" | "running" | "completed" | "failed";
 
@@ -293,6 +295,10 @@ async function confirmStartMirror() {
   // matching the pattern Tools.vue's clone/push stages already use correctly.
   mirrorState.value[s.id] = { running: true, total: 0, done: 0, failed: 0, inFlight: [], error: null };
   const st = mirrorState.value[s.id];
+  // 220 — mirror listing/pagination runs through this browser; pause the
+  // background metadata pool for the duration so it doesn't compete for
+  // bandwidth with the mirror copy loop.
+  workerPool.pauseForActivity("mirror");
   try {
     let offset = 0;
     const limit = 50;
@@ -359,6 +365,7 @@ async function confirmStartMirror() {
   } finally {
     st.running = false;
     st.inFlight = [];
+    workerPool.resumeAfterActivity("mirror");
   }
 }
 

@@ -9,9 +9,11 @@ import { normalizeForMatch } from "../lib/trackMatch";
 import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
 import type { ScrapeResult } from "../lib/scrape";
+import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
 const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, batchWriteTags, tidyFolder, restUrl, level, coverArtUrl } = useAuth();
+const workerPool = useWorkerPool();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
 interface DirEntry { name: string; }
@@ -201,6 +203,10 @@ async function doUpload() {
   uploadFailedNames.value = [];
   uploadProgressList.value = uploadQueue.value.map(() => 0);
   const total = uploadQueue.value.length;
+  // 220 — uploads push real bytes through this browser; pause the
+  // background metadata pool for the duration so it doesn't compete for
+  // bandwidth.
+  workerPool.pauseForActivity("upload");
   try {
     for (let i = 0; i < total; i++) {
       const file = uploadQueue.value[i];
@@ -232,6 +238,7 @@ async function doUpload() {
     uploadQueue.value = [];
     uploadProgressList.value = [];
     if (uploadInput.value) uploadInput.value.value = "";
+    workerPool.resumeAfterActivity("upload");
   }
 }
 
@@ -269,6 +276,7 @@ async function confirmCrossOp() {
   const targets = crossCopyModal.value.files;
   crossCopyBusy.value = true;
   crossCopyQueue.value = targets.map((file) => ({ file, status: "pending" }));
+  workerPool.pauseForActivity("cross-copy");
   try {
     await mapConcurrent(crossCopyQueue.value, CROSS_COPY_CONCURRENCY, async (item) => {
       item.status = "copying";
@@ -291,6 +299,7 @@ async function confirmCrossOp() {
     loadDir();
   } finally {
     crossCopyBusy.value = false;
+    workerPool.resumeAfterActivity("cross-copy");
   }
 }
 
@@ -300,6 +309,7 @@ async function runTagScan() {
   scanProcessed.value = 0;
   scanRemaining.value = null;
   let totalTagged = 0;
+  workerPool.pauseForActivity("tag-scan");
   try {
     for (;;) {
       const text = await tagFetch("read", { batch: "4" });
@@ -316,6 +326,7 @@ async function runTagScan() {
   } finally {
     scanning.value = false;
     scanRemaining.value = null;
+    workerPool.resumeAfterActivity("tag-scan");
   }
 }
 
@@ -768,6 +779,10 @@ function closeTidyFolder() { tidyOpen.value = false; }
 async function onTagEditorSubmit(patch: Record<string, string | number>, cover?: { data: string; mime: string }) {
   if (!Object.keys(patch).length && !cover) return;
   editBusy.value = true; editMsg.value = ""; editErr.value = false;
+  // 220 — batch tag writes touch many files at once; pause the background
+  // metadata pool for the duration so it doesn't compete for bandwidth.
+  const isBatch = editorMode.value === "batch";
+  if (isBatch) workerPool.pauseForActivity("batch-tag");
   try {
     if (editorMode.value === "batch") {
       if (!editTargetIds.value.length) return;
@@ -796,8 +811,12 @@ async function onTagEditorSubmit(patch: Record<string, string | number>, cover?:
   } catch {
     editErr.value = true;
     editMsg.value = editorMode.value === "batch" ? t("tagEditor.batchFailed") : t("library.editFailed");
+  } finally {
+    // finally (not just after try/catch) so the early `return` above for an
+    // empty batch target list still cleans these up.
+    if (isBatch) workerPool.resumeAfterActivity("batch-tag");
+    editBusy.value = false;
   }
-  editBusy.value = false;
 }
 
 onMounted(async () => {

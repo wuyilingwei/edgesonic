@@ -59,11 +59,11 @@ const STORAGE_KEY = "participate_work";
 // (the seeded `worker_max_concurrent` row preserves a sane global default).
 const STORAGE_KEY_CONCURRENCY = "edgesonic:worker_max_concurrent";
 const DEFAULT_POLL_MS = 5 * 60 * 1000;
-// 093g — Adaptive poll cadence. When the queue has work, poll aggressively
-// (every 30s) so a 1000-task scan backlog drains in minutes instead of
-// hours. When the queue is empty, fall back to the configured interval
-// (default 5 min) so idle browsers don't hammer D1.
-const FAST_POLL_MS = 30 * 1000;
+// 220 — Continuous drain. While the queue has work, the next cycle starts
+// back-to-back with no artificial gap (previously a fixed 30s fast-poll
+// wait), so a large scan backlog drains as fast as this browser can go.
+// When the queue is empty, fall back to the configured interval (default
+// 5 min) so idle browsers don't hammer D1.
 
 // Memory monitoring configuration
 const MEMORY_SAMPLE_INTERVAL_MS = 30 * 1000; // 30 秒采样一次
@@ -177,6 +177,18 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // / start(); the in-poll `effectiveConcurrent = 1` fallback stays as the belt
   // for tasks already in-flight when playback starts.
   const isPlaybackThrottled = ref(false);
+  // 220 — reference-counted pause. Playback, generic page activity, and
+  // known bandwidth/CPU-heavy manual operations (upload, clone, cross-copy,
+  // batch tag write...) each add their own reason string while active and
+  // remove it when done; the pool only resumes once every reason has
+  // cleared, so overlapping interruptions don't cause one to prematurely
+  // resume the other's pause. See pauseForActivity/resumeAfterActivity.
+  const pauseReasons = new Set<string>();
+  const isActivityPaused = ref(false);
+  // AbortController for whatever /work/poll fetch or Worker task is
+  // currently in flight, so pauseForActivity can cancel it immediately
+  // instead of waiting for the current drain cycle to finish naturally.
+  let currentAbort: AbortController | null = null;
 
   // Memory monitoring: 30 秒采样一次内存使用情况
   const memoryHistory = ref<MemorySample[]>([]);
@@ -347,30 +359,36 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
-  // 093g — Self-scheduling timeout replaces fixed setInterval. After each
+  // 220 — Self-scheduling timeout replaces fixed setInterval. After each
   // poll, next delay is chosen based on whether the queue had work:
-  //  - got tasks → FAST_POLL_MS (30s) for aggressive drain
-  //   - empty   → pollIntervalMs (configured, default 5min) for idle
-  // This lets a 1000-task scan backlog drain in ~10 min instead of ~16 h,
+  //  - got tasks → 0 (continuous, back-to-back) for aggressive drain
+  //  - empty     → pollIntervalMs (configured, default 5min) for idle
+  // This lets a large scan backlog drain as fast as the browser can go,
   // without changing the idle behaviour that protects D1 from over-polling.
   let timeoutId: number | null = null;
   let hadTasksLastPoll = false;
   // Tools.vue shows a live "auto-start in mm:ss" countdown next to the
   // manual poll button. Reactive so the UI can derive a ticking display from
   // it without reaching into the module-local `timeoutId`/`poolStartedAt`.
-  // 0 means "nothing scheduled" (pool disabled/ineligible/stopped).
+  // 0 means "nothing scheduled" (pool disabled/ineligible/stopped/paused).
   const nextPollAt = ref<number>(0);
 
   function scheduleNext(): void {
     if (timeoutId !== null) { clearTimeout(timeoutId); timeoutId = null; }
     if (!enabled.value || !eligible.value) { nextPollAt.value = 0; return; }
+    // Still paused (playback/manual activity) — don't self-reschedule.
+    // Guards the race where pauseForActivity() stopped the timer while a
+    // poll cycle was already running; that cycle's trailing scheduleNext()
+    // call (below) would otherwise re-arm the timer while still paused.
+    // resumeAfterActivity() calls start() fresh once every reason clears.
+    if (pauseReasons.size > 0) { nextPollAt.value = 0; return; }
     // so a briefly-opened tab doesn't grab tasks. After the grace period,
-    // aggressive 30s polling kicks in if the queue has work.
+    // continuous polling kicks in if the queue has work.
     const sinceStart = Date.now() - poolStartedAt;
     const inGracePeriod = sinceStart < START_DELAY_MS;
     const delay = inGracePeriod
       ? pollIntervalMs.value
-      : (hadTasksLastPoll ? FAST_POLL_MS : pollIntervalMs.value);
+      : (hadTasksLastPoll ? 0 : pollIntervalMs.value);
     nextPollAt.value = Date.now() + delay;
     timeoutId = window.setTimeout(async () => {
       await pollAndDrain();
@@ -386,6 +404,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
   function start(): void {
     if (timeoutId !== null) return;
     if (!enabled.value || !eligible.value) return;
+    if (pauseReasons.size > 0) return;
     // 5 minutes. User can click "force poll" in the UI to start instantly.
     poolStartedAt = Date.now();
     hadTasksLastPoll = false;
@@ -400,6 +419,39 @@ export const useWorkerPool = defineStore("workerPool", () => {
     }
     stopMemoryMonitor();
     nextPollAt.value = 0;
+  }
+
+  // 220 — abort whatever /work/poll fetch or task Worker is currently in
+  // flight. Aborted tasks are neither reported as success nor failure (see
+  // executeOne); they simply stay claimed until the server-side heartbeat/
+  // reclaim sweep (workReclaim.ts) puts them back in the queue.
+  function abortInFlight(): void {
+    if (currentAbort) {
+      currentAbort.abort();
+      currentAbort = null;
+    }
+  }
+
+  // Add `reason` to the pause set and stop immediately, cancelling any
+  // in-flight request/task rather than letting it finish. Safe to call
+  // repeatedly / from multiple independent triggers (playback, generic page
+  // activity, a specific heavy operation) — the pool only actually resumes
+  // once every reason has been removed via resumeAfterActivity.
+  function pauseForActivity(reason: string): void {
+    pauseReasons.add(reason);
+    isActivityPaused.value = true;
+    abortInFlight();
+    stop();
+  }
+
+  // Remove `reason` from the pause set; once no reason remains, re-enter the
+  // normal 5-minute idle wait via a fresh start() (which resets the
+  // post-start grace period so we don't immediately hammer the queue).
+  function resumeAfterActivity(reason: string): void {
+    pauseReasons.delete(reason);
+    if (pauseReasons.size > 0) return;
+    isActivityPaused.value = false;
+    if (enabled.value && eligible.value) start();
   }
 
   function setEnabled(v: boolean): void {
@@ -429,6 +481,10 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastPollAt.value = Date.now();
     // 采样内存使用情况
     sampleMemory();
+    // 220 — owns this cycle's in-flight fetch/task so pauseForActivity can
+    // cancel it immediately from outside (playback start, manual activity).
+    const abort = new AbortController();
+    currentAbort = abort;
     try {
       // 113 — the ceiling may have been lowered by an admin since the last
       // ramp-up; clamp before using it as the adaptive base.
@@ -459,11 +515,11 @@ export const useWorkerPool = defineStore("workerPool", () => {
       const text = await edgesonicFetch("work/poll", {
         caps: caps.value.join(","),
         limit: String(effectiveConcurrent),
-      });
+      }, abort.signal);
       const data: PollResponse = JSON.parse(text);
       if (!data.ok) throw new Error(data.error || "poll rejected");
-      // 093g — track whether the queue had work so scheduleNext can pick
-      // the fast or idle cadence.
+      // 220 — track whether the queue had work so scheduleNext can pick
+      // the continuous or idle cadence.
       const tasks = data.tasks || [];
       hadTasksLastPoll = tasks.length > 0;
       // 088 — concurrent drain. `Promise.all` doesn't short-circuit on first
@@ -471,7 +527,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
       // failed stats + pushRecent) and resolves anyway, so a single bad task
       // doesn't stop its siblings.
       const beforeFailed = stats.value.failed;
-      await Promise.all(tasks.map((task) => executeOne(task)));
+      await Promise.all(tasks.map((task) => executeOne(task, abort.signal)));
 
       // 113 — adjust the adaptive concurrency for the NEXT cycle based on how
       // this batch went. Skipped during playback throttling — that's a
@@ -483,16 +539,21 @@ export const useWorkerPool = defineStore("workerPool", () => {
         });
       }
     } catch (e) {
-      lastError.value = e instanceof Error ? e.message : String(e);
+      // 220 — a pauseForActivity() abort surfaces here as a DOMException;
+      // that's an intentional interruption, not a real failure, so don't
+      // clutter lastError (the Settings/Tools UI treats it as a fault).
+      const aborted = abort.signal.aborted || (e instanceof DOMException && e.name === "AbortError");
+      if (!aborted) lastError.value = e instanceof Error ? e.message : String(e);
     } finally {
       stats.value.currentTaskType = "";
       stats.value.currentFileName = "";
       draining = false;
       isDraining.value = false;
+      if (currentAbort === abort) currentAbort = null;
     }
   }
 
-  async function executeOne(task: PolledTask): Promise<void> {
+  async function executeOne(task: PolledTask, signal: AbortSignal): Promise<void> {
     stats.value.currentTaskType = task.taskType;
     stats.value.currentFileName = fileNameFrom(task);
     let worker: Worker | null = null;
@@ -516,9 +577,13 @@ export const useWorkerPool = defineStore("workerPool", () => {
         }
       }
 
-      const result = await runWorkerOnce(worker, augmented);
+      const result = await runWorkerOnce(worker, augmented, signal);
+      // 220 — interrupted after the worker finished but before we could
+      // submit: abandon silently rather than reporting success/failure for
+      // work the pause reason (playback/manual activity) already cut short.
+      if (signal.aborted) return;
       // Submit success path.
-      await edgesonicPost("work/submit", { id: task.id, result });
+      await edgesonicPost("work/submit", { id: task.id, result }, signal);
       stats.value.completed++;
       pushRecent({
         id: task.id,
@@ -529,6 +594,11 @@ export const useWorkerPool = defineStore("workerPool", () => {
       });
       recordSample();
     } catch (e) {
+      // 220 — abandoned mid-flight by pauseForActivity(): don't report this
+      // as a task failure (that would burn one of its maxAttempts for
+      // something that never really ran to completion). The claimed row
+      // recovers on its own via the server-side heartbeat/reclaim sweep.
+      if (signal.aborted) return;
       // work_queue.error_message can spot which task failed without joining
       // back through result_json. The 500-char ceiling is enforced inside
       // formatTaskError; /work/submit also clamps server-side as belt-and-
@@ -557,9 +627,12 @@ export const useWorkerPool = defineStore("workerPool", () => {
   }
 
   // One-shot worker round-trip. Resolves with the result payload or rejects
-  // with the error string from the worker side.
-  function runWorkerOnce(worker: Worker, task: PolledTask): Promise<unknown> {
+  // with the error string from the worker side. Also rejects immediately if
+  // `signal` fires mid-flight, so executeOne's finally can terminate the
+  // Worker right away instead of waiting for it to finish on its own.
+  function runWorkerOnce(worker: Worker, task: PolledTask, signal: AbortSignal): Promise<unknown> {
     return new Promise((resolve, reject) => {
+      if (signal.aborted) { reject(new DOMException("aborted", "AbortError")); return; }
       const onMessage = (e: MessageEvent) => {
         if (e.data && typeof e.data === "object") {
           if ("ok" in e.data) {
@@ -581,12 +654,18 @@ export const useWorkerPool = defineStore("workerPool", () => {
         reject(new Error(msg));
         cleanup();
       };
+      const onAbort = () => {
+        reject(new DOMException("aborted", "AbortError"));
+        cleanup();
+      };
       function cleanup() {
         worker.removeEventListener("message", onMessage);
         worker.removeEventListener("error", onError);
+        signal.removeEventListener("abort", onAbort);
       }
       worker.addEventListener("message", onMessage);
       worker.addEventListener("error", onError);
+      signal.addEventListener("abort", onAbort);
       worker.postMessage(task);
     });
   }
@@ -606,23 +685,48 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // Playback auto-pause. Each metadata worker pulls up to 512KB from
   // /rest/stream; even with concurrency=1 those sub-requests compete with
   // the active player's own stream range requests for the R2 egress budget
-  // and can cause audible stalls. Instead of just throttling concurrency,
-  // we now fully stop scheduling new polls while a song is playing and
-  // resume when playback pauses/stops (so long as the pool is still opted-in).
-  // The pollAndDrain `effectiveConcurrent = 1` fallback below stays as a belt
-  // for tasks that were already in-flight when playback started.
+  // and can cause audible stalls. 220 — the moment playback starts we now
+  // abort whatever request/task is already in flight (pauseForActivity)
+  // instead of only cancelling the *next* scheduled poll; resume happens
+  // once playback stops, so long as the pool is still opted-in. The
+  // pollAndDrain `effectiveConcurrent = 1` fallback below stays as a belt
+  // for the narrow window between playback starting and the abort landing.
   try {
     const player = usePlayerStore();
     watch(() => player.playing, (playing) => {
-      if (playing) {
-        isPlaybackThrottled.value = true;
-        stop();
-      } else {
-        isPlaybackThrottled.value = false;
-        if (enabled.value && eligible.value) start();
-      }
+      isPlaybackThrottled.value = playing;
+      if (playing) pauseForActivity("playback");
+      else resumeAfterActivity("playback");
     });
   } catch { /* player store not registered yet — keep default schedule */ }
+
+  // 220 — generic manual-activity auto-pause. Any deliberate interaction
+  // with the page (click/keypress/touch/scroll) immediately aborts whatever
+  // request/task is in flight and holds the pool paused until the page has
+  // been quiet for ACTIVITY_QUIET_MS, at which point it re-enters the normal
+  // 5-minute idle wait via resumeAfterActivity(). Deliberately excludes bare
+  // `mousemove` — a resting mouse being nudged isn't really "operating" the
+  // site and would keep the pool paused almost continuously while the tab is
+  // simply open.
+  const ACTIVITY_REASON = "user-activity";
+  const ACTIVITY_QUIET_MS = 3 * 1000;
+  let activityQuietTimer: number | null = null;
+
+  function onManualActivity(): void {
+    if (!pauseReasons.has(ACTIVITY_REASON)) pauseForActivity(ACTIVITY_REASON);
+    if (activityQuietTimer !== null) window.clearTimeout(activityQuietTimer);
+    activityQuietTimer = window.setTimeout(() => {
+      activityQuietTimer = null;
+      resumeAfterActivity(ACTIVITY_REASON);
+    }, ACTIVITY_QUIET_MS);
+  }
+
+  if (typeof document !== "undefined") {
+    const ACTIVITY_EVENTS = ["mousedown", "keydown", "touchstart", "wheel"] as const;
+    for (const evt of ACTIVITY_EVENTS) {
+      document.addEventListener(evt, onManualActivity, { passive: true });
+    }
+  }
 
   // Sync the poll cadence from features. The settings page calls this after a
   // save so the new interval takes effect immediately without reload.
@@ -711,5 +815,13 @@ export const useWorkerPool = defineStore("workerPool", () => {
     pollNow,
     hydrateConfig,
     reset,
+    // 220 — reference-counted pause for known bandwidth/CPU-heavy manual
+    // operations (upload, clone/push, cross-copy, batch tag write, tag
+    // scan...). Call pauseForActivity(reason) before the operation starts
+    // and resumeAfterActivity(reason) in its `finally`, using the same
+    // reason string both times. Safe if multiple operations overlap.
+    isActivityPaused,
+    pauseForActivity,
+    resumeAfterActivity,
   };
 });

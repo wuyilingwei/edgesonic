@@ -226,9 +226,10 @@ export function useAuth() {
   // distinguish "session expired" from "request failed" and toast + redirect
   // accordingly (see handleAuthError). The body is still text() so XML-shaped
   // /rest errors keep working for Subsonic callers.
-  async function fetchAt(base: string, path: string, params?: Record<string, string>): Promise<string> {
+  async function fetchAt(base: string, path: string, params?: Record<string, string>, signal?: AbortSignal): Promise<string> {
     const resp = await fetch(`${base}/${path}?${signedParams(params).toString()}`, {
       credentials: "same-origin",
+      signal,
     });
     if (resp.status === 401 || resp.status === 403) {
       const err = new Error("session expired") as Error & { status: number };
@@ -237,12 +238,13 @@ export function useAuth() {
     }
     return resp.text();
   }
-  async function postAt(base: string, path: string, body: unknown): Promise<string> {
+  async function postAt(base: string, path: string, body: unknown, signal?: AbortSignal): Promise<string> {
     const resp = await fetch(`${base}/${path}?${signedParams().toString()}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       credentials: "same-origin",
+      signal,
     });
     if (resp.status === 401 || resp.status === 403) {
       const err = new Error("session expired") as Error & { status: number };
@@ -270,8 +272,8 @@ export function useAuth() {
   const tagPost = (path: string, body: unknown) => postAt(TAG_BASE, path, body);
   const storageFetch = (path: string, params?: Record<string, string>) => fetchAt(STORAGE_BASE, path, params);
   const storagePost = (path: string, body: unknown) => postAt(STORAGE_BASE, path, body);
-  const edgesonicFetch = (path: string, params?: Record<string, string>) => fetchAt(EDGESONIC_BASE, path, params);
-  const edgesonicPost = (path: string, body: unknown) => postAt(EDGESONIC_BASE, path, body);
+  const edgesonicFetch = (path: string, params?: Record<string, string>, signal?: AbortSignal) => fetchAt(EDGESONIC_BASE, path, params, signal);
+  const edgesonicPost = (path: string, body: unknown, signal?: AbortSignal) => postAt(EDGESONIC_BASE, path, body, signal);
 
   // === Tag edit helpers (task 039) — thin sugar over authFetch/authPost ===
   // readTags returns the latest known song row (used by editors to prefill).
