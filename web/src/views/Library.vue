@@ -9,6 +9,7 @@ import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
 import SongRowMenu from "../components/SongRowMenu.vue";
 import StarButton from "../components/StarButton.vue";
+import BudgetedImage from "../components/BudgetedImage.vue";
 import type { ScrapeResult } from "../lib/scrape";
 
 const { t } = useI18n();
@@ -1115,7 +1116,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       <div class="album-grid">
       <div v-for="al in albums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
         <div class="album-cover">
-          <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
+          <BudgetedImage v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" @error="al.coverArt = ''" />
           <span v-else class="album-cover-placeholder">♪</span>
         </div>
         <div class="album-body">
@@ -1171,7 +1172,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
     <div v-else-if="starredOnly && tab === 'albums'" class="album-grid">
       <div v-for="al in displayAlbums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
         <div class="album-cover">
-          <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
+          <BudgetedImage v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" @error="al.coverArt = ''" />
           <span v-else class="album-cover-placeholder">♪</span>
         </div>
         <div class="album-body">
@@ -1260,7 +1261,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
         <div v-for="(col, ci) in albumWaterfallCols" :key="ci" class="waterfall-col">
           <div v-for="al in col" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
             <div class="album-cover">
-              <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
+              <BudgetedImage v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" @error="al.coverArt = ''" />
               <span v-else class="album-cover-placeholder">♪</span>
             </div>
             <div class="album-body">
@@ -1454,7 +1455,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
               @click="openAlbum(al); clearSearch()"
             >
               <div class="album-cover">
-                <img v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" loading="lazy" @error="al.coverArt = ''" />
+                <BudgetedImage v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" @error="al.coverArt = ''" />
                 <span v-else class="album-cover-placeholder">♪</span>
               </div>
               <div class="album-body">

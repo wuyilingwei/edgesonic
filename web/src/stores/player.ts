@@ -17,6 +17,7 @@ import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { useAuth, parseXmlAttrs } from "../api";
 import { getTrackMetadataXml, preloadTrack } from "../lib/trackPrefetch";
+import { setPlaybackActive } from "../lib/requestBudget";
 
 export interface Track {
   id: string;
@@ -93,6 +94,8 @@ export const usePlayerStore = defineStore("player", () => {
 
   const current = computed<Track | null>(() => queue.value[index.value] || null);
   const hasTrack = computed(() => index.value >= 0 && index.value < queue.value.length);
+
+  watch(playing, setPlaybackActive, { immediate: true });
 
   // ---- Favorite (Subsonic star/unstar) ----
   // Queue entries (built ad hoc by each view from search3/getAlbum/etc. XML)

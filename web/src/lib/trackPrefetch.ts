@@ -13,6 +13,8 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+import { runLowPriority } from "./requestBudget";
+
 export interface PrefetchTrack {
   id: string;
   title: string;
@@ -197,8 +199,8 @@ function preloadCover(track: PrefetchTrack, auth: TrackPrefetchAuth, size: numbe
 }
 
 export function preloadTrack(track: PrefetchTrack, auth: TrackPrefetchAuth): void {
-  void getTrackMetadataXml(track, auth).catch(() => {});
-  void getTrackLyrics(track, auth).catch(() => {});
-  void preloadCover(track, auth, 96).catch(() => {});
-  void preloadCover(track, auth, 512).catch(() => {});
+  void runLowPriority(() => getTrackMetadataXml(track, auth)).catch(() => {});
+  void runLowPriority(() => getTrackLyrics(track, auth)).catch(() => {});
+  void runLowPriority(() => preloadCover(track, auth, 96)).catch(() => {});
+  void runLowPriority(() => preloadCover(track, auth, 512)).catch(() => {});
 }
