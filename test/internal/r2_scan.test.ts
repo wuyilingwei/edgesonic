@@ -274,6 +274,73 @@ async function main() {
     assert(row2.name === "My Bucket", `saved name survives a later scan's upsert (got ${row2.name})`);
   }
 
+  // 219 — scan never used to flip song_instances.missing when a file
+  // disappeared from the source between scans (renames looked identical to
+  // delete+create-elsewhere). The old row sat around forever with
+  // missing=0, tag_scanned=0, and a dead storage_uri: work_queue kept
+  // retrying its metadata task (permanent HTTP 404 → failed after 3
+  // attempts) and listForMirror kept re-offering it to CrossCopy (which
+  // also 404'd). Real-world case: a WebDAV "Epilogue" folder whose files
+  // got renamed twice, leaving 4 zombie rows in production.
+  console.log("\nfile removed from bucket → existing row flips missing=1:");
+  {
+    const sqlite = buildDb();
+    const now = Math.floor(Date.now() / 1000);
+    sqlite.prepare(
+      `INSERT INTO song_instances (id, master_id, source_id, storage_uri, suffix, size, source_etag, source_last_modified, tag_scanned, missing, created_at, updated_at)
+       VALUES ('si-gone', 'sm-gone', 'r2-local', 'r2://music/Artist/Album/gone.mp3', 'mp3', 5000, 'e1', ?, 0, 0, ?, ?)`,
+    ).run(now, now, now);
+    const db = makeD1(sqlite);
+    seedScanJob(sqlite, "sj-10", "r2-local");
+    // Bucket listing no longer contains gone.mp3 — only an unrelated file,
+    // so audio.length > 0 and the scan is "complete" (no page-budget cutoff).
+    const env = { MUSIC_BUCKET: makeBucket([
+      { key: "music/Artist/Album/still-here.mp3", size: 1234, etag: "e9", uploaded: new Date() },
+    ]) };
+    await asyncScanR2Source(env, db, { id: "r2-local" }, "sj-10", { etagCheck: true });
+    const row = sqlite.prepare("SELECT missing FROM song_instances WHERE id='si-gone'").get() as { missing: number };
+    assert(row.missing === 1, `vanished file's row marked missing (got missing=${row.missing})`);
+  }
+
+  console.log("\nmissing row reappears in a later scan → missing flips back to 0:");
+  {
+    const sqlite = buildDb();
+    const now = Math.floor(Date.now() / 1000);
+    sqlite.prepare(
+      `INSERT INTO song_instances (id, master_id, source_id, storage_uri, suffix, size, source_etag, source_last_modified, tag_scanned, missing, created_at, updated_at)
+       VALUES ('si-back', 'sm-back', 'r2-local', 'r2://music/Artist/Album/back.mp3', 'mp3', 5000, 'e1', ?, 1, 1, ?, ?)`,
+    ).run(now, now, now);
+    const db = makeD1(sqlite);
+    seedScanJob(sqlite, "sj-11", "r2-local");
+    // Same etag/size as before it went missing — path 1's skip would
+    // normally apply, but a missing=1 row must always fall through to the
+    // path 2 UPDATE so the flag actually clears.
+    const env = { MUSIC_BUCKET: makeBucket([
+      { key: "music/Artist/Album/back.mp3", size: 5000, etag: "e1", uploaded: new Date() },
+    ]) };
+    await asyncScanR2Source(env, db, { id: "r2-local" }, "sj-11", { etagCheck: true });
+    const row = sqlite.prepare("SELECT missing, tag_scanned FROM song_instances WHERE id='si-back'").get() as { missing: number; tag_scanned: number };
+    assert(row.missing === 0, `resurrected file's row cleared back to missing=0 (got missing=${row.missing})`);
+  }
+
+  console.log("\nsuspiciously-empty listing does NOT mass-mark a populated source as missing:");
+  {
+    const sqlite = buildDb();
+    const now = Math.floor(Date.now() / 1000);
+    sqlite.prepare(
+      `INSERT INTO song_instances (id, master_id, source_id, storage_uri, suffix, size, source_etag, source_last_modified, tag_scanned, missing, created_at, updated_at)
+       VALUES ('si-safe', 'sm-safe', 'r2-local', 'r2://music/Artist/Album/safe.mp3', 'mp3', 5000, 'e1', ?, 1, 0, ?, ?)`,
+    ).run(now, now, now);
+    const db = makeD1(sqlite);
+    seedScanJob(sqlite, "sj-12", "r2-local");
+    // list() reports zero objects — e.g. a transient auth hiccup that still
+    // returns a "successful" empty page — while the DB already has rows.
+    const env = { MUSIC_BUCKET: makeBucket([]) };
+    await asyncScanR2Source(env, db, { id: "r2-local" }, "sj-12", { etagCheck: true });
+    const row = sqlite.prepare("SELECT missing FROM song_instances WHERE id='si-safe'").get() as { missing: number };
+    assert(row.missing === 0, `pre-existing row untouched by a suspiciously-empty listing (got missing=${row.missing})`);
+  }
+
   console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PASS");
   process.exit(failures ? 1 : 0);
 }

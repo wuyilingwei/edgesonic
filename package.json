@@ -11,6 +11,10 @@
     "dev:web": "npm run dev -w web",
     "build:web": "npm run build -w web",
     "typecheck": "npm run typecheck -w worker",
-    "deploy": "npm run build:web && npm run deploy -w worker"
+    "deploy": "npm run build:web && npm run deploy -w worker",
+    "postinstall": "patch-package"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
   }
 }

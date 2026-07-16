@@ -68,6 +68,24 @@ interface ExistingRow {
   lastModified: number | null;
   size: number | null;
   tagScanned: number;
+  missing: number;
+}
+
+// Flip song_instances.missing back on for rows whose storage_uri no longer
+// appears in a *complete* listing (renamed/moved/deleted upstream). Every
+// missing=0 gate in the codebase (library listing, listForMirror, stats,
+// covers, hotcache) already trusts this flag — scan just never set it, so a
+// renamed file's old row sat around forever as a dead, permanently-404ing
+// entry that work_queue kept retrying and listForMirror kept re-offering to
+// CrossCopy. Guarded on audio.length>0 so a transiently-empty listing (auth
+// hiccup, flaky mount) can't mass-hide an entire previously-populated source.
+async function markMissing(db: D1Database, ids: string[], now: number): Promise<void> {
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    await db.prepare(
+      `UPDATE song_instances SET missing = 1, updated_at = ? WHERE id IN (${chunk.map(() => "?").join(",")})`,
+    ).bind(now, ...chunk).run();
+  }
 }
 
 // Kick off a WebDAV and/or S3 scan. The actual work runs inside ctx.waitUntil
@@ -375,7 +393,7 @@ export async function asyncScanSource(
     const existingMap = new Map<string, ExistingRow>();
     {
       const rows = (await db.prepare(
-        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned
+        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned, missing
          FROM song_instances WHERE source_id = ?`,
       ).bind(src.id).all<{
         id: string;
@@ -384,6 +402,7 @@ export async function asyncScanSource(
         source_last_modified: number | null;
         size: number | null;
         tag_scanned: number | null;
+        missing: number | null;
       }>()).results;
       for (const r of rows) {
         existingMap.set(r.storage_uri, {
@@ -392,6 +411,7 @@ export async function asyncScanSource(
           lastModified: r.source_last_modified,
           size: r.size,
           tagScanned: r.tag_scanned ?? 0,
+          missing: r.missing ?? 0,
         });
       }
     }
@@ -400,6 +420,7 @@ export async function asyncScanSource(
 
     const stmts: D1PreparedStatement[] = [];
     const touchedAlbums = new Set<string>();
+    const seenUris = new Set<string>();
     let added = 0;
     let updated = 0;
     let skipped = 0;
@@ -417,13 +438,17 @@ export async function asyncScanSource(
     for (const file of audio) {
       scanned++;
       const uri = `webdav://${src.id}/${file.path}`;
+      seenUris.add(uri);
       const prior = existingMap.get(uri);
 
       // -------- Path 1: unchanged file → skip entirely --------
       // Triple-equal etag + lastModified + size. nulls are treated as
       // "unknown" — if the server stopped emitting an attribute the row
-      // shouldn't be skipped (we'd lose the chance to recover meta).
-      if (prior && etagCheck) {
+      // shouldn't be skipped (we'd lose the chance to recover meta). A row
+      // previously marked missing always falls through to path 2 so the
+      // UPDATE there can clear the flag — a resurrected file must not stay
+      // hidden just because its etag/size happen to match.
+      if (prior && etagCheck && prior.missing === 0) {
         const etagSame = file.etag !== null && prior.etag !== null && file.etag === prior.etag;
         const lmSame = file.lastModified !== null && prior.lastModified !== null && file.lastModified === prior.lastModified;
         const sizeSame = prior.size === file.size;
@@ -450,7 +475,7 @@ export async function asyncScanSource(
           db.prepare(
             `UPDATE song_instances
              SET source_etag = ?, source_last_modified = ?, size = ?,
-                 content_type = ?, suffix = ?, tag_scanned = 0, updated_at = ?
+                 content_type = ?, suffix = ?, tag_scanned = 0, missing = 0, updated_at = ?
              WHERE id = ?`,
           ).bind(
             file.etag,
@@ -531,6 +556,17 @@ export async function asyncScanSource(
 
     // Final flush + recompute album song_count/size.
     await flush();
+
+    // Rows that existed before this scan but weren't seen in it are gone
+    // from the source (deleted, or renamed — renames are indistinguishable
+    // from delete+create by URI). Only trustworthy on a *complete* listing
+    // with at least one hit; see markMissing's doc comment.
+    if (complete && (audio.length > 0 || existingMap.size === 0)) {
+      const goneIds = [...existingMap.entries()]
+        .filter(([uri, row]) => !seenUris.has(uri) && row.missing === 0)
+        .map(([, row]) => row.id);
+      if (goneIds.length > 0) await markMissing(db, goneIds, now);
+    }
 
     for (const albumId of touchedAlbums) {
       await db.prepare(
@@ -658,7 +694,7 @@ export async function asyncScanS3Source(
     const existingMap = new Map<string, ExistingRow>();
     {
       const rows = (await db.prepare(
-        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned
+        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned, missing
          FROM song_instances WHERE source_id = ?`,
       ).bind(src.id).all<{
         id: string;
@@ -667,6 +703,7 @@ export async function asyncScanS3Source(
         source_last_modified: number | null;
         size: number | null;
         tag_scanned: number | null;
+        missing: number | null;
       }>()).results;
       for (const r of rows) {
         existingMap.set(r.storage_uri, {
@@ -675,6 +712,7 @@ export async function asyncScanS3Source(
           lastModified: r.source_last_modified,
           size: r.size,
           tagScanned: r.tag_scanned ?? 0,
+          missing: r.missing ?? 0,
         });
       }
     }
@@ -683,6 +721,7 @@ export async function asyncScanS3Source(
 
     const stmts: D1PreparedStatement[] = [];
     const touchedAlbums = new Set<string>();
+    const seenUris = new Set<string>();
     let scanned = 0;
     let updated = 0;
     let skipped = 0;
@@ -704,10 +743,12 @@ export async function asyncScanS3Source(
       scanned++;
       // Storage URI: s3://<sourceId>/<fullObjectKey> (key within bucket, NOT including bucket)
       const uri = `s3://${src.id}/${obj.key}`;
+      seenUris.add(uri);
       const prior = existingMap.get(uri);
 
-      // Path 1: unchanged → skip
-      if (prior && etagCheck) {
+      // Path 1: unchanged → skip (a previously-missing row always falls
+      // through to path 2 so the UPDATE there clears the flag).
+      if (prior && etagCheck && prior.missing === 0) {
         const etagSame = obj.etag !== null && prior.etag !== null && obj.etag === prior.etag;
         const lmSame = obj.lastModified !== null && prior.lastModified !== null && obj.lastModified === prior.lastModified;
         const sizeSame = prior.size === obj.size;
@@ -727,7 +768,7 @@ export async function asyncScanS3Source(
           db.prepare(
             `UPDATE song_instances
              SET source_etag = ?, source_last_modified = ?, size = ?,
-                 suffix = ?, tag_scanned = 0, updated_at = ?
+                 suffix = ?, tag_scanned = 0, missing = 0, updated_at = ?
              WHERE id = ?`,
           ).bind(obj.etag, obj.lastModified, obj.size, extOf(obj.key), now, prior.id),
         );
@@ -785,6 +826,15 @@ export async function asyncScanS3Source(
     void updated; void skipped;
 
     await flush();
+
+    // See asyncScanSource above for the reasoning — renamed/deleted objects
+    // are indistinguishable, and only trustworthy on a complete listing.
+    if (complete && (audio.length > 0 || existingMap.size === 0)) {
+      const goneIds = [...existingMap.entries()]
+        .filter(([uri, row]) => !seenUris.has(uri) && row.missing === 0)
+        .map(([, row]) => row.id);
+      if (goneIds.length > 0) await markMissing(db, goneIds, now);
+    }
 
     for (const albumId of touchedAlbums) {
       await db.prepare(
@@ -882,7 +932,7 @@ export async function asyncScanR2Source(
     const existingMap = new Map<string, ExistingRow>();
     {
       const rows = (await db.prepare(
-        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned
+        `SELECT id, storage_uri, source_etag, source_last_modified, size, tag_scanned, missing
          FROM song_instances WHERE source_id = ?`,
       ).bind(src.id).all<{
         id: string;
@@ -891,6 +941,7 @@ export async function asyncScanR2Source(
         source_last_modified: number | null;
         size: number | null;
         tag_scanned: number | null;
+        missing: number | null;
       }>()).results;
       for (const r of rows) {
         existingMap.set(r.storage_uri, {
@@ -899,6 +950,7 @@ export async function asyncScanR2Source(
           lastModified: r.source_last_modified,
           size: r.size,
           tagScanned: r.tag_scanned ?? 0,
+          missing: r.missing ?? 0,
         });
       }
     }
@@ -907,6 +959,7 @@ export async function asyncScanR2Source(
 
     const stmts: D1PreparedStatement[] = [];
     const touchedAlbums = new Set<string>();
+    const seenUris = new Set<string>();
     let scanned = 0;
 
     const flush = async () => {
@@ -922,13 +975,16 @@ export async function asyncScanR2Source(
       // Bare key, no source-id prefix — matches every other r2:// writer in
       // the codebase (clone.ts, work_upload.ts, hotcache.ts, files.ts).
       const uri = `r2://${obj.key}`;
+      seenUris.add(uri);
       const prior = existingMap.get(uri);
 
       // Path 1: unchanged → skip. Pre-existing rows (native uploads never
       // recorded source_etag/source_last_modified) naturally fail this check
       // on their first R2 scan and fall through to path 2's UPDATE, which
       // backfills those columns — a one-time reconciliation, not a bug.
-      if (prior && etagCheck) {
+      // A previously-missing row also always falls through to path 2 so its
+      // flag gets cleared.
+      if (prior && etagCheck && prior.missing === 0) {
         const etagSame = obj.etag !== null && prior.etag !== null && obj.etag === prior.etag;
         const lmSame = obj.lastModified !== null && prior.lastModified !== null && obj.lastModified === prior.lastModified;
         const sizeSame = prior.size === obj.size;
@@ -947,7 +1003,7 @@ export async function asyncScanR2Source(
           db.prepare(
             `UPDATE song_instances
              SET source_etag = ?, source_last_modified = ?, size = ?,
-                 suffix = ?, tag_scanned = 0, updated_at = ?
+                 suffix = ?, tag_scanned = 0, missing = 0, updated_at = ?
              WHERE id = ?`,
           ).bind(obj.etag, obj.lastModified, obj.size, extOf(obj.key), now, prior.id),
         );
@@ -995,6 +1051,16 @@ export async function asyncScanR2Source(
     }
 
     await flush();
+
+    // See asyncScanSource above for the reasoning — deleted R2 objects are
+    // indistinguishable from renames, and only trustworthy on a complete
+    // (non-page-budget-exhausted) listing.
+    if (complete && (audio.length > 0 || existingMap.size === 0)) {
+      const goneIds = [...existingMap.entries()]
+        .filter(([uri, row]) => !seenUris.has(uri) && row.missing === 0)
+        .map(([, row]) => row.id);
+      if (goneIds.length > 0) await markMissing(db, goneIds, now);
+    }
 
     for (const albumId of touchedAlbums) {
       await db.prepare(
