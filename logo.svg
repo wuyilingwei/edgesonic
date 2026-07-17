@@ -7,6 +7,7 @@
     </radialGradient>
   </defs>
 
+  <g transform="translate(128 128) scale(1.15) translate(-128 -128)">
   <!-- 主碟片(vinyl/CD) -->
   <circle cx="128" cy="128" r="90" fill="url(#discGrad)" stroke="#0C1E3E" stroke-width="3"/>
 
@@ -41,4 +42,5 @@
 
   <!-- 焦点:加粗中心点 -->
   <circle cx="128" cy="128" r="5" fill="#FFFFFF" stroke="#F38020" stroke-width="2.8"/>
+  </g>
 </svg>
