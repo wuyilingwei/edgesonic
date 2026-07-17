@@ -10,7 +10,7 @@
     "dev:worker": "npm run dev -w worker",
     "dev:web": "npm run dev -w web",
     "build:web": "npm run build -w web",
-    "typecheck": "npm run typecheck -w worker",
+    "typecheck": "npm run typecheck -w worker && npm run typecheck -w web",
     "deploy": "npm run build:web && npm run deploy -w worker",
     "postinstall": "patch-package"
   },

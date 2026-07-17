@@ -40,7 +40,3 @@ export function setLocale(locale: AppLocale) {
   localStorage.setItem(LANG_KEY, locale);
   document.documentElement.setAttribute("lang", locale);
 }
-
-export function currentLocale(): AppLocale {
-  return i18n.global.locale.value as AppLocale;
-}

@@ -55,7 +55,3 @@ export function resetTheme() {
   activeTheme.value = "black";
   applyTheme("black");
 }
-
-export function currentTheme(): AppTheme {
-  return activeTheme.value;
-}

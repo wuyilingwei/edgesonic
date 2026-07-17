@@ -12,6 +12,7 @@ import { useWorkerPool } from "./stores/workerPool";
 import { activeTheme, resetTheme, restoreSavedTheme } from "./theme";
 import { getTheme } from "./themes/registry";
 import { ensureBuiltinThemeLoaded } from "./themes/builtin";
+import { activeToast, dismissToast } from "./stores/toast";
 
 const router = useRouter();
 const route = useRoute();
@@ -131,6 +132,19 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
 
   <UpdateBanner />
 
+  <Transition name="toast">
+    <button
+      v-if="activeToast"
+      type="button"
+      :class="['toast', `toast-${activeToast.type}`, 'app-toast']"
+      role="alert"
+      @click="dismissToast"
+    >
+      <span aria-hidden="true">{{ activeToast.type === 'error' ? '!' : '✓' }}</span>
+      {{ activeToast.message }}
+    </button>
+  </Transition>
+
   <!-- 未登录：全屏渲染（Login） -->
   <router-view v-if="!isLoggedIn" />
 
@@ -224,6 +238,17 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   z-index: 1;
 }
 .shell { min-height: 100vh; }
+.app-toast {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: min(28rem, calc(100vw - 2rem));
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+}
+.toast-enter-active, .toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(0.5rem); }
 .shell.now-playing-shell {
   height: 100vh;
   height: 100dvh;

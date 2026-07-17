@@ -452,10 +452,11 @@ img { max-width: 100%; display: block; }
   letter-spacing: 0.05em;
   border-radius: 2px;
   border: 1px solid;
+  background: var(--color-bg-elevated);
   animation: toast-in 0.25s ease;
 }
-.toast-success { color: var(--color-status-success); border-color: var(--color-status-success); background: rgba(63, 185, 80, 0.12); }
-.toast-error { color: var(--color-status-error); border-color: var(--color-status-error); background: rgba(248, 81, 73, 0.12); }
+.toast-success { color: var(--color-status-success); border-color: var(--color-status-success); box-shadow: inset 3px 0 var(--color-status-success); }
+.toast-error { color: var(--color-status-error); border-color: var(--color-status-error); box-shadow: inset 3px 0 var(--color-status-error); }
 @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
 /* --- Empty state --- */

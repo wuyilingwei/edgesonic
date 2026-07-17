@@ -157,8 +157,7 @@ function validateFeatureString(key: string, value: string): string | null {
       }
       return null;
     case "default_transcode_profiles": {
-      // Must be a JSON array of strings; we don't check ids vs. catalogue here
-      // (profiles.ts parseProfileIdList silently drops unknown ids).
+      // Must be a JSON array of strings. Profile ids are validated when used.
       try {
         const parsed = JSON.parse(value);
         if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === "string")) {

@@ -194,6 +194,11 @@ export const useWorkerPool = defineStore("workerPool", () => {
   const memoryHistory = ref<MemorySample[]>([]);
   let memoryMonitorInterval: number | null = null;
 
+  type PerformanceMemory = {
+    usedJSHeapSize: number;
+    totalJSHeapSize: number;
+  };
+
   function startMemoryMonitor(): void {
     if (memoryMonitorInterval !== null) return;
     memoryMonitorInterval = window.setInterval(() => {
@@ -209,18 +214,19 @@ export const useWorkerPool = defineStore("workerPool", () => {
   }
 
   function sampleMemory(): void {
-    if (performance.memory) {
+    const memory = (performance as Performance & { memory?: PerformanceMemory }).memory;
+    if (memory) {
       const sample: MemorySample = {
         timestamp: Date.now(),
-        heapUsed: performance.memory.usedJSHeapSize,
-        heapTotal: performance.memory.totalJSHeapSize,
+        heapUsed: memory.usedJSHeapSize,
+        heapTotal: memory.totalJSHeapSize,
       };
       memoryHistory.value.push(sample);
       if (memoryHistory.value.length > MAX_MEMORY_SAMPLES) {
         memoryHistory.value.shift();
       }
       // 自动清理：超过 50MB 时触发
-      if (performance.memory.usedJSHeapSize > MEMORY_CLEANUP_THRESHOLD_BYTES) {
+      if (memory.usedJSHeapSize > MEMORY_CLEANUP_THRESHOLD_BYTES) {
         // 标记需要清理，但不强制执行垃圾回收（JS 无法直接触发）
         // 只记录此状态供监控使用
       }

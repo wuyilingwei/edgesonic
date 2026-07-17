@@ -1,6 +1,6 @@
 # Architecture Reference
 
-Project layout, storage backend model, and how to add a new storage source. For the full backend/frontend design rationale (auth model, capability matrix, adapter interfaces), see [`DESIGN.md`](DESIGN.md).
+Project layout, storage backend model, and how to add a new storage source.
 
 ## Monorepo structure
 
@@ -33,7 +33,7 @@ edgesonic/
 │       └── locales/      # zh-CN / en i18n strings
 │
 ├── test/                 # Plain tsx test scripts (worker) — each file is self-contained, run individually
-├── docs/                 # This file, DESIGN.md, DEVELOPMENT.md, DEPLOYMENT.md, SECURITY.md, cf-integration.md, external-transcoder.md
+├── docs/                 # Architecture, development, and deployment guides
 ├── deploy.sh             # Manual deploy script (wrangler CLI, no CF Git integration)
 └── package.json          # npm workspaces root (worker + web)
 ```

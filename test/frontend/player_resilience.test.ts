@@ -46,6 +46,8 @@ assert(playerSrc.includes('state.phase = "full";'), "fallback advances from Rang
 assert(playerSrc.includes("fallbackAfterMediaError"), "network, decode, and unsupported-source errors enter fallback");
 assert(playerSrc.includes("advanceAfterFallbackFailure"), "exhausted fallback attempts have a terminal path");
 assert(playerSrc.includes("console.error(\"[Player] all playback attempts failed, skipping track:\", reason);"), "terminal playback failure skips to the next track");
+assert(playerSrc.includes('showError(i18n.global.t("player.playbackFailed"'), "terminal playback failure notifies the user");
+assert(playerSrc.includes('showError(i18n.global.t("player.preloadFailed"'), "preload failures notify the user");
 assert(!playerSrc.includes("fallbackAfterDemuxError"), "old demux-only error gate is removed");
 
 console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PASS");

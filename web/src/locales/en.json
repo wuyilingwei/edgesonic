@@ -153,6 +153,8 @@
     "sortNameDesc": "Name Z-A",
     "like": "Like",
     "unlike": "Unlike",
+    "playbackFailed": "Unable to play {title}; skipping to the next track",
+    "preloadFailed": "Unable to preload {title}",
     "starUpdateFailed": "Failed to update liked state",
     "artistInfoTitle": "Artist information",
     "artistInfoLoading": "Looking up artist information…",

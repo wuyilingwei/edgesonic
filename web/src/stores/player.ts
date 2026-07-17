@@ -19,6 +19,8 @@ import { useAuth, parseXmlAttrs } from "../api";
 import { getTrackMetadataXml, preloadTrack } from "../lib/trackPrefetch";
 import { getCachedTrack, putCachedTrack, deleteCachedTrack } from "../lib/audioCache";
 import { setPlaybackActive } from "../lib/requestBudget";
+import { i18n } from "../i18n";
+import { showError } from "./toast";
 
 export interface Track {
   id: string;
@@ -54,6 +56,7 @@ interface PreloadedTrack {
   el: HTMLAudioElement;
   index: number;
   ready: boolean;
+  broken?: boolean;
 }
 
 /**
@@ -294,6 +297,7 @@ export const usePlayerStore = defineStore("player", () => {
     fullyLoadedByElement.delete(el);
     playing.value = false;
     console.error("[Player] all playback attempts failed, skipping track:", reason);
+    showError(i18n.global.t("player.playbackFailed", { title: current.value?.title || "" }));
     next();
   }
 
@@ -535,9 +539,13 @@ export const usePlayerStore = defineStore("player", () => {
           fallbackAfterMediaError(el, failedSrc, shouldPlay);
         }
       } else if (preloaded?.el === el) {
-        // Do not skip the currently-playing song because a speculative next
-        // track failed early. Drop the candidate and retry it normally if the
-        // user eventually selects it.
+        // A speculative next track whose blob/src won't play. Mark it broken
+        // so the auto-advance skips it instead of swapping in a dead element
+        // and recovering at play time.
+        if (!preloaded.broken) {
+          showError(i18n.global.t("player.preloadFailed", { title: queue.value[preloaded.index]?.title || "" }));
+          preloaded.broken = true;
+        }
         preloaded.ready = false;
         abortFullDownload(el);
       }
@@ -641,7 +649,15 @@ export const usePlayerStore = defineStore("player", () => {
         },
         (error) => {
           if (preloaded === candidate) {
-            console.warn("[Player] next-track full preload failed:", error);
+            // Mark the candidate broken so next() skips it instead of
+            // waiting for the swap to fail at play time. The user can still
+            // play it manually (playAt clears preloaded); only the auto
+            // advance is redirected.
+            if (!candidate.broken) {
+              showError(i18n.global.t("player.preloadFailed", { title: nextTrack.title }));
+              candidate.broken = true;
+            }
+            console.warn("[Player] next-track full preload failed, will skip on advance:", error);
           }
         },
       );
@@ -652,6 +668,20 @@ export const usePlayerStore = defineStore("player", () => {
     const track = current.value;
     if (!track) return;
     ensureElements();
+    // If the user (or auto-advance) landed on a preload we already know is
+    // broken, skip it now instead of swapping in a dead element and failing
+    // at play time. Bounded by queue length so a fully-broken queue can't
+    // loop forever.
+    if (preloaded && preloaded.index === index.value && preloaded.broken) {
+      const skipFrom = index.value;
+      invalidatePreload();
+      let guard = queue.value.length;
+      while (guard-- > 0) {
+        next();
+        if (index.value !== skipFrom) break;
+      }
+      return;
+    }
     prefetchedTrackId = null;
     // If restoring a saved position, show it immediately; otherwise reset to 0.
     currentTime.value = _pendingRestoreTime ?? 0;
@@ -687,6 +717,20 @@ export const usePlayerStore = defineStore("player", () => {
           targetEl.volume = volume.value;
           playPreparedBlob(targetEl, cached, resumeAt, autoplay, "background");
           syncBuffered(targetEl);
+          // Blob URLs don't fire `progress` (no network fetch), and
+          // `durationchange` only fires on an actual duration change. When
+          // track.duration is 0 the eager syncBuffered above writes [] and
+          // nothing else repopulates the bar. Re-sync once on metadata so the
+          // real el.duration drives the fully-loaded [0,dur] segment.
+          const onMeta = () => {
+            if (active !== targetEl) return;
+            if (isFinite(targetEl.duration) && targetEl.duration > 0) {
+              duration.value = targetEl.duration;
+              syncBuffered(targetEl);
+            }
+            targetEl.removeEventListener("loadedmetadata", onMeta);
+          };
+          targetEl.addEventListener("loadedmetadata", onMeta);
           return;
         }
         const { streamUrl } = useAuth();
@@ -708,6 +752,7 @@ export const usePlayerStore = defineStore("player", () => {
           },
           (error) => {
             console.warn("[Player] complete current-track preload failed; native stream remains active:", error);
+            showError(i18n.global.t("player.preloadFailed", { title: track.title }));
           },
         );
         targetEl.volume = volume.value;

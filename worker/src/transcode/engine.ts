@@ -115,7 +115,3 @@ export type EngineKind = "sandbox" | "external" | "browser_pool" | "disabled";
 //  pre_bake : transcode on upload, write to song_instances as new rows
 //   both    : pre-bake the default_profiles and fall back to on-demand
 export type EngineMode = "on_demand" | "pre_bake" | "both";
-
-// Sentinel returned from the dispatcher when the engine is disabled. Callers
-// should fall back to the source instance unchanged.
-export const ENGINE_DISABLED = Symbol("transcode-engine-disabled");

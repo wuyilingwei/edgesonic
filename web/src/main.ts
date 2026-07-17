@@ -97,18 +97,10 @@ async function checkVersion() {
   }
 }
 
-// P6 — save the interval handle so it is GC-eligible; skip the request
-// whenever the tab is hidden (document.hidden) to avoid network noise while
-// the user has EdgeSonic open in a background tab.
-let versionPollIntervalId: ReturnType<typeof setInterval> | null = null;
-
 setTimeout(() => {
   void checkVersion();
-  versionPollIntervalId = setInterval(() => {
+  setInterval(() => {
     if (document.hidden) return; // tab not visible — skip, retry next tick
     void checkVersion();
   }, VERSION_POLL_INTERVAL_MS);
 }, VERSION_FIRST_PROBE_DELAY_MS);
-
-// Export the handle so HMR / test teardown can clear it if needed.
-export { versionPollIntervalId };

@@ -152,7 +152,7 @@ the clicking yourself). Give them this exact walkthrough:
 **Token 2 — R2 API token → `R2_ACCESS_KEY_ID` + `R2_SECRET_ACCESS_KEY`**
 
 1. Open **R2 → Manage R2 API Tokens** (`https://dash.cloudflare.com/<account-id>/r2/api-tokens`) and
-   create a token scoped to the bucket from step 3.2 with **Object Read & Write**.
+    create a token scoped to the bucket from step 3.2 with **Object Read**.
 2. On creation Cloudflare shows an **Access Key ID** and a **Secret Access Key** for the
    S3-compatible endpoint — copy both (shown once). Those are `R2_ACCESS_KEY_ID` and
    `R2_SECRET_ACCESS_KEY`.
@@ -184,6 +184,8 @@ wrangler secret put R2_SECRET_ACCESS_KEY --config wrangler.toml
 
 After `CF_API_TOKEN` is set, also flip `enable_r2_presign` on (see `SECRETS.md` §3) and restore the
 cron schedule the deploy in step 3.6 clears — see step 5.
+
+R2 presigned streaming currently signs the default `edgesonic-music` bucket. Leave it disabled when using a differently named bucket.
 
 ### 3.6 Deploy
 

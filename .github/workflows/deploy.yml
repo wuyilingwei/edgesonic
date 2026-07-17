@@ -8,7 +8,7 @@ name: Deploy EdgeSonic
 # source. Pick the `stable` or `prerelease` channel, or pin an exact tag.
 #
 # All Cloudflare credentials and resource identifiers are supplied as workflow
-# inputs each time; the repository itself stores nothing. D1 / KV / R2 are
+# inputs each time; the repository itself stores nothing. D1 / R2 are
 # auto-created if absent.
 on:
   workflow_dispatch:
@@ -48,11 +48,6 @@ on:
         description: 'D1 database name — auto-created if absent (default: edgesonic-db)'
         required: false
         default: 'edgesonic-db'
-        type: string
-      kv_namespace_name:
-        description: 'KV namespace name — auto-created if absent (default: edgesonic-kv)'
-        required: false
-        default: 'edgesonic-kv'
         type: string
       r2_bucket_name:
         description: 'R2 bucket name — auto-created if absent (default: edgesonic-music)'
@@ -139,7 +134,6 @@ jobs:
           CLOUDFLARE_API_TOKEN:  ${{ inputs.cf_api_token }}
           CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cf_account_id }}
           DB_NAME: ${{ inputs.d1_database_name }}
-          KV_NAME: ${{ inputs.kv_namespace_name }}
           R2_NAME: ${{ inputs.r2_bucket_name }}
         run: |
           set -euo pipefail
@@ -156,19 +150,6 @@ jobs:
               '.[] | select(.name==$n) | (.uuid // .database_id)')
           fi
           echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
-
-          # KV: get or create
-          KV_LIST=$(wrangler kv namespace list --json 2>/dev/null || echo "[]")
-          KV_ID=$(echo "$KV_LIST" | jq -r --arg t "$KV_NAME" \
-            '.[] | select(.title==$t) | .id | select(length>0)' \
-            2>/dev/null || echo "")
-          if [ -z "$KV_ID" ]; then
-            echo "Creating KV namespace '$KV_NAME'..."
-            wrangler kv namespace create "$KV_NAME"
-            KV_ID=$(wrangler kv namespace list --json | jq -r --arg t "$KV_NAME" \
-              '.[] | select(.title==$t) | .id')
-          fi
-          echo "kv_id=$KV_ID" >> "$GITHUB_OUTPUT"
 
           # R2: create bucket if missing
           R2_LIST=$(wrangler r2 bucket list --json 2>/dev/null || echo "[]")
@@ -191,7 +172,6 @@ jobs:
         env:
           CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
           DB_ID:   ${{ steps.provision.outputs.db_id }}
-          KV_ID:   ${{ steps.provision.outputs.kv_id }}
           R2_NAME: ${{ inputs.r2_bucket_name }}
           INST:    ${{ steps.provision.outputs.inst }}
           DOMAIN:  ${{ inputs.domain }}
@@ -201,7 +181,6 @@ jobs:
           sed \
             -e "s|<YOUR_CLOUDFLARE_ACCOUNT_ID>|${CF_ACCOUNT_ID}|g" \
             -e "s|<YOUR_D1_DATABASE_ID>|${DB_ID}|g" \
-            -e "s|<YOUR_KV_NAMESPACE_ID>|${KV_ID}|g" \
             -e "s|<YOUR_R2_BUCKET_NAME>|${R2_NAME}|g" \
             -e "s|<GENERATE_A_UUID>|${INST}|g" \
             -e "s|<your-domain.example.com>|${DOMAIN}|g" \

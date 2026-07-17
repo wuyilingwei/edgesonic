@@ -15,6 +15,8 @@
 
 import { ref, computed } from "vue";
 import { useRouter } from "vue-router";
+import { i18n } from "./i18n";
+import { showError } from "./stores/toast";
 
 // management-shaped moved to /tag, /storage, /edgesonic.
 const REST_BASE = "/rest";
@@ -88,6 +90,7 @@ const token = ref(localStorage.getItem("edgesonic_logged_in") || "");
 const username = ref(localStorage.getItem("edgesonic_user") || "");
 const level = ref(parseInt(localStorage.getItem("edgesonic_level") || "0"));
 const salt = ref("");
+let sessionCheckInFlight: Promise<void> | null = null;
 
 export function useAuth() {
   // useRouter() must run inside a component setup; useAuth() is always called
@@ -200,8 +203,8 @@ export function useAuth() {
     const resp = await fetch(`${REST_BASE}/${path}?${signedParams(params).toString()}`, {
       credentials: "same-origin",
     });
-    if (resp.status === 401 || resp.status === 403) {
-      handleAuthError(new Error("session expired"));
+    if (resp.status === 401) {
+      handleAuthError({ status: resp.status });
       return "";
     }
     return resp.text();
@@ -214,8 +217,8 @@ export function useAuth() {
       body: JSON.stringify(body),
       credentials: "same-origin",
     });
-    if (resp.status === 401 || resp.status === 403) {
-      handleAuthError(new Error("session expired"));
+    if (resp.status === 401) {
+      handleAuthError({ status: resp.status });
       return "";
     }
     return resp.text();
@@ -254,15 +257,32 @@ export function useAuth() {
     return resp.text();
   }
 
-  // 401/403 from the management buckets means the web session is gone (expired
-  // server-side or revoked). Centralises the logout + redirect so each call
-  // site only has to toast + bail. Returns true when it handled the error so
-  // callers can `if (handleAuthError(e)) return;`.
+  async function confirmSessionFailure() {
+    if (sessionCheckInFlight) return sessionCheckInFlight;
+    sessionCheckInFlight = (async () => {
+      try {
+        const resp = await fetch(`${EDGESONIC_BASE}/auth/sessions/list?${signedParams().toString()}`, {
+          credentials: "same-origin",
+        });
+        if (resp.ok) return;
+      } catch {
+        // A failed verification cannot prove the browser still has a session.
+      }
+
+      showError(i18n.global.t("common.sessionExpired"));
+      await logout();
+      await router.replace("/login");
+    })().finally(() => { sessionCheckInFlight = null; });
+    return sessionCheckInFlight;
+  }
+
+  // A 401 may come from a stale cookie after a page was left open. Confirm it
+  // against the session endpoint before clearing local state; a 403 remains a
+  // permission error and must not sign the user out.
   function handleAuthError(e: unknown): boolean {
     const status = (e as { status?: number })?.status;
-    if (status === 401 || status === 403) {
-      logout();
-      router.push("/login");
+    if (status === 401) {
+      void confirmSessionFailure();
       return true;
     }
     return false;

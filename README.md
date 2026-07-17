@@ -33,6 +33,7 @@ EdgeSonic serves two roles simultaneously:
 - **Cross-origin isolation** — COOP/COEP headers for SharedArrayBuffer (required by ffmpeg.wasm)
 - **Anti-loop chain** — `esChain` marker prevents A→B→A proxy loops between EdgeSonic instances
 - **SPA version detection** — long-lived tabs are prompted to refresh after a Worker deploy
+- **Persistent audio cache** — completed tracks are cached in IndexedDB for offline-friendly replay; capacity and eviction are configurable in Settings
 
 ## Quick start
 
@@ -57,7 +58,6 @@ Prefer to build and deploy from your own machine (e.g. while developing)? Use th
 - A Cloudflare account with:
   - **D1** database (`edgesonic-db`)
   - **R2** bucket (`edgesonic-music`)
-  - **KV** namespace (legacy binding, kept for schema compat)
 
 ### 1. Clone and configure
 
@@ -65,7 +65,7 @@ Prefer to build and deploy from your own machine (e.g. while developing)? Use th
 git clone https://github.com/your-org/edgesonic.git
 cd edgesonic
 cp worker/wrangler.toml.example worker/wrangler.toml
-# Edit worker/wrangler.toml — fill in account_id, database_id, KV id, INSTANCE_ID, domain
+# Edit worker/wrangler.toml — fill in account_id, database_id, R2 bucket name, INSTANCE_ID, domain
 ```
 
 `worker/wrangler.toml` is **gitignored** — it contains private resource IDs and must never be committed.
@@ -90,7 +90,7 @@ cd worker
 npx wrangler secret put WORK_UPLOAD_HMAC_KEY  # random 48-byte base64
 ```
 
-Optional (enable R2 presigned direct streaming):
+Optional (enable R2 presigned direct streaming for the default `edgesonic-music` bucket):
 
 ```bash
 npx wrangler secret put R2_ACCESS_KEY_ID
@@ -111,15 +111,11 @@ npx wrangler secret put CF_ACCOUNT_ID
 ./deploy.sh
 ```
 
-The script builds the Vue frontend, bundles it with the Worker via `[assets]`, and deploys. After deploy, restore the cron trigger:
-
-> **Settings → Cloudflare → "Ensure default cron"**
-
-(Wrangler deploy clears dynamic cron schedules — see `worker/CF_CRON.md`.)
+The script builds the Vue frontend, bundles it with the Worker via `[assets]`, deploys, and restores the default cron trigger. It requires `CLOUDFLARE_API_TOKEN` in the environment; deployment fails rather than leaving cron disabled.
 
 ### First login
 
-Navigate to your Worker domain. The default admin account is created on first access — see the login page for instructions, or create one directly:
+Create the first administrator before signing in:
 
 ```bash
 npx wrangler d1 execute edgesonic-db --remote --command \
@@ -136,11 +132,9 @@ The technical reference lives under [`docs/`](docs/):
 | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Monorepo layout, storage backend model, adding an S3-compatible source |
 | [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Dev servers, type-checking, running tests, applying the DB schema |
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | Recommended fork + GitHub Action deploy (downloads a precompiled release, no build), Cloudflare resource requirements / free-tier limits |
-| [`SECURITY.md`](docs/SECURITY.md) | What never to commit, where secrets live, anti-loop chain |
-| [`DESIGN.md`](docs/DESIGN.md) | Full backend/frontend design: auth model, capability matrix, adapter interfaces (Chinese) |
-| [`cf-integration.md`](docs/cf-integration.md) | Cloudflare API integration internals (token/cron/analytics without redeploying) |
-| [`external-transcoder.md`](docs/external-transcoder.md) | Running the external ffmpeg transcoder container |
+| [`worker/SECRETS.md`](worker/SECRETS.md) | Worker secrets and optional R2 presigned streaming |
+| [`worker/CF_CRON.md`](worker/CF_CRON.md) | Runtime-managed cron schedules |
 
 ## Licence
 
-[MIT](LICENSE)
+[AGPL-3.0-or-later](LICENSE)

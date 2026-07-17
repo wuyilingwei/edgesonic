@@ -154,6 +154,8 @@
     "sortNameDesc": "名称 Z-A",
     "like": "喜欢",
     "unlike": "取消喜欢",
+    "playbackFailed": "无法播放《{title}》，将跳到下一首",
+    "preloadFailed": "无法预载《{title}》",
     "starUpdateFailed": "更新喜欢状态失败",
     "artistInfoTitle": "艺术家信息",
     "artistInfoLoading": "正在自动搜刮艺术家信息…",

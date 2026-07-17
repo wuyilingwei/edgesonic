@@ -1,7 +1,7 @@
 # EdgeSonic Worker — wrangler 配置模板
 # ---------------------------------------------------------------------------
 # 这是公开可提交的模板。真正的 worker/wrangler.toml 含私有资源标识
-# (account_id / database_id / kv id / INSTANCE_ID / 自定义域名)，已被 .gitignore
+# (account_id / database_id / R2 bucket 名称 / INSTANCE_ID / 自定义域名)，已被 .gitignore
 # 排除，不会上传到公开仓库。
 #
 # 首次部署：
@@ -23,7 +23,7 @@ routes = [
   { pattern = "<your-domain.example.com>", custom_domain = true }
 ]
 
-# Instance identity (anti-loop chain marker, docs/DESIGN.md §3.2)
+# Instance identity (anti-loop chain marker)
 [vars]
 # 每个实例应唯一，可用 `uuidgen` 生成
 INSTANCE_ID = "<GENERATE_A_UUID>"

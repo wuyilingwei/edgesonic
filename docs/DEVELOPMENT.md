@@ -13,7 +13,7 @@ npm run dev:worker
 # Run frontend dev server (Vite HMR)
 npm run dev:web
 
-# Type-check worker
+# Type-check all workspaces
 npm run typecheck
 
 # Run a single worker test (each file under test/ is self-contained, no
@@ -23,8 +23,6 @@ npx tsx test/subsonic/annotation.test.ts
 # Run every test file
 find test -name '*.test.ts' -exec npx tsx {} \;
 
-# Type-check frontend
-cd web && npx vue-tsc --noEmit
 ```
 
 ## Apply the DB schema

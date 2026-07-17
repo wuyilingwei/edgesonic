@@ -20,10 +20,15 @@ if (isLoggedIn.value) router.push("/");
 async function submit() {
   error.value = "";
   loading.value = true;
-  const result = await login(username.value, password.value);
-  loading.value = false;
-  if (result.ok) router.push("/");
-  else error.value = result.error || t("login.failed");
+  try {
+    const result = await login(username.value, password.value);
+    if (result.ok) router.push("/");
+    else error.value = result.error || t("login.failed");
+  } catch {
+    error.value = t("login.failed");
+  } finally {
+    loading.value = false;
+  }
 }
 </script>
 
@@ -39,7 +44,10 @@ async function submit() {
       </div>
 
       <form @submit.prevent="submit" class="login-form">
-        <div v-if="error" class="login-error">{{ error }}</div>
+        <div v-if="error" class="login-error" role="alert">
+          <span class="login-error-mark" aria-hidden="true">!</span>
+          <span>{{ error }}</span>
+        </div>
 
         <div class="form-group">
           <label class="form-label">{{ t("login.username") }}</label>
@@ -128,13 +136,28 @@ async function submit() {
 }
 
 .login-error {
-  background: rgba(248, 81, 73, 0.12);
-  border: 1px solid rgba(248, 81, 73, 0.4);
-  color: var(--color-status-error);
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-status-error);
+  box-shadow: inset 3px 0 var(--color-status-error), 0 8px 18px rgba(0, 0, 0, 0.18);
+  color: var(--color-text-primary);
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
-  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  padding: 0.7rem 0.8rem;
   border-radius: 2px;
+}
+.login-error-mark {
+  display: grid;
+  width: 1.2rem;
+  height: 1.2rem;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  color: var(--color-status-error);
+  font-weight: 700;
 }
 
 .login-btn { width: 100%; margin-top: 0.5rem; }

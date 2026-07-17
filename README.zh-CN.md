@@ -33,6 +33,7 @@ EdgeSonic 同时承担两个角色：
 - **跨域隔离** —— COOP/COEP 响应头，支持 SharedArrayBuffer（ffmpeg.wasm 所需）
 - **防循环链** —— `esChain` 标记防止多个 EdgeSonic 实例之间出现 A→B→A 的代理死循环
 - **SPA 版本检测** —— Worker 部署后，长时间打开的标签页会收到刷新提示
+- **持久化音频缓存** —— 播放完成的歌曲会缓存在 IndexedDB 中，便于再次播放；可在设置中配置容量与淘汰策略
 
 ## 快速开始
 
@@ -57,7 +58,6 @@ EdgeSonic 同时承担两个角色：
 - 一个 Cloudflare 账号，并已开通：
   - **D1** 数据库（`edgesonic-db`）
   - **R2** 存储桶（`edgesonic-music`）
-  - **KV** 命名空间（历史遗留绑定，仅为保持 schema 兼容而保留）
 
 ### 1. 克隆并配置
 
@@ -65,7 +65,7 @@ EdgeSonic 同时承担两个角色：
 git clone https://github.com/your-org/edgesonic.git
 cd edgesonic
 cp worker/wrangler.toml.example worker/wrangler.toml
-# 编辑 worker/wrangler.toml —— 填入 account_id、database_id、KV id、INSTANCE_ID、域名
+# 编辑 worker/wrangler.toml —— 填入 account_id、database_id、R2 bucket 名称、INSTANCE_ID、域名
 ```
 
 `worker/wrangler.toml` 已加入 **.gitignore**——其中包含私有资源 ID，绝不能提交到版本库。
@@ -90,7 +90,7 @@ cd worker
 npx wrangler secret put WORK_UPLOAD_HMAC_KEY  # 随机生成的 48 字节 base64
 ```
 
-可选（启用 R2 预签名直连播放）：
+可选（为默认 `edgesonic-music` bucket 启用 R2 预签名直连播放）：
 
 ```bash
 npx wrangler secret put R2_ACCESS_KEY_ID
@@ -111,15 +111,11 @@ npx wrangler secret put CF_ACCOUNT_ID
 ./deploy.sh
 ```
 
-该脚本会构建 Vue 前端，通过 `[assets]` 与 Worker 一起打包并部署。部署完成后，记得恢复 Cron 触发器：
-
-> **Settings → Cloudflare → "Ensure default cron"**
-
-（`wrangler deploy` 会清空动态 Cron 计划——详见 `worker/CF_CRON.md`。）
+该脚本会构建 Vue 前端，通过 `[assets]` 与 Worker 一起打包并部署，并自动恢复默认 Cron 触发器。它要求环境变量中有 `CLOUDFLARE_API_TOKEN`；若无法恢复 Cron，部署会失败而不会留下停用的定时任务。
 
 ### 首次登录
 
-访问你的 Worker 域名。默认管理员账号会在首次访问时创建——登录页会有说明，你也可以直接手动创建：
+首次登录前需要先创建管理员账号：
 
 ```bash
 npx wrangler d1 execute edgesonic-db --remote --command \
@@ -128,7 +124,7 @@ npx wrangler d1 execute edgesonic-db --remote --command \
 
 ## 技术文档
 
-更深入的技术参考文档都在 [`docs/`](docs/) 目录下（除 `DESIGN.md` 为中文外，其余均为英文）：
+更深入的技术参考文档都在 [`docs/`](docs/) 目录下：
 
 | 文档 | 内容 |
 |-----|--------|
@@ -136,11 +132,9 @@ npx wrangler d1 execute edgesonic-db --remote --command \
 | [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Monorepo 目录结构、存储后端模型、如何添加 S3 兼容存储源 |
 | [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | 开发服务器、类型检查、运行测试、应用数据库 Schema |
 | [`DEPLOYMENT.md`](docs/DEPLOYMENT.md) | 推荐的 fork + GitHub Action 部署（下载预编译 release，不 build）、Cloudflare 资源需求与免费额度 |
-| [`SECURITY.md`](docs/SECURITY.md) | 哪些文件绝不能提交、Secrets 存放位置、防循环链机制 |
-| [`DESIGN.md`](docs/DESIGN.md) | 完整前后端设计文档：鉴权模型、能力矩阵、适配器接口（中文） |
-| [`cf-integration.md`](docs/cf-integration.md) | Cloudflare API 集成实现细节（无需重新部署即可管理 token/cron/分析数据） |
-| [`external-transcoder.md`](docs/external-transcoder.md) | 部署外部 ffmpeg 转码容器 |
+| [`worker/SECRETS.md`](worker/SECRETS.md) | Worker Secrets 与可选 R2 预签名播放 |
+| [`worker/CF_CRON.md`](worker/CF_CRON.md) | 运行时管理的 Cron 计划 |
 
 ## 许可证
 
-[MIT](LICENSE)
+[AGPL-3.0-or-later](LICENSE)

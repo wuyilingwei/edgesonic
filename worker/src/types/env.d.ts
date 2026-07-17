@@ -15,7 +15,6 @@
 
 interface Env {
   DB: D1Database;
-  // The KV namespace can be deleted from the Cloudflare dashboard.
   MUSIC_BUCKET: R2Bucket;
   INSTANCE_ID: string;
   MAX_PROXY_DEPTH?: string;

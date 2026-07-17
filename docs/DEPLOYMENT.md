@@ -8,7 +8,7 @@ The **recommended** way to deploy EdgeSonic: fork this repository and run the Gi
 
 The workflow at `.github/workflows/deploy.yml` is **manual-only** (no automatic push trigger). Instead of building from source, it **downloads a precompiled release package** (prebuilt `web/dist` + isolated `worker/node_modules`) published by `.github/workflows/release.yml`, then deploys it with `wrangler`. All credentials are supplied as workflow inputs each time — the repository itself stores nothing.
 
-D1 databases, KV namespaces, and R2 buckets that do not yet exist are **automatically created and bound** during the run.
+D1 databases and R2 buckets that do not yet exist are **automatically created and bound** during the run.
 
 ### Prerequisites
 
@@ -30,7 +30,6 @@ Go to **Actions → Deploy EdgeSonic → Run workflow** and fill in:
 | `source_repo` | optional | `wuyilingwei/edgesonic` | Repo to download the release from. Leave as-is to pull the upstream release; change it only if your fork publishes its own |
 | `worker_name` | optional | `edgesonic` | Worker script name |
 | `d1_database_name` | optional | `edgesonic-db` | D1 database (auto-created if absent) |
-| `kv_namespace_name` | optional | `edgesonic-kv` | KV namespace (auto-created if absent) |
 | `r2_bucket_name` | optional | `edgesonic-music` | R2 bucket (auto-created if absent) |
 | `domain` | optional | — | Custom domain; leave empty for `<worker>.workers.dev` |
 | `instance_id` | optional | — | Anti-loop UUID; auto-generated when blank |
@@ -41,11 +40,9 @@ The workflow verifies the package checksum and embedded build metadata before ex
 
 The deploy action consumes releases produced by `.github/workflows/release.yml`. Push a `v*` tag (e.g. `git tag v1.0.0 && git push origin v1.0.0`) or run **Actions → Release EdgeSonic → Run workflow** with a tag. That job builds the frontend, assembles the self-contained package, and publishes it as a GitHub Release asset — it needs **no** Cloudflare credentials. Mark a release as a *pre-release* on GitHub for it to be picked up by the `prerelease` channel.
 
-### After every deploy
+### Cron recovery
 
-> **Settings → Cloudflare → "Ensure default cron"**
-
-`wrangler deploy` clears dynamic cron schedules. Every deployment path re-applies the default (`0 */1 * * *`) and fails the run if that restoration fails. Local deployment therefore requires `CLOUDFLARE_API_TOKEN` (see `worker/CF_CRON.md`).
+The GitHub Action restores the default cron schedule (`0 */1 * * *`) after deployment and fails if that restoration fails. Local `./deploy.sh` does the same and requires `CLOUDFLARE_API_TOKEN`. A direct `wrangler deploy` clears dynamic cron schedules; restore them from **Settings → Cloudflare → "Ensure default cron"** after configuring the Cloudflare API token.
 
 ## Cloudflare resource requirements
 

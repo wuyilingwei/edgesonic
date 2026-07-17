@@ -48,7 +48,6 @@ const metadataCache = new Map<string, CacheEntry<Promise<string>>>();
 const lyricsCache = new Map<string, CacheEntry<Promise<TrackLyricsPayload>>>();
 const coverCache = new Map<string, CacheEntry<Promise<void>>>();
 
-// 缓存统计
 const cacheStats = {
   metadataHits: 0,
   metadataMisses: 0,
@@ -57,19 +56,6 @@ const cacheStats = {
   coverHits: 0,
   coverMisses: 0,
 };
-
-export function getCacheStats() {
-  return { ...cacheStats };
-}
-
-export function resetCacheStats() {
-  cacheStats.metadataHits = 0;
-  cacheStats.metadataMisses = 0;
-  cacheStats.lyricsHits = 0;
-  cacheStats.lyricsMisses = 0;
-  cacheStats.coverHits = 0;
-  cacheStats.coverMisses = 0;
-}
 
 function isExpired<T>(entry: CacheEntry<T>): boolean {
   return Date.now() - entry.timestamp > entry.ttl;
@@ -220,6 +206,9 @@ export function preloadTrack(track: PrefetchTrack, auth: TrackPrefetchAuth): voi
   // queue behind a media-library page worth of cover art.
   void runLowPriority(() => getTrackMetadataXml(track, auth), "prefetch").catch(() => {});
   void runLowPriority(() => getTrackLyrics(track, auth), "prefetch").catch(() => {});
-  void runLowPriority(() => preloadCover(track, auth, 96), "prefetch").catch(() => {});
+  // Single 512 cover prewarm: the now-playing/PlayerBar surface uses the
+  // large cover, and the small list thumbnails are fetched on demand by
+  // BudgetedImage. Requesting both 96 and 512 split the HTTP cache and
+  // wasted a budget slot; one 512 warms the shared entry for both uses.
   void runLowPriority(() => preloadCover(track, auth, 512), "prefetch").catch(() => {});
 }

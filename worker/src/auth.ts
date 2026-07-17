@@ -502,67 +502,6 @@ export const permissionMiddleware = (requiredPermission: string) =>
   });
 
 // ============================================================================
-// ----------------------------------------------------------------------------
-// The function existed but was never imported anywhere; its presence merely
-// advertised the wrong pattern. EdgeSonic's security model is "authorisation
-// lives on permission rows in user_permissions, NOT on the level integer".
-// Use `permissionMiddleware("<perm>")` for request guards or `hasPermission`
-// (see utils/permissions.ts) for in-handler degradation decisions. If a new
-// capability needs a permission row, add it to the next migration file.
-// ============================================================================
-
-// ============================================================================
-// Session-Only Middleware (禁止 Token + Cookie 混用)
-// ============================================================================
-export const sessionOnlyMiddleware = (permission?: string) =>
-  createMiddleware<{
-    Bindings: Env;
-    Variables: { user: User; authMethod: AuthMethod; authSource?: "cookie" | "query"; streamProxyStrategy?: string };
-  }>(async (c, next) => {
-    const sessionCookie = parseSessionCookie(c.req.header("Cookie") || "");
-    const subsonicU = c.req.query("u");
-    const subsonicToken = c.req.header("X-Subsonic-Token");
-
-    // 禁止混用：token 和 session 同时出现
-    if ((subsonicU || subsonicToken) && sessionCookie) {
-      return c.json({ error: "Cannot mix session and token authentication" }, 400);
-    }
-
-    // 必须有 session
-    if (!sessionCookie) {
-      return c.json({ error: "This endpoint requires session authentication" }, 401);
-    }
-
-    return next();
-  });
-
-// ============================================================================
-// Token-Only Middleware (禁止 Session + Token 混用)
-// ============================================================================
-export const tokenOnlyMiddleware = (permission?: string) =>
-  createMiddleware<{
-    Bindings: Env;
-    Variables: { user: User; authMethod: AuthMethod; authSource?: "cookie" | "query"; streamProxyStrategy?: string };
-  }>(async (c, next) => {
-    const sessionCookie = parseSessionCookie(c.req.header("Cookie") || "");
-    const subsonicU = c.req.query("u");
-    const subsonicToken = c.req.header("X-Subsonic-Token");
-    const apiKey = c.req.query("apiKey");
-
-    // 禁止混用：session 和 token 同时出现
-    if ((subsonicU || subsonicToken || apiKey) && sessionCookie) {
-      return c.json({ error: "Cannot mix session and token authentication" }, 400);
-    }
-
-    // 必须有 token（支持 Subsonic token 或 API key）
-    if (!subsonicU && !subsonicToken && !apiKey) {
-      return c.json({ error: "This endpoint requires token authentication" }, 401);
-    }
-
-    return next();
-  });
-
-// ============================================================================
 // Subsonic XML Error Helper
 // ============================================================================
 export function subsonicError(code: number, message: string): string {

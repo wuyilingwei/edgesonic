@@ -80,8 +80,8 @@ async function run() {
   } finally {
     globalThis.Image = OriginalImage;
   }
-  assert(coverUrls.includes("/cover/al-cover?size=96"), "player-bar cover is preloaded");
-  assert(coverUrls.includes("/cover/al-cover?size=512"), "detail cover is preloaded");
+  assert(coverUrls.includes("/cover/al-cover?size=512"), "shared large cover is preloaded");
+  assert(!coverUrls.includes("/cover/al-cover?size=96"), "duplicate small-cover preload is avoided");
 
   const playerSrc = fs.readFileSync(path.resolve(__dirname, "../../web/src/stores/player.ts"), "utf8");
   const nowPlayingSrc = fs.readFileSync(path.resolve(__dirname, "../../web/src/views/NowPlaying.vue"), "utf8");

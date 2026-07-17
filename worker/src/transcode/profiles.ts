@@ -42,10 +42,6 @@ export function getProfile(id: string): TranscodeProfile | null {
   return PROFILE_INDEX.get(id) ?? null;
 }
 
-export function listProfiles(): TranscodeProfile[] {
-  return DEFAULT_PROFILES.slice();
-}
-
 // ffmpeg argv builder. Returns the arg list without the leading "ffmpeg"
 // binary so callers can choose to spawn directly or send to a remote API.
 //
@@ -83,21 +79,4 @@ function formatForContainer(c: TranscodeProfile["container"]): string {
     case "ogg":  return "ogg";
     case "flac": return "flac";
   }
-}
-
-// Parse / validate a JSON array of profile ids (the default_transcode_profiles
-// feature). Unknown ids are dropped — never throws — so Settings UI typos
-// degrade gracefully instead of breaking pre-bake jobs.
-export function parseProfileIdList(raw: string | null | undefined): TranscodeProfile[] {
-  if (!raw) return [];
-  let parsed: unknown;
-  try { parsed = JSON.parse(raw); } catch { return []; }
-  if (!Array.isArray(parsed)) return [];
-  const out: TranscodeProfile[] = [];
-  for (const v of parsed) {
-    if (typeof v !== "string") continue;
-    const p = getProfile(v);
-    if (p) out.push(p);
-  }
-  return out;
 }
