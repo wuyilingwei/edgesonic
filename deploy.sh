@@ -101,9 +101,6 @@ else
       echo "  CF 响应：$(echo "$CF_RESP" | cut -c1-300)"
       exit 1
     fi
-  else
-    echo "✗ 缺少 CLOUDFLARE_API_TOKEN，拒绝完成会清空 cron 的部署。" >&2
-    exit 1
   fi
   echo ""
   echo "✓ 完成。WORKER_VERSION=$VERSION"

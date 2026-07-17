@@ -111,7 +111,7 @@ npx wrangler secret put CF_ACCOUNT_ID
 ./deploy.sh
 ```
 
-The script builds the Vue frontend, bundles it with the Worker via `[assets]`, deploys, and restores the default cron trigger. It requires `CLOUDFLARE_API_TOKEN` in the environment; deployment fails rather than leaving cron disabled.
+The script builds the Vue frontend and bundles it with the Worker via `[assets]`. When `CLOUDFLARE_API_TOKEN` is present, it also restores the default cron trigger after deployment.
 
 ### First login
 

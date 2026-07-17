@@ -111,7 +111,7 @@ npx wrangler secret put CF_ACCOUNT_ID
 ./deploy.sh
 ```
 
-该脚本会构建 Vue 前端，通过 `[assets]` 与 Worker 一起打包并部署，并自动恢复默认 Cron 触发器。它要求环境变量中有 `CLOUDFLARE_API_TOKEN`；若无法恢复 Cron，部署会失败而不会留下停用的定时任务。
+该脚本会构建 Vue 前端，通过 `[assets]` 与 Worker 一起打包并部署。若环境变量中有 `CLOUDFLARE_API_TOKEN`，部署后还会自动恢复默认 Cron 触发器。
 
 ### 首次登录
 

@@ -42,7 +42,7 @@ The deploy action consumes releases produced by `.github/workflows/release.yml`.
 
 ### Cron recovery
 
-The GitHub Action restores the default cron schedule (`0 */1 * * *`) after deployment and fails if that restoration fails. Local `./deploy.sh` does the same and requires `CLOUDFLARE_API_TOKEN`. A direct `wrangler deploy` clears dynamic cron schedules; restore them from **Settings → Cloudflare → "Ensure default cron"** after configuring the Cloudflare API token.
+The GitHub Action restores the default cron schedule (`0 */1 * * *`) after deployment and fails if that restoration fails. Local `./deploy.sh` restores it when `CLOUDFLARE_API_TOKEN` is available. A direct `wrangler deploy` clears dynamic cron schedules; restore them from **Settings → Cloudflare → "Ensure default cron"** after configuring the Cloudflare API token.
 
 ## Cloudflare resource requirements
 
