@@ -59,7 +59,7 @@ const STORAGE_KEY = "participate_work";
 // (the seeded `worker_max_concurrent` row preserves a sane global default).
 const STORAGE_KEY_CONCURRENCY = "edgesonic:worker_max_concurrent";
 const DEFAULT_POLL_MS = 5 * 60 * 1000;
-// 220 — Continuous drain. While the queue has work, the next cycle starts
+// Continuous drain. While the queue has work, the next cycle starts
 // back-to-back with no artificial gap (previously a fixed 30s fast-poll
 // wait), so a large scan backlog drains as fast as this browser can go.
 // When the queue is empty, fall back to the configured interval (default
@@ -177,7 +177,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // / start(); the in-poll `effectiveConcurrent = 1` fallback stays as the belt
   // for tasks already in-flight when playback starts.
   const isPlaybackThrottled = ref(false);
-  // 220 — reference-counted pause. Playback, generic page activity, and
+  // reference-counted pause. Playback, generic page activity, and
   // known bandwidth/CPU-heavy manual operations (upload, clone, cross-copy,
   // batch tag write...) each add their own reason string while active and
   // remove it when done; the pool only resumes once every reason has
@@ -359,7 +359,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
-  // 220 — Self-scheduling timeout replaces fixed setInterval. After each
+  // Self-scheduling timeout replaces fixed setInterval. After each
   // poll, next delay is chosen based on whether the queue had work:
   //  - got tasks → 0 (continuous, back-to-back) for aggressive drain
   //  - empty     → pollIntervalMs (configured, default 5min) for idle
@@ -421,7 +421,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     nextPollAt.value = 0;
   }
 
-  // 220 — abort whatever /work/poll fetch or task Worker is currently in
+  // abort whatever /work/poll fetch or task Worker is currently in
   // flight. Aborted tasks are neither reported as success nor failure (see
   // executeOne); they simply stay claimed until the server-side heartbeat/
   // reclaim sweep (workReclaim.ts) puts them back in the queue.
@@ -481,7 +481,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     lastPollAt.value = Date.now();
     // 采样内存使用情况
     sampleMemory();
-    // 220 — owns this cycle's in-flight fetch/task so pauseForActivity can
+    // owns this cycle's in-flight fetch/task so pauseForActivity can
     // cancel it immediately from outside (playback start, manual activity).
     const abort = new AbortController();
     currentAbort = abort;
@@ -518,7 +518,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
       }, abort.signal);
       const data: PollResponse = JSON.parse(text);
       if (!data.ok) throw new Error(data.error || "poll rejected");
-      // 220 — track whether the queue had work so scheduleNext can pick
+      // track whether the queue had work so scheduleNext can pick
       // the continuous or idle cadence.
       const tasks = data.tasks || [];
       hadTasksLastPoll = tasks.length > 0;
@@ -539,7 +539,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
         });
       }
     } catch (e) {
-      // 220 — a pauseForActivity() abort surfaces here as a DOMException;
+      // a pauseForActivity() abort surfaces here as a DOMException;
       // that's an intentional interruption, not a real failure, so don't
       // clutter lastError (the Settings/Tools UI treats it as a fault).
       const aborted = abort.signal.aborted || (e instanceof DOMException && e.name === "AbortError");
@@ -578,7 +578,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
       }
 
       const result = await runWorkerOnce(worker, augmented, signal);
-      // 220 — interrupted after the worker finished but before we could
+      // interrupted after the worker finished but before we could
       // submit: abandon silently rather than reporting success/failure for
       // work the pause reason (playback/manual activity) already cut short.
       if (signal.aborted) return;
@@ -594,7 +594,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
       });
       recordSample();
     } catch (e) {
-      // 220 — abandoned mid-flight by pauseForActivity(): don't report this
+      // abandoned mid-flight by pauseForActivity(): don't report this
       // as a task failure (that would burn one of its maxAttempts for
       // something that never really ran to completion). The claimed row
       // recovers on its own via the server-side heartbeat/reclaim sweep.
@@ -685,8 +685,8 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // Playback auto-pause. Each metadata worker pulls up to 512KB from
   // /rest/stream; even with concurrency=1 those sub-requests compete with
   // the active player's own stream range requests for the R2 egress budget
-  // and can cause audible stalls. 220 — the moment playback starts we now
-  // abort whatever request/task is already in flight (pauseForActivity)
+  // and can cause audible stalls. The moment playback starts we now abort
+  // whatever request/task is already in flight (pauseForActivity)
   // instead of only cancelling the *next* scheduled poll; resume happens
   // once playback stops, so long as the pool is still opted-in. The
   // pollAndDrain `effectiveConcurrent = 1` fallback below stays as a belt
@@ -700,7 +700,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     });
   } catch { /* player store not registered yet — keep default schedule */ }
 
-  // 220 — generic manual-activity auto-pause. Any deliberate interaction
+  // generic manual-activity auto-pause. Any deliberate interaction
   // with the page (click/keypress/touch/scroll) immediately aborts whatever
   // request/task is in flight and holds the pool paused until the page has
   // been quiet for ACTIVITY_QUIET_MS, at which point it re-enters the normal
@@ -815,7 +815,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     pollNow,
     hydrateConfig,
     reset,
-    // 220 — reference-counted pause for known bandwidth/CPU-heavy manual
+    // reference-counted pause for known bandwidth/CPU-heavy manual
     // operations (upload, clone/push, cross-copy, batch tag write, tag
     // scan...). Call pauseForActivity(reason) before the operation starts
     // and resumeAfterActivity(reason) in its `finally`, using the same

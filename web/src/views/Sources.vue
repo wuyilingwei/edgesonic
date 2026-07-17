@@ -295,7 +295,7 @@ async function confirmStartMirror() {
   // matching the pattern Tools.vue's clone/push stages already use correctly.
   mirrorState.value[s.id] = { running: true, total: 0, done: 0, failed: 0, inFlight: [], error: null };
   const st = mirrorState.value[s.id];
-  // 220 — mirror listing/pagination runs through this browser; pause the
+  // mirror listing/pagination runs through this browser; pause the
   // background metadata pool for the duration so it doesn't compete for
   // bandwidth with the mirror copy loop.
   workerPool.pauseForActivity("mirror");

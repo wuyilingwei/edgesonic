@@ -203,7 +203,7 @@ async function doUpload() {
   uploadFailedNames.value = [];
   uploadProgressList.value = uploadQueue.value.map(() => 0);
   const total = uploadQueue.value.length;
-  // 220 — uploads push real bytes through this browser; pause the
+  // uploads push real bytes through this browser; pause the
   // background metadata pool for the duration so it doesn't compete for
   // bandwidth.
   workerPool.pauseForActivity("upload");
@@ -779,7 +779,7 @@ function closeTidyFolder() { tidyOpen.value = false; }
 async function onTagEditorSubmit(patch: Record<string, string | number>, cover?: { data: string; mime: string }) {
   if (!Object.keys(patch).length && !cover) return;
   editBusy.value = true; editMsg.value = ""; editErr.value = false;
-  // 220 — batch tag writes touch many files at once; pause the background
+  // batch tag writes touch many files at once; pause the background
   // metadata pool for the duration so it doesn't compete for bandwidth.
   const isBatch = editorMode.value === "batch";
   if (isBatch) workerPool.pauseForActivity("batch-tag");
