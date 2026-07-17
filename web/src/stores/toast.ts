@@ -1,6 +1,6 @@
 import { ref } from "vue";
 
-export type ToastType = "error" | "success";
+export type ToastType = "error" | "success" | "info";
 
 export const activeToast = ref<{ message: string; type: ToastType } | null>(null);
 
@@ -14,6 +14,10 @@ export function showToast(message: string, type: ToastType = "success", duration
 
 export function showError(message: string) {
   showToast(message, "error", 5000);
+}
+
+export function showInfo(message: string) {
+  showToast(message, "info", 4000);
 }
 
 export function dismissToast() {

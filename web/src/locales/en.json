@@ -199,7 +199,19 @@
     "songsHint": "💡 Hover song row to edit (✎) · Multi-select for batch edit",
     "batchHint": "Check rows to batch (edit tags / playlist / share)",
     "editModeOn": "✎ Edit",
-    "editModeOff": "✕ Exit Edit"
+    "editModeOff": "✕ Exit Edit",
+    "locateCurrent": "Locate current track",
+    "locatingCurrent": "Finding current track…",
+    "locateNoCurrent": "No track is currently selected",
+    "locateLoadMore": "The current track is not loaded. Click again to search the remaining library.",
+    "locateNotFound": "Current track was not found in this library",
+    "locateNotLiked": "Current track is not in your liked songs"
+    ,"locateCurrent": "Locate current track"
+    ,"locatingCurrent": "Finding current track…"
+    ,"locateNoCurrent": "No track is currently selected"
+    ,"locateLoadMore": "The current track is not loaded. Click again to search the remaining library."
+    ,"locateNotFound": "Current track was not found in this library"
+    ,"locateNotLiked": "Current track is not in your liked songs"
   },
   "tagEditor": {
     "singleTitle": "Edit Track Info",

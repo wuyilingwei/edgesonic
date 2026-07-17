@@ -1,7 +1,7 @@
 
 <script setup lang="ts">
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ref, computed, watch, onBeforeUnmount } from "vue";
+import { ref, computed, watch, onBeforeUnmount, nextTick } from "vue";
 import { useI18n } from "vue-i18n";
 import { useRouter, useRoute } from "vue-router";
 import { usePlayerStore } from "../stores/player";
@@ -109,7 +109,14 @@ function onVolume(e: Event) {
 }
 
 const queueOpen = ref(false);
+const queueList = ref<HTMLElement | null>(null);
 watch(detailsOpen, (open) => { if (!open) queueOpen.value = false; });
+async function revealCurrentQueueItem() {
+  await nextTick();
+  queueList.value?.querySelector<HTMLElement>(".pb-queue-item.playing")?.scrollIntoView({ block: "center" });
+}
+watch(queueOpen, (open) => { if (open) void revealCurrentQueueItem(); });
+watch(() => player.index, () => { if (queueOpen.value) void revealCurrentQueueItem(); });
 function playFromQueue(i: number) { player.playAt(i); }
 function removeFromQueue(i: number) {
   if (i === player.index) return;
@@ -210,7 +217,7 @@ function removeFromQueue(i: number) {
             <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
           </button>
         </div>
-        <div class="pb-queue-list">
+        <div ref="queueList" class="pb-queue-list">
           <div
             v-for="(tr, i) in player.queue"
             :key="tr.id + '-' + i"

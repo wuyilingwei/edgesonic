@@ -1,7 +1,7 @@
 
 <script setup lang="ts">
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ref, computed, onMounted, onUnmounted, watch } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, parseXmlInner, formatDuration } from "../api";
 import { usePlayerStore, type Track } from "../stores/player";
@@ -10,6 +10,7 @@ import ScrapeButton from "../components/ScrapeButton.vue";
 import SongRowMenu from "../components/SongRowMenu.vue";
 import StarButton from "../components/StarButton.vue";
 import BudgetedImage from "../components/BudgetedImage.vue";
+import { showInfo } from "../stores/toast";
 import type { ScrapeResult } from "../lib/scrape";
 
 const { t } = useI18n();
@@ -184,6 +185,9 @@ const allSongs = ref<Track[]>([]);
 const songOffset = ref(0);
 const songsDone = ref(false);
 let songLoadRequest = 0;
+let songLoadPromise: Promise<void> | null = null;
+let locateRetryId: string | null = null;
+const locatingCurrent = ref(false);
 
 const displayArtists = computed(() => sortArtists(starredOnly ? starredLists.value.artists : artists.value));
 const displayAlbums = computed(() => starredOnly ? sortAlbums(starredLists.value.albums) : allAlbums.value);
@@ -350,27 +354,75 @@ function mapSongRow(s: Record<string, string>): Track {
   };
 }
 
-async function loadMoreSongs() {
+function loadMoreSongs(): Promise<void> {
+  if (songLoadPromise) return songLoadPromise;
   const request = songLoadRequest;
-  loading.value = true;
+  songLoadPromise = (async () => {
+    loading.value = true;
+    try {
+      const xml = await authFetch("search3", {
+        query: "", artistCount: "0", albumCount: "0",
+        songCount: String(SONG_PAGE), songOffset: String(songOffset.value),
+        songSort: sortMode.value === "newest" || sortMode.value === "newestAdded"
+          ? "newest"
+          : sortMode.value === "oldestAdded" ? "oldest"
+          : sortMode.value === "nameDesc" ? "titleDesc" : "title",
+      });
+      const page = parseXmlAttrs(xml, "song").map(mapSongRow);
+      if (request !== songLoadRequest) return;
+      allSongs.value.push(...page);
+      songOffset.value += page.length;
+      if (page.length < SONG_PAGE) songsDone.value = true;
+    } catch {
+      if (request === songLoadRequest) error.value = t("library.loadFailed");
+    } finally {
+      if (request === songLoadRequest) loading.value = false;
+    }
+  })().finally(() => { songLoadPromise = null; });
+  return songLoadPromise;
+}
+
+async function scrollToCurrentSong(id: string): Promise<boolean> {
+  await nextTick();
+  const row = Array.from(document.querySelectorAll<HTMLElement>(".song-row[data-song-id]")).find((el) => el.dataset.songId === id);
+  if (!row) return false;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.classList.add("song-row-located");
+  setTimeout(() => row.classList.remove("song-row-located"), 1600);
+  return true;
+}
+
+async function locateCurrentSong() {
+  const id = player.current?.id;
+  if (!id) {
+    showInfo(t("library.locateNoCurrent"));
+    return;
+  }
+  if (tab.value !== "songs") switchTab("songs");
+  await nextTick();
+  if (await scrollToCurrentSong(id)) {
+    locateRetryId = null;
+    return;
+  }
+  if (locateRetryId !== id) {
+    locateRetryId = id;
+    showInfo(t("library.locateLoadMore"));
+    return;
+  }
+
+  locatingCurrent.value = true;
   try {
-    const xml = await authFetch("search3", {
-      query: "", artistCount: "0", albumCount: "0",
-      songCount: String(SONG_PAGE), songOffset: String(songOffset.value),
-      songSort: sortMode.value === "newest" || sortMode.value === "newestAdded"
-        ? "newest"
-        : sortMode.value === "oldestAdded" ? "oldest"
-        : sortMode.value === "nameDesc" ? "titleDesc" : "title",
-    });
-    const page = parseXmlAttrs(xml, "song").map(mapSongRow);
-    if (request !== songLoadRequest) return;
-    allSongs.value.push(...page);
-    songOffset.value += page.length;
-    if (page.length < SONG_PAGE) songsDone.value = true;
-  } catch {
-    if (request === songLoadRequest) error.value = t("library.loadFailed");
+    if (starredOnly) {
+      await loadStarred(true);
+    } else {
+      while (!songsDone.value && !allSongs.value.some((song) => song.id === id)) {
+        await loadMoreSongs();
+      }
+    }
+    if (await scrollToCurrentSong(id)) locateRetryId = null;
+    else showInfo(t(starredOnly ? "library.locateNotLiked" : "library.locateNotFound"));
   } finally {
-    if (request === songLoadRequest) loading.value = false;
+    locatingCurrent.value = false;
   }
 }
 
@@ -768,6 +820,7 @@ watch(() => player.starred, () => {
   }
   if (starredOnly) void loadStarred(true);
 });
+watch(() => player.current?.id, () => { locateRetryId = null; });
 
 onUnmounted(() => {
   if (io) { io.disconnect(); io = null; }
@@ -1034,6 +1087,9 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
           <option value="nameDesc">{{ t("library.sortNameDesc") }}</option>
         </select>
       </label>
+      <button class="btn-secondary btn-sm locate-current-btn" :disabled="locatingCurrent" @click="locateCurrentSong">
+        {{ locatingCurrent ? t("library.locatingCurrent") : t("library.locateCurrent") }}
+      </button>
     </div>
 
     <div v-if="error" class="status-badge error">{{ error }}</div>
@@ -1207,6 +1263,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
           v-for="(s, i) in displaySongs"
           :key="s.id"
           class="table-row song-row"
+          :data-song-id="s.id"
           :class="{ playing: player.current?.id === s.id }"
           @click="playFromStarred(i)"
         >
@@ -1357,6 +1414,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
            v-for="(s, i) in displaySongs"
           :key="s.id"
           class="table-row song-row"
+          :data-song-id="s.id"
           :class="{ playing: player.current?.id === s.id, selected: selectedSet.has(s.id) }"
           @click="playFromAll(i)"
         >
@@ -1674,6 +1732,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
   flex-shrink: 0;
 }
 .sort-select { min-width: 150px; padding-top: 0.45rem; padding-bottom: 0.45rem; }
+.locate-current-btn { margin-left: auto; }
 .view-tab {
   padding: 0.55rem 1.3rem;
   background: none; border: none; cursor: pointer;
@@ -1811,6 +1870,8 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
 /* songs */
 .song-row { cursor: pointer; }
 .song-row.playing { background: var(--color-accent-dim); }
+.song-row-located { animation: current-song-locate 1.6s ease-out; }
+@keyframes current-song-locate { 0%, 35% { box-shadow: inset 3px 0 var(--color-accent-primary), inset 0 0 0 999px color-mix(in srgb, var(--color-accent-primary) 20%, transparent); } 100% { box-shadow: none; } }
 .song-no { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--color-text-muted); text-align: right; }
 .song-title { font-size: var(--fs-md); color: var(--color-text-primary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .song-album { font-size: var(--fs-sm); color: var(--color-text-secondary); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

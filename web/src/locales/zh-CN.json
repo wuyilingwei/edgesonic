@@ -200,7 +200,19 @@
     "songsHint": "💡 悬停歌曲行编辑 (✎) · 多选后顶部出现批量编辑",
     "batchHint": "勾选歌曲行以批量操作（编辑标签 / 加入歌单 / 分享）",
     "editModeOn": "✎ 编辑",
-    "editModeOff": "✕ 退出编辑"
+    "editModeOff": "✕ 退出编辑",
+    "locateCurrent": "定位当前播放",
+    "locatingCurrent": "正在查找当前播放…",
+    "locateNoCurrent": "当前没有选中的歌曲",
+    "locateLoadMore": "当前歌曲不在已加载范围内，再次点击将查找剩余媒体库。",
+    "locateNotFound": "未在当前媒体库中找到播放歌曲",
+    "locateNotLiked": "当前播放歌曲不在我喜欢中"
+    ,"locateCurrent": "定位当前播放"
+    ,"locatingCurrent": "正在查找当前播放…"
+    ,"locateNoCurrent": "当前没有选中的歌曲"
+    ,"locateLoadMore": "当前歌曲不在已加载范围内，再次点击将查找剩余媒体库。"
+    ,"locateNotFound": "未在当前媒体库中找到播放歌曲"
+    ,"locateNotLiked": "当前播放歌曲不在我喜欢中"
   },
   "tagEditor": {
     "singleTitle": "编辑歌曲信息",

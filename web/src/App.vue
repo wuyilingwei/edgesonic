@@ -24,6 +24,7 @@ watch(isLoggedIn, (now) => {
   if (now) {
     void restoreSavedTheme();
     void workerPool.hydrateConfig().then(() => workerPool.start());
+    player.resumePlaybackIfNeeded();
   } else {
     resetTheme();
     workerPool.reset();
@@ -140,7 +141,7 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
       role="alert"
       @click="dismissToast"
     >
-      <span aria-hidden="true">{{ activeToast.type === 'error' ? '!' : '✓' }}</span>
+      <span aria-hidden="true">{{ activeToast.type === 'error' ? '!' : activeToast.type === 'success' ? '✓' : 'i' }}</span>
       {{ activeToast.message }}
     </button>
   </Transition>

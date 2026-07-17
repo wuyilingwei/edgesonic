@@ -457,6 +457,7 @@ img { max-width: 100%; display: block; }
 }
 .toast-success { color: var(--color-status-success); border-color: var(--color-status-success); box-shadow: inset 3px 0 var(--color-status-success); }
 .toast-error { color: var(--color-status-error); border-color: var(--color-status-error); box-shadow: inset 3px 0 var(--color-status-error); }
+.toast-info { color: var(--color-accent-primary); border-color: var(--color-accent-primary); box-shadow: inset 3px 0 var(--color-accent-primary); }
 @keyframes toast-in { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 
 /* --- Empty state --- */

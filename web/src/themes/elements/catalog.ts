@@ -36,7 +36,7 @@ export interface ElementTheme {
 export const ELEMENT_THEMES: ElementTheme[] = [
   {
     id: "gold", label: "Gold SP", color: [1, 0.84, 0.29], halo: [0.11, 0.48, 1],
-    shape: "star", crystalOpacity: [0.72, 0.9], motion: "diagonal",
+    shape: "star", crystalOpacity: [1, 1], motion: "diagonal",
     particle: { kind: "spark", colors: ["#ffe9a8", "#bcd0ff", "#ffffff", "#c7a2ff"], density: 74 },
   },
   {

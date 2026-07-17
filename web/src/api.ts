@@ -86,6 +86,9 @@ interface LoginResult { ok: boolean; name?: string; level?: number; error?: stri
 // answer "are we authenticated" without ever touching the credential
 // itself. The backend rejects management calls whose cookie is expired,
 // at which point handleAuthError logs out and bounces to /login.
+// Clear the credential-shaped key used before cookie sessions. The current
+// login state is only a non-secret marker; the HttpOnly cookie is authoritative.
+localStorage.removeItem("edgesonic_auth");
 const token = ref(localStorage.getItem("edgesonic_logged_in") || "");
 const username = ref(localStorage.getItem("edgesonic_user") || "");
 const level = ref(parseInt(localStorage.getItem("edgesonic_level") || "0"));

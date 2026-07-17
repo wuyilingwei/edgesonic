@@ -52,6 +52,9 @@ export const useUpdateBanner = defineStore("updateBanner", () => {
       return;
     }
     latest.value = payload;
+    if (initial.value.version !== payload.version || initial.value.buildTime !== payload.buildTime) {
+      refresh();
+    }
   }
 
   function dismiss() {

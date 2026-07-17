@@ -67,6 +67,16 @@ interface PreloadedTrack {
  * element preloads the next track and is swapped in on next()/ended.
  */
 export const usePlayerStore = defineStore("player", () => {
+  const PLAYER_SESSION_KEYS = [
+    "edgesonic:queue",
+    "edgesonic:currentIndex",
+    "edgesonic:currentTime",
+    "edgesonic:playMode",
+    "edgesonic:playing",
+  ];
+  for (const key of PLAYER_SESSION_KEYS) localStorage.removeItem(key);
+  const playbackStorage = sessionStorage;
+
   const queue = ref<Track[]>([]);
   const index = ref(-1);
   const playing = ref(false);
@@ -90,7 +100,7 @@ export const usePlayerStore = defineStore("player", () => {
   // (there is no standalone "stop at end" state anymore).
   type PlayMode = "sequential" | "single" | "shuffle";
   const playMode = ref<PlayMode>(
-    (localStorage.getItem("edgesonic:playMode") as PlayMode) || "sequential"
+    (playbackStorage.getItem("edgesonic:playMode") as PlayMode) || "sequential"
   );
   // Internal shuffle order — the actual queue array is never shuffled; instead
   // we maintain a parallel index order for shuffle playback.
@@ -98,6 +108,7 @@ export const usePlayerStore = defineStore("player", () => {
 
   const current = computed<Track | null>(() => queue.value[index.value] || null);
   const hasTrack = computed(() => index.value >= 0 && index.value < queue.value.length);
+  let _resumePlayback = false;
 
   watch(playing, setPlaybackActive, { immediate: true });
 
@@ -140,6 +151,7 @@ export const usePlayerStore = defineStore("player", () => {
   let elB: HTMLAudioElement | null = null;
   let active: HTMLAudioElement | null = null;
   let preloaded: PreloadedTrack | null = null;
+  let _isUnloading = false;
   // Pending seek position to restore after loadedmetadata fires (page-reload resume).
   let _pendingRestoreTime: number | null = null;
   // Guards the ~4×/s timeupdate gate from re-queueing the same prefetch.
@@ -153,6 +165,16 @@ export const usePlayerStore = defineStore("player", () => {
   const fullBlobOriginByElement = new WeakMap<HTMLAudioElement, "background" | "fallback">();
   const fullyLoadedByElement = new WeakSet<HTMLAudioElement>();
   const fallbackInFlight = new WeakSet<HTMLAudioElement>();
+
+  window.addEventListener("pagehide", () => {
+    _isUnloading = true;
+    playbackStorage.setItem("edgesonic:playing", playing.value ? "1" : "0");
+    if (hasTrack.value) {
+      const position = active && Number.isFinite(active.currentTime) ? active.currentTime : currentTime.value;
+      playbackStorage.setItem("edgesonic:currentTime", String(Math.floor(position)));
+    }
+  });
+  window.addEventListener("pageshow", () => { _isUnloading = false; });
 
   function revokeBlobSrc(el: HTMLAudioElement) {
     const blobSrc = blobSrcByElement.get(el);
@@ -890,7 +912,7 @@ export const usePlayerStore = defineStore("player", () => {
     playMode.value =
       playMode.value === "sequential" ? "single" :
       playMode.value === "single" ? "shuffle" : "sequential";
-    localStorage.setItem("edgesonic:playMode", playMode.value);
+    playbackStorage.setItem("edgesonic:playMode", playMode.value);
     if (playMode.value === "shuffle" && queue.value.length > 0) _regenShuffleOrder();
     else _shuffleOrder = [];
   }
@@ -909,13 +931,10 @@ export const usePlayerStore = defineStore("player", () => {
     duration.value = 0;
     bufferedRanges.value = [];
     // Clear persisted player state on logout so the next session starts fresh.
-    localStorage.removeItem("edgesonic:queue");
-    localStorage.removeItem("edgesonic:currentIndex");
-    localStorage.removeItem("edgesonic:currentTime");
-    localStorage.removeItem("edgesonic:playMode");
+    for (const key of PLAYER_SESSION_KEYS) playbackStorage.removeItem(key);
   }
 
-  // ---- localStorage persistence ----
+  // ---- page-session persistence ----
 
   /** Serialize queue to minimal objects (stream URLs are generated on demand). */
   function _saveQueueAndIndex() {
@@ -924,21 +943,21 @@ export const usePlayerStore = defineStore("player", () => {
       ...(t.coverArt !== undefined ? { coverArt: t.coverArt } : {}),
       duration: t.duration,
     }));
-    localStorage.setItem("edgesonic:queue", JSON.stringify(slim));
-    localStorage.setItem("edgesonic:currentIndex", String(index.value));
+    playbackStorage.setItem("edgesonic:queue", JSON.stringify(slim));
+    playbackStorage.setItem("edgesonic:currentIndex", String(index.value));
   }
 
   let _lastTimeSave = 0;
 
   // Restore persisted state on store init (runs once, synchronously).
   try {
-    const rawQueue = localStorage.getItem("edgesonic:queue");
+    const rawQueue = playbackStorage.getItem("edgesonic:queue");
     if (rawQueue) {
       const saved = JSON.parse(rawQueue) as Track[];
       if (Array.isArray(saved) && saved.length > 0) {
-        const rawIdx = parseInt(localStorage.getItem("edgesonic:currentIndex") ?? "", 10);
+        const rawIdx = parseInt(playbackStorage.getItem("edgesonic:currentIndex") ?? "", 10);
         const savedIdx = isNaN(rawIdx) ? 0 : Math.min(Math.max(rawIdx, 0), saved.length - 1);
-        const rawTime = parseFloat(localStorage.getItem("edgesonic:currentTime") ?? "");
+        const rawTime = parseFloat(playbackStorage.getItem("edgesonic:currentTime") ?? "");
         queue.value = saved;
         index.value = savedIdx;
         duration.value = saved[savedIdx].duration || 0;
@@ -946,8 +965,7 @@ export const usePlayerStore = defineStore("player", () => {
           _pendingRestoreTime = rawTime;
           currentTime.value = rawTime; // show saved position in UI immediately
         }
-        // Audio is intentionally NOT initialized here; loadCurrent(true) runs
-        // lazily on the first toggle() so streamUrl is generated fresh at play time.
+        _resumePlayback = playbackStorage.getItem("edgesonic:playing") === "1";
       }
     }
   } catch { /* corrupt localStorage — skip silently */ }
@@ -957,12 +975,25 @@ export const usePlayerStore = defineStore("player", () => {
 
   // Throttle currentTime writes to at most once per 5 s to avoid excessive I/O.
   watch(currentTime, () => {
+    if (_isUnloading) return;
     const now = Date.now();
     if (now - _lastTimeSave >= 5000) {
-      localStorage.setItem("edgesonic:currentTime", String(Math.floor(currentTime.value)));
+      playbackStorage.setItem("edgesonic:currentTime", String(Math.floor(currentTime.value)));
       _lastTimeSave = now;
     }
   });
+
+  watch(playing, (isPlaying) => {
+    if (_isUnloading) return;
+    if (!isPlaying && !hasTrack.value) playbackStorage.removeItem("edgesonic:playing");
+    else playbackStorage.setItem("edgesonic:playing", isPlaying ? "1" : "0");
+  });
+
+  function resumePlaybackIfNeeded() {
+    if (!_resumePlayback || !hasTrack.value) return;
+    _resumePlayback = false;
+    loadCurrent(true);
+  }
 
   // Volume is already written in setVolume(); watch covers direct ref mutations.
   watch(volume, (v) => localStorage.setItem("edgesonic:volume", String(v)));
@@ -971,6 +1002,6 @@ export const usePlayerStore = defineStore("player", () => {
     queue, index, playing, currentTime, duration, volume, bufferedRanges,
     current, hasTrack, playMode, starred,
     setQueue, playAt, toggle, next, prev, seek, setVolume,
-    cyclePlayMode, toggleStar, clear,
+    cyclePlayMode, toggleStar, clear, resumePlaybackIfNeeded,
   };
 });

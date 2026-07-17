@@ -21,9 +21,10 @@ function normalize(v: Vec3): Vec3 {
 }
 export type CrystalShape = "star" | "cube" | "octahedron" | "tetrahedron" | "icosahedron" | "dodecahedron";
 
-function buildMesh(shape: CrystalShape): Float32Array {
+function buildMesh(shape: CrystalShape): { mesh: Float32Array; centroids: Float32Array; triangleCount: number } {
   const tris = shape === "star" ? buildStarTetrahedron().map((tri) => tri.v) : primitiveTriangles(shape);
   const data: number[] = [];
+  const centroids: number[] = [];
   for (const tri of tris) {
     const [a, b, c] = tri;
     const raw = cross(sub(b, a), sub(c, a));
@@ -32,8 +33,9 @@ function buildMesh(shape: CrystalShape): Float32Array {
     const vertices = outward ? [a, b, c] : [a, c, b];
     const n = normalize(outward ? raw : [-raw[0], -raw[1], -raw[2]]);
     for (const p of vertices) data.push(p[0], p[1], p[2], n[0], n[1], n[2]);
+    centroids.push(centroid[0], centroid[1], centroid[2]);
   }
-  return new Float32Array(data);
+  return { mesh: new Float32Array(data), centroids: new Float32Array(centroids), triangleCount: tris.length };
 }
 
 // Max vertex distance from centre for a shape's mesh. The primitives aren't
@@ -41,7 +43,7 @@ function buildMesh(shape: CrystalShape): Float32Array {
 // the thumb scales its `size` by 1/radius to show every element at the same
 // on-screen extent.
 function meshRadius(shape: CrystalShape): number {
-  const m = buildMesh(shape);
+  const m = buildMesh(shape).mesh;
   let max = 0;
   for (let i = 0; i < m.length; i += 6) {
     const r = Math.hypot(m[i], m[i + 1], m[i + 2]);
@@ -171,31 +173,60 @@ class Renderer {
   private glow: WebGLProgram;
   private meshBuf: WebGLBuffer;
   private quadBuf: WebGLBuffer;
+  private indexBuf: WebGLBuffer;
+  private centroids: Float32Array;
   private vertexCount: number;
+  private triangleCount: number;
   private dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
   ok = false;
 
   constructor(private canvas: HTMLCanvasElement, private color: [number, number, number], private halo: [number, number, number], shape: CrystalShape, private glowAlpha = 0.72, private glowRadius = 1.35) {
     const gl = canvas.getContext("webgl", { alpha: true, premultipliedAlpha: false, antialias: true, depth: true });
-    if (!gl) { this.gl = null as never; this.solid = null as never; this.glow = null as never; this.meshBuf = null as never; this.quadBuf = null as never; this.vertexCount = 0; return; }
+    if (!gl) { this.gl = null as never; this.solid = null as never; this.glow = null as never; this.meshBuf = null as never; this.quadBuf = null as never; this.indexBuf = null as never; this.centroids = new Float32Array(0); this.vertexCount = 0; this.triangleCount = 0; return; }
     this.gl = gl;
     const solid = link(gl, SOLID_VS, SOLID_FS);
     const glow = link(gl, GLOW_VS, GLOW_FS);
-    if (!solid || !glow) { this.solid = null as never; this.glow = null as never; this.meshBuf = null as never; this.quadBuf = null as never; this.vertexCount = 0; return; }
+    if (!solid || !glow) { this.solid = null as never; this.glow = null as never; this.meshBuf = null as never; this.quadBuf = null as never; this.indexBuf = null as never; this.centroids = new Float32Array(0); this.vertexCount = 0; this.triangleCount = 0; return; }
     this.solid = solid; this.glow = glow;
-    const mesh = buildMesh(shape);
-    this.vertexCount = mesh.length / 6;
-    const mb = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, mb); gl.bufferData(gl.ARRAY_BUFFER, mesh, gl.STATIC_DRAW);
+    const built = buildMesh(shape);
+    this.vertexCount = built.mesh.length / 6;
+    this.triangleCount = built.triangleCount;
+    this.centroids = built.centroids;
+    const mb = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, mb); gl.bufferData(gl.ARRAY_BUFFER, built.mesh, gl.STATIC_DRAW);
     this.meshBuf = mb;
     const quad = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
     const qb = gl.createBuffer()!; gl.bindBuffer(gl.ARRAY_BUFFER, qb); gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW);
     this.quadBuf = qb;
+    // Per-frame indices are rewritten in render() so triangles can be drawn
+    // back-to-front for each instance — a star tetrahedron's two
+    // interpenetrating tetrahedra are self-intersecting, so depth-buffer
+    // writes on translucent faces occlude cross-sections that should show
+    // through. Sorting triangles by their tumbled centroid z and disabling
+    // depth writes keeps the compositing order correct.
+    const ib = gl.createBuffer()!; gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, this.triangleCount * 3 * 2, gl.DYNAMIC_DRAW);
+    this.indexBuf = ib;
     this.ok = true;
   }
 
   private resize(w: number, h: number) {
     const cw = Math.round(w * this.dpr), ch = Math.round(h * this.dpr);
     if (this.canvas.width !== cw || this.canvas.height !== ch) { this.canvas.width = cw; this.canvas.height = ch; }
+  }
+
+  // Mirrors the GLSL tumble() in SOLID_VS so the CPU can compute each
+  // triangle's tumbled centroid z for back-to-front sorting. Must stay in
+  // sync with the shader.
+  private tumbleZ(p: Vec3, t: number): number {
+    const ax = t * 0.83 + 0.35, ay = t, az = t * 0.47;
+    const sx = Math.sin(ax), cx = Math.cos(ax), sy = Math.sin(ay), cy = Math.cos(ay);
+    const x1 = p[0] * cy + p[2] * sy;
+    const z1 = -p[0] * sy + p[2] * cy;
+    const y2 = p[1] * cx - z1 * sx;
+    const z2 = p[1] * sx + z1 * cx;
+    // x1*cz - y2*sz and x1*sz + y2*cz are the tumbled x/y; only z matters
+    // for depth sort, so discard them (and the Rz terms don't affect z).
+    return z2;
   }
 
   render(instances: Instance[], w: number, h: number) {
@@ -209,6 +240,7 @@ class Renderer {
     const vp: [number, number] = [w, h];
 
     gl.disable(gl.DEPTH_TEST);
+    gl.depthMask(false);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
     gl.useProgram(this.glow);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuf);
@@ -227,6 +259,12 @@ class Renderer {
 
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LEQUAL);
+    // Opaque geometry: write depth so nearer faces correctly occlude farther
+    // ones, and use source-over blending so alpha=1 fully covers. The star
+    // tetrahedron is a self-intersecting solid; with depth writes on, the
+    // depth test resolves the cross-section visibility per pixel without
+    // needing triangle-level sorting.
+    gl.depthMask(true);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.useProgram(this.solid);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.meshBuf);
