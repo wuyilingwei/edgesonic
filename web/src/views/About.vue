@@ -4,7 +4,7 @@
 import { useI18n } from "vue-i18n";
 
 const { t } = useI18n();
-const version = "1.1.0";
+const version = __EDGESONIC_VERSION__;
 
 interface Credit {
   name: string;

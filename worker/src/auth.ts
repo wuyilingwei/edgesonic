@@ -23,7 +23,9 @@ import type { User } from "./types/entities";
 
 export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 
-const SESSION_COOKIE = "edgesonic_session";
+export const SESSION_COOKIE = "edgesonic_session";
+export const SESSION_TTL_SEC = 7 * 24 * 60 * 60; // 7 days
+export const SESSION_RENEW_THRESHOLD_SEC = 3 * 24 * 60 * 60; // renew when < 3 days left
 
 function parseSessionCookie(cookieHeader: string): string | null {
   for (const part of cookieHeader.split(";")) {
@@ -34,6 +36,19 @@ function parseSessionCookie(cookieHeader: string): string | null {
     if (k === SESSION_COOKIE && v) return v;
   }
   return null;
+}
+
+// Shared with the login route so both login and the authMiddleware emit
+// identical cookie attributes. Workers terminate TLS in production; the
+// Secure flag is appended by the caller when the request arrived over HTTPS.
+export function buildSessionCookieHeader(token: string, maxAgeSec: number): string {
+  return [
+    `${SESSION_COOKIE}=${token}`,
+    "Path=/",
+    `Max-Age=${maxAgeSec}`,
+    "HttpOnly",
+    "SameSite=Lax",
+  ].join("; ");
 }
 
 // Cookie-based session lookup used by the authMiddleware when the request
@@ -177,9 +192,6 @@ async function findSubsonicCredential(
 
   return null;
 }
-
-const SESSION_TTL_SEC = 7 * 24 * 60 * 60; // 7 days
-const SESSION_RENEW_THRESHOLD_SEC = 3 * 24 * 60 * 60; // renew when < 3 days left
 
 async function renewSessionIfNeeded(db: D1Database, token: string): Promise<void> {
   const now = Math.floor(Date.now() / 1000);
@@ -441,6 +453,18 @@ export const authMiddleware = createMiddleware<{
   c.set("user", user);
   c.set("authMethod", authMethod);
   if (authSource) c.set("authSource", authSource);
+
+  // Sliding cookie renewal: every successful cookie-session request refreshes
+  // the browser cookie's Max-Age so it stays alive as long as the user is
+  // active, mirroring the server-side renewSessionIfNeeded. Without this the
+  // cookie lapses at its fixed 7-day Max-Age even though the DB session was
+  // renewed, and the next request after that arrives without a cookie → 401
+  // → the SPA logs out. A post-deploy reload surfacing as "lost login" was
+  // the symptom that exposed the gap.
+  if (authMethod === "session" && authSource === "cookie" && cookieToken) {
+    const isHttps = new URL(c.req.url).protocol === "https:";
+    c.header("Set-Cookie", buildSessionCookieHeader(cookieToken, SESSION_TTL_SEC) + (isHttps ? "; Secure" : ""), { append: true });
+  }
   return next();
 });
 

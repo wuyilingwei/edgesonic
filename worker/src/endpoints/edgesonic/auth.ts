@@ -17,7 +17,7 @@
 // runs *before* the global authMiddleware (it issues the session token used by
 // every other endpoint in /tag /storage /edgesonic).
 import { Hono } from "hono";
-import { permissionMiddleware, subsonicError, sha256 } from "../../auth";
+import { permissionMiddleware, subsonicError, sha256, SESSION_TTL_SEC, buildSessionCookieHeader } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
 import { recoverCronIfStale } from "../../utils/cronRecovery";
 import type { User } from "../../types/entities";
@@ -28,25 +28,14 @@ import type { User } from "../../types/entities";
 export const webLoginRoutes = new Hono<{ Bindings: Env }>();
 
 const SESSION_COOKIE = "edgesonic_session";
-const SESSION_TTL_SEC = 86400;
-
-// SameSite=Lax (not Strict) so external OAuth-style redirects and the
-// hash-router's first navigation still carry the cookie; HttpOnly + Secure
-// is what stops JS-side credential theft and MITM leaks over clear text.
-// Path=/ so it covers /rest, /tag, /storage, /edgesonic uniformly.
-function sessionCookieHeader(token: string, maxAgeSec: number): string {
-  const flags = [
-    `${SESSION_COOKIE}=${token}`,
-    "Path=/",
-    `Max-Age=${maxAgeSec}`,
-    "HttpOnly",
-    "SameSite=Lax",
-  ];
-  // Workers always terminate TLS in production; Secure would block the
-  // cookie over plain HTTP in `wrangler dev --local`, so we only flag it
-  // when the request itself arrived over HTTPS.
-  return flags.join("; ");
-}
+// SESSION_TTL_SEC (7 days) is imported from ../../auth so the cookie Max-Age
+// matches the server-side session lifetime and the sliding renewal in
+// authMiddleware. Previously this file declared its own 86400 (1 day), so the
+// cookie expired a day after login while the DB session lived for 7 — a
+// post-deploy reload then hit 401 and the SPA logged out.
+// sessionCookieHeader is likewise shared via buildSessionCookieHeader to keep
+// attributes (Path=/, HttpOnly, SameSite=Lax) identical across login, logout
+// and the middleware's sliding renewal.
 
 webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
   const db = c.env.DB;
@@ -112,7 +101,7 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
   // compatibility (clients that use it as a Subsonic plain password via
   // /rest/?u=&p=), but the SPA itself no longer reads it.
   const isHttps = new URL(c.req.url).protocol === "https:";
-  const cookie = sessionCookieHeader(sessionToken, SESSION_TTL_SEC) + (isHttps ? "; Secure" : "");
+  const cookie = buildSessionCookieHeader(sessionToken, SESSION_TTL_SEC) + (isHttps ? "; Secure" : "");
   c.header("Set-Cookie", cookie);
   return c.json(
     {
@@ -151,7 +140,7 @@ webLoginRoutes.post("/edgesonic/auth/logout", async (c) => {
   // Always wipe the browser cookie too — covers both cookie-only and
   // signedParams-style SPA sessions.
   const isHttps = new URL(c.req.url).protocol === "https:";
-  c.header("Set-Cookie", sessionCookieHeader("", 0) + (isHttps ? "; Secure" : ""));
+  c.header("Set-Cookie", buildSessionCookieHeader("", 0) + (isHttps ? "; Secure" : ""));
   return c.json({ ok: true });
 });
 

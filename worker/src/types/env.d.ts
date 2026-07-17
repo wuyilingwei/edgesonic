@@ -33,6 +33,8 @@ interface Env {
   //  - `wrangler deploy --var WORKER_VERSION:$(date +%s)` (one-shot override)
   // Unset → endpoint returns "0".
   WORKER_VERSION?: string;
+  EDGESONIC_VERSION?: string;
+  EDGESONIC_BUILD_TIME?: string;
   // push secrets into this same Worker. Defaults to "edgesonic" when unset so
   // existing deployments keep working without a redeploy.
   WORKER_NAME?: string;

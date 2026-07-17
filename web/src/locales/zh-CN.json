@@ -710,6 +710,16 @@
     "system": {
       "title": "系统"
     },
+    "audioCache": {
+      "title": "音频缓存",
+      "desc": "完整播放过的歌曲会缓存在此浏览器中（IndexedDB），再次播放即时开始、不消耗网络流量。",
+      "usage": "已缓存 {count} 首 · {size} · 上限 {max}",
+      "capLabel": "缓存上限",
+      "clear": "清空缓存",
+      "cleared": "音频缓存已清空",
+      "clearFailed": "清空音频缓存失败",
+      "unavailable": "当前浏览器不支持音频缓存。"
+    },
     "sessions": {
       "title": "会话",
       "desc": "当前账户的活动登录会话",

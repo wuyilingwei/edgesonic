@@ -130,8 +130,9 @@ async function saveFreeAlloc() {
 }
 
 interface OrphanSong {
-  masterId: string; title: string; createdAt: number; instanceCount: number;
-  suffix: string | null; totalSize: number; tagScanned: number; missing: boolean;
+  masterId: string; title: string; albumId: string; artistId: string; createdAt: number;
+  instanceCount: number; suffix: string | null; totalSize: number; tagScanned: number;
+  missing: boolean; ghost: boolean;
 }
 const orphanSongs = ref<OrphanSong[]>([]);
 const orphanLoading = ref(false);
@@ -1901,7 +1902,8 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                 <td>{{ s.title }}<span v-if="s.suffix" class="muted"> .{{ s.suffix }}</span></td>
                 <td class="num-col">{{ fmtBytes(s.totalSize) }}</td>
                 <td>
-                  <span v-if="s.missing" class="status-badge error">文件缺失</span>
+                  <span v-if="s.ghost" class="status-badge error">幽灵记录</span>
+                  <span v-else-if="s.missing" class="status-badge error">文件缺失</span>
                   <span v-else-if="s.tagScanned === 0" class="status-badge info">待扫描</span>
                   <span v-else class="status-badge muted">标签为空</span>
                 </td>

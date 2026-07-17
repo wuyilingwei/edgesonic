@@ -35,7 +35,7 @@ Go to **Actions → Deploy EdgeSonic → Run workflow** and fill in:
 | `domain` | optional | — | Custom domain; leave empty for `<worker>.workers.dev` |
 | `instance_id` | optional | — | Anti-loop UUID; auto-generated when blank |
 
-The workflow verifies the package checksum (`sha256sum -c`) before extracting, so a corrupted or tampered download fails fast rather than deploying.
+The workflow verifies the package checksum and embedded build metadata before extracting, so a corrupted, incomplete, or mismatched release fails before deployment.
 
 ### Publishing a release
 
@@ -45,7 +45,7 @@ The deploy action consumes releases produced by `.github/workflows/release.yml`.
 
 > **Settings → Cloudflare → "Ensure default cron"**
 
-`wrangler deploy` clears dynamic cron schedules. The workflow re-applies the default (`0 */1 * * *`) automatically at the end of the run; if that step reports a warning, visit the admin panel to re-apply them (see `worker/CF_CRON.md`). This applies to CLI deploys (`./deploy.sh`) too.
+`wrangler deploy` clears dynamic cron schedules. Every deployment path re-applies the default (`0 */1 * * *`) and fails the run if that restoration fails. Local deployment therefore requires `CLOUDFLARE_API_TOKEN` (see `worker/CF_CRON.md`).
 
 ## Cloudflare resource requirements
 

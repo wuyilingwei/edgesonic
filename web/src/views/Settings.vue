@@ -4,11 +4,12 @@
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
-import { useAuth, parseXmlAttrs } from "../api";
+import { useAuth, parseXmlAttrs, formatSize } from "../api";
 import { setLocale, SUPPORTED_LOCALES, type AppLocale } from "../i18n";
 import { setTheme, activeTheme, SUPPORTED_THEMES, type AppTheme } from "../theme";
 import { ensureBuiltinThemeLoaded } from "../themes/builtin";
 import { getTheme, registeredThemeIds, externalThemeIds, loadExternalTheme, unregisterExternalTheme } from "../themes/registry";
+import { audioCacheStats, clearAudioCache, audioCacheMaxMb, setAudioCacheMaxMb } from "../lib/audioCache";
 import PermissionsMatrix from "../components/PermissionsMatrix.vue";
 import { useWorkerPool } from "../stores/workerPool";
 
@@ -17,8 +18,8 @@ const { t, locale } = useI18n();
 const { isSuperAdmin, isAdmin, edgesonicFetch, edgesonicPost, logout, username, handleAuthError } = useAuth();
 const workerPool = useWorkerPool();
 
-type SectionKey = "user" | "system" | "sessions" | "clients" | "permissions";
-const open = ref<Record<SectionKey, boolean>>({ user: true, system: false, sessions: false, clients: false, permissions: false });
+type SectionKey = "user" | "audioCache" | "system" | "sessions" | "clients" | "permissions";
+const open = ref<Record<SectionKey, boolean>>({ user: true, audioCache: false, system: false, sessions: false, clients: false, permissions: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
 
 type SubSectionKey = "media" | "integrations" | "workers" | "featureFlags";
@@ -30,6 +31,32 @@ function showToast(msg: string, type = "success") {
   toast.value = { show: true, msg, type };
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
+
+// ---- Browser audio cache (IndexedDB) ----
+const cacheStats = ref<{ count: number; bytes: number } | null>(null);
+const cacheCapMb = ref(audioCacheMaxMb());
+const cacheBusy = ref(false);
+const cacheUsagePct = computed(() => {
+  if (!cacheStats.value) return 0;
+  const cap = cacheCapMb.value * 1024 * 1024;
+  return Math.min(100, Math.round((cacheStats.value.bytes / cap) * 100));
+});
+async function refreshCacheStats() {
+  cacheStats.value = await audioCacheStats();
+}
+async function onCacheCapChange() {
+  setAudioCacheMaxMb(cacheCapMb.value);
+  await refreshCacheStats();
+}
+async function onClearCache() {
+  if (cacheBusy.value) return;
+  cacheBusy.value = true;
+  const ok = await clearAudioCache();
+  cacheBusy.value = false;
+  await refreshCacheStats();
+  showToast(t(ok ? "settings.audioCache.cleared" : "settings.audioCache.clearFailed"), ok ? "success" : "error");
+}
+onMounted(() => { void refreshCacheStats(); });
 
 const localeLabels: Record<AppLocale, string> = { "zh-CN": "中文（简体）", en: "English" };
 function onLocaleChange(e: Event) {
@@ -1134,6 +1161,46 @@ onMounted(() => {
              {{ t("settings.common.lastfm.save") }}
             </button>
           </div>
+        </div>
+      </div>
+
+      <div class="corner corner-tl"></div>
+      <div class="corner corner-br"></div>
+    </section>
+
+    <!-- ============ AUDIO CACHE ============ -->
+    <section class="settings-section card" :class="{ open: open.audioCache }">
+      <button class="section-header" @click="toggleSection('audioCache')">
+        <span class="section-title">{{ t("settings.audioCache.title") }}</span>
+        <span class="section-caret">{{ open.audioCache ? "−" : "+" }}</span>
+      </button>
+
+      <div v-show="open.audioCache" class="section-body">
+        <p class="feature-desc section-desc">{{ t("settings.audioCache.desc") }}</p>
+
+        <div v-if="cacheStats" class="cache-usage">
+          <span class="mono-label">
+            {{ t("settings.audioCache.usage", { count: cacheStats.count, size: formatSize(cacheStats.bytes), max: formatSize(cacheCapMb * 1024 * 1024) }) }}
+          </span>
+          <div class="cache-usage-bar"><div class="cache-usage-fill" :style="{ width: cacheUsagePct + '%' }"></div></div>
+        </div>
+        <p v-else class="feature-desc">{{ t("settings.audioCache.unavailable") }}</p>
+
+        <label class="tc-row">
+          <span class="tc-key">{{ t("settings.audioCache.capLabel") }}</span>
+          <select v-model.number="cacheCapMb" class="form-input cache-cap-select" @change="onCacheCapChange">
+            <option :value="256">256 MB</option>
+            <option :value="512">512 MB</option>
+            <option :value="1024">1 GB</option>
+            <option :value="2048">2 GB</option>
+            <option :value="4096">4 GB</option>
+          </select>
+        </label>
+
+        <div class="tc-actions">
+          <button class="btn-danger" :disabled="cacheBusy || !cacheStats" @click="onClearCache">
+            {{ t("settings.audioCache.clear") }}
+          </button>
         </div>
       </div>
 
@@ -2270,6 +2337,21 @@ onMounted(() => {
 }
 .tc-profile-pill input { margin: 0; }
 .tc-actions { margin-top: 0.4rem; display: flex; justify-content: flex-end; }
+
+/* --- Browser audio cache --- */
+.cache-usage { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.8rem; }
+.cache-usage-bar {
+  height: 6px;
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-subtle);
+  overflow: hidden;
+}
+.cache-usage-fill {
+  height: 100%;
+  background: var(--color-accent-primary);
+  transition: width 0.3s ease;
+}
+.cache-cap-select { max-width: 160px; }
 
 /* --- 091/092 presign warning banner --- */
 .presign-warning {

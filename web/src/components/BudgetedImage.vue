@@ -6,30 +6,37 @@ defineOptions({ inheritAttrs: false });
 
 const props = defineProps<{ src: string; alt: string }>();
 const emit = defineEmits<{ error: [] }>();
+const LOAD_TIMEOUT_MS = 20 * 1000;
 const loadedSrc = ref<string>();
 const imageEl = ref<HTMLImageElement>();
 let observer: IntersectionObserver | null = null;
 let cancelled = false;
+let releaseLoad: (() => void) | null = null;
 
 function loadImage(): Promise<void> {
   return new Promise((resolve, reject) => {
     const image = imageEl.value;
-    if (!image) {
-      reject(new Error("image element unavailable"));
+    if (!image || cancelled) {
+      resolve();
       return;
     }
-    const onLoad = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error("image load failed"));
-    };
-    const cleanup = () => {
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (settle: () => void) => {
+      if (done) return;
+      done = true;
+      if (timer !== undefined) clearTimeout(timer);
       image.removeEventListener("load", onLoad);
       image.removeEventListener("error", onError);
+      releaseLoad = null;
+      settle();
     };
+    const onLoad = () => finish(resolve);
+    const onError = () => finish(() => reject(new Error("image load failed")));
+    // Unmounting or stalling must hand the shared budget slot back, otherwise
+    // one pending image can starve every other queued request.
+    releaseLoad = () => finish(resolve);
+    timer = setTimeout(() => finish(() => reject(new Error("image load timed out"))), LOAD_TIMEOUT_MS);
     image.addEventListener("load", onLoad);
     image.addEventListener("error", onError);
     loadedSrc.value = props.src;
@@ -59,6 +66,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelled = true;
   observer?.disconnect();
+  releaseLoad?.();
 });
 </script>
 

@@ -337,8 +337,16 @@ maintenanceRoutes.get("/maintenance/orphanSongs",
   permissionMiddleware("maintenance_cleanup"),
   async (c) => {
   const env = c.env as Env;
+  // Two kinds of orphans:
+  //   1. upload-bucket masters left under the 'unknown-artist' /
+  //      'pending-uploads' placeholders (the original scope of this tool);
+  //   2. "ghost" masters with metadata but NO song_instances rows — every
+  //      stream returns 404 even though the song shows up in search/album
+  //      listings. Usually a leftover from an interrupted scan or a
+  //      Subsonic clone whose instance rows were later reclaimed. Flagged
+  //      with ghost=true so the UI can distinguish them from bucket orphans.
   const rows = (await env.DB.prepare(
-    `SELECT sm.id AS master_id, sm.title, sm.created_at,
+    `SELECT sm.id AS master_id, sm.title, sm.album_id, sm.artist_id, sm.created_at,
             COUNT(si.id) AS instance_count,
             MIN(si.suffix) AS suffix,
             COALESCE(SUM(si.size), 0) AS total_size,
@@ -347,11 +355,12 @@ maintenanceRoutes.get("/maintenance/orphanSongs",
      FROM song_masters sm
      LEFT JOIN song_instances si ON si.master_id = sm.id
      WHERE sm.artist_id = 'unknown-artist' OR sm.album_id = 'pending-uploads'
+        OR NOT EXISTS (SELECT 1 FROM song_instances WHERE master_id = sm.id)
      GROUP BY sm.id
      ORDER BY sm.created_at DESC
      LIMIT 200`,
   ).all<{
-    master_id: string; title: string; created_at: number;
+    master_id: string; title: string; album_id: string; artist_id: string; created_at: number;
     instance_count: number; suffix: string | null; total_size: number;
     tag_scanned: number | null; missing: number | null;
   }>()).results;
@@ -361,12 +370,15 @@ maintenanceRoutes.get("/maintenance/orphanSongs",
     songs: rows.map((r) => ({
       masterId: r.master_id,
       title: r.title,
+      albumId: r.album_id,
+      artistId: r.artist_id,
       createdAt: r.created_at,
       instanceCount: r.instance_count,
       suffix: r.suffix,
       totalSize: r.total_size,
       tagScanned: r.tag_scanned ?? 0,
       missing: !!r.missing,
+      ghost: r.instance_count === 0 && r.artist_id !== "unknown-artist" && r.album_id !== "pending-uploads",
     })),
   });
 });
@@ -434,6 +446,11 @@ maintenanceRoutes.post("/maintenance/orphanSongs/delete",
       await env.DB.batch([
         env.DB.prepare("DELETE FROM song_instances WHERE master_id = ?").bind(masterId),
         env.DB.prepare("DELETE FROM song_masters WHERE id = ?").bind(masterId),
+        // Drop any album left with no masters so it stops showing up as a
+        // clickable-but-empty card in the library (the "光年之外" ghost case).
+        env.DB.prepare(
+          "DELETE FROM albums WHERE NOT EXISTS (SELECT 1 FROM song_masters WHERE album_id = albums.id)",
+        ),
       ]);
       items.push({ masterId, ok: true });
     } catch (e) {

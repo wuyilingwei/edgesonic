@@ -26,23 +26,16 @@
 //
 // Auth: this endpoint is in NO_AUTH_PATHS (worker/src/auth.ts) so the polling
 // fetch works even after the session expires. The payload only exposes the
-// build version and start time, which is non-sensitive information that any
-// curl probe could already infer from response timing.
+// build version and build time.
 import { Hono } from "hono";
-
-const EDGESONIC_VERSION = "1.0.0";
-
-const STARTED_AT = new Date().toISOString();
 
 export const versionRoutes = new Hono<{ Bindings: Env }>();
 
 versionRoutes.get("/version", (c) => {
-  const version = c.env.WORKER_VERSION || "0";
+  const version = c.env.EDGESONIC_VERSION || "dev";
   return c.json({
     ok: true,
     version,
-    edgesonicVersion: EDGESONIC_VERSION,
-    buildTime: STARTED_AT,
-    startedAt: STARTED_AT,
+    buildTime: c.env.EDGESONIC_BUILD_TIME || null,
   });
 });

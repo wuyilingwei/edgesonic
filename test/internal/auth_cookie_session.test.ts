@@ -216,7 +216,7 @@ async function main() {
     assert(sc.startsWith("edgesonic_session="), `Set-Cookie starts with edgesonic_session= (got ${sc.slice(0, 40)}...)`);
     assert(sc.includes("HttpOnly"), `HttpOnly flag present (got ${sc})`);
     assert(sc.includes("SameSite=Lax"), `SameSite=Lax flag present (got ${sc})`);
-    assert(sc.includes("Max-Age=86400"), `Max-Age=86400 present (got ${sc})`);
+    assert(sc.includes("Max-Age=604800"), `Max-Age=604800 (7d) present (got ${sc})`);
     assert(sc.includes("Path=/"), `Path=/ present (got ${sc})`);
   }
 

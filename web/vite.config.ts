@@ -15,28 +15,24 @@
 
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
-import { readFileSync } from "fs";
-import { execFileSync } from "child_process";
+import { getBuildInfo } from "../scripts/build-info.mjs";
 
-const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
-
-function git(args: string[]): string | undefined {
-  try {
-    return execFileSync("git", args, { encoding: "utf8" }).trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-const tag = git(["describe", "--exact-match", "--tags", "HEAD"]);
-const revision = git(["rev-parse", "--short", "HEAD"]) || "unknown";
-const version = process.env.EDGESONIC_VERSION || (
-  tag?.replace(/^v/, "") || `${pkg.version}-dev.${revision}`
-);
-const buildTime = process.env.EDGESONIC_BUILD_TIME || new Date().toISOString();
+const { version, buildTime } = getBuildInfo();
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [
+    vue(),
+    {
+      name: "edgesonic-build-info",
+      generateBundle() {
+        this.emitFile({
+          type: "asset",
+          fileName: "build-info.json",
+          source: JSON.stringify({ version, buildTime }),
+        });
+      },
+    },
+  ],
   server: { port: 5173 },
   define: {
     __EDGESONIC_VERSION__: JSON.stringify(version),

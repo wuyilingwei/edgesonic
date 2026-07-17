@@ -131,6 +131,7 @@ jobs:
           tar xzf edgesonic-release.tar.gz
           test -d edgesonic-release/worker
           test -d edgesonic-release/web/dist
+          test -s edgesonic-release/web/dist/build-info.json
 
       - name: Provision Cloudflare resources
         id: provision
@@ -216,13 +217,18 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
         run: |
-          VERSION=$(date +%s)
+          BUILD_INFO=$(cat edgesonic-release/web/dist/build-info.json)
+          node -e 'const v=JSON.parse(process.argv[1]); if (!v.version || !v.buildTime || Number.isNaN(Date.parse(v.buildTime))) process.exit(1)' "$BUILD_INFO"
+          VERSION=$(node -e 'console.log(JSON.parse(process.argv[1]).version)' "$BUILD_INFO")
+          BUILD_TIME=$(node -e 'console.log(JSON.parse(process.argv[1]).buildTime)' "$BUILD_INFO")
           # [assets] directory = "../web/dist" resolves relative to the config
           # file, i.e. edgesonic-release/web/dist — the prebuilt frontend.
           wrangler deploy \
             --config edgesonic-release/worker/wrangler.toml \
             --containers-rollout=none \
-            --var WORKER_VERSION:"${VERSION}"
+            --var WORKER_VERSION:"${VERSION}" \
+            --var EDGESONIC_VERSION:"${VERSION}" \
+            --var EDGESONIC_BUILD_TIME:"${BUILD_TIME}"
 
       - name: Restore cron schedule
         env:
@@ -237,9 +243,10 @@ jobs:
             -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
             -H "Content-Type: application/json" \
             --data-raw "[{\"cron\":\"${CRON_EXPR}\"}]")
-          if echo "$CF_RESP" | grep -q '"success":true'; then
+          if node -e 'let body=""; process.stdin.on("data", (chunk) => body += chunk); process.stdin.on("end", () => { try { process.exit(JSON.parse(body).success ? 0 : 1); } catch { process.exit(1); } });' <<<"$CF_RESP"; then
             echo "Cron restored: ${CRON_EXPR}"
           else
-            echo "::warning::Cron restore failed — go to Settings → Cloudflare → 'Ensure default cron'"
+            echo "::error::Cron restore failed"
             echo "$CF_RESP" | cut -c1-400
+            exit 1
           fi

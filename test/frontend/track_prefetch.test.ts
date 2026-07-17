@@ -85,7 +85,16 @@ async function run() {
 
   const playerSrc = fs.readFileSync(path.resolve(__dirname, "../../web/src/stores/player.ts"), "utf8");
   const nowPlayingSrc = fs.readFileSync(path.resolve(__dirname, "../../web/src/views/NowPlaying.vue"), "utf8");
-  assert(playerSrc.includes("preloadTrack(nextTrack"), "audio next-track preload triggers ancillary preload");
+  assert(playerSrc.includes("preloadTrack(nextTrack"), "next-track ancillary preload is wired up");
+  // Metadata/lyrics/covers are small: they must fire on the timing gate alone.
+  // Sitting behind the current track's full-file fetch means a slow or failed
+  // fetch silently cancels every prefetch.
+  const ancillaryAt = playerSrc.indexOf("prefetchNextTrackData();");
+  const audioGateAt = playerSrc.indexOf("if (isFullyBuffered(el, dur)) preloadNext();");
+  assert(
+    ancillaryAt >= 0 && audioGateAt >= 0 && ancillaryAt < audioGateAt,
+    "ancillary prefetch is not gated on the current track being fully buffered",
+  );
   assert(nowPlayingSrc.includes("getTrackLyrics(trackAtChange"), "detail lyrics reuse the preload cache");
 
   console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PASS");

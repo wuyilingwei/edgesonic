@@ -31,6 +31,9 @@ import { DEFAULT_PROFILES } from "../../transcode/profiles";
 import { buildTranscodeEngine } from "../../transcode/factory";
 import { BrowserPoolEngine } from "../../transcode/browser_pool";
 import { signUploadToken } from "../../utils/workUploadToken";
+import {
+  AUDIO_MAX_AGE_SEC, COVER_MAX_AGE_SEC, applyPrivateCache, etagMatches, instanceEtag,
+} from "../../utils/httpCache";
 import type { TranscodeProfile, TranscodeInput } from "../../transcode/engine";
 import { presignR2Get } from "../../utils/r2presign";
 
@@ -341,16 +344,22 @@ const streamHandler = async (c: Context) => {
           // follows the 302 to a cross-origin R2 S3 host where EdgeSonic's
           // same-origin CORP would be wrong anyway.
           //
-        // 093b — Cache the 302 for the same TTL as the presigned URL so the
+          // Cache the 302 for the same TTL as the presigned URL so the
           // browser's <audio> Range follow-ups (seek, pre-buffer chunks) reuse
           // the cached redirect and skip the Worker entirely on subsequent
           // ranges. Without this, every Range request re-hit the Worker to
           // re-sign + 302, defeating the presign bandwidth-saving purpose.
           // The presigned URL itself is host-only signed, so any Range the
           // browser sends to it will be accepted by R2.
+          //
+          // `private`, never `public`: the Location is itself an access
+          // credential, and this URL carries no user identity. A shared cache
+          // holding this 302 would hand a working presigned link to an
+          // unauthenticated caller. Only the requesting browser may reuse it,
+          // which is all the optimisation above ever needed.
           const r = c.redirect(presigned, 302);
           r.headers.set("Cross-Origin-Resource-Policy", "cross-origin");
-          r.headers.set("Cache-Control", "public, max-age=300");
+          r.headers.set("Cache-Control", "private, max-age=300");
           return r;
         } catch {
           // signing failure → fall through to in-Worker stream
@@ -440,8 +449,18 @@ const streamHandler = async (c: Context) => {
   if (result.acceptRanges) headers.set("Accept-Ranges", "bytes");
   if (result.contentRange) headers.set("Content-Range", result.contentRange);
 
+  // Raw bytes are cacheable by the requesting browser only. Transcoded output
+  // takes the tryTranscodeStream path above and keeps its own no-store.
+  const etag = instanceEtag(selected);
+  applyPrivateCache(headers, AUDIO_MAX_AGE_SEC, etag);
+  // Only a full response may 304 here; a range request needs its own bytes.
+  if (result.statusCode === 200 && etagMatches(c, etag)) {
+    return new Response(null, { status: 304, headers });
+  }
+
   return new Response(result.body, { status: result.statusCode, headers });
 };
+
 
 function normalizeStreamContentType(contentType: string, suffix?: string | null): string {
   const lower = contentType.split(";", 1)[0].trim().toLowerCase();
@@ -620,18 +639,22 @@ const getCoverArtHandler = async (c: Context) => {
         original.writeHttpMetadata(respHeaders);
         respHeaders.set("X-EdgeSonic-Cover-Size", String(size));
         respHeaders.set("X-EdgeSonic-Cover-Cache", "miss");
+        applyPrivateCache(respHeaders, COVER_MAX_AGE_SEC, original.httpEtag);
         return new Response(buf, { headers: respHeaders });
       }
       const respHeaders = new Headers();
       sized.writeHttpMetadata(respHeaders);
       respHeaders.set("X-EdgeSonic-Cover-Size", String(size));
       respHeaders.set("X-EdgeSonic-Cover-Cache", "miss");
+      applyPrivateCache(respHeaders, COVER_MAX_AGE_SEC, sized.httpEtag);
       return new Response(sized.body, { headers: respHeaders });
     }
     const headers = new Headers();
     sized.writeHttpMetadata(headers);
     headers.set("X-EdgeSonic-Cover-Size", String(size));
     headers.set("X-EdgeSonic-Cover-Cache", "hit");
+    applyPrivateCache(headers, COVER_MAX_AGE_SEC, sized.httpEtag);
+    if (etagMatches(c, sized.httpEtag)) return new Response(null, { status: 304, headers });
     return new Response(sized.body, { headers });
   }
 
@@ -641,6 +664,8 @@ const getCoverArtHandler = async (c: Context) => {
 
   const headers = new Headers();
   object.writeHttpMetadata(headers);
+  applyPrivateCache(headers, COVER_MAX_AGE_SEC, object.httpEtag);
+  if (etagMatches(c, object.httpEtag)) return new Response(null, { status: 304, headers });
   return new Response(object.body, { headers });
 };
 

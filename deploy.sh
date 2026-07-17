@@ -46,10 +46,22 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
+if [ "$DO_BUILD" -eq 0 ] && [ -f web/dist/build-info.json ]; then
+  BUILD_INFO="$(<web/dist/build-info.json)"
+else
+  BUILD_INFO="$(node scripts/build-info.mjs)"
+fi
+VERSION="$(node -e 'console.log(JSON.parse(process.argv[1]).version)' "$BUILD_INFO")"
+BUILD_TIME="$(node -e 'console.log(JSON.parse(process.argv[1]).buildTime)' "$BUILD_INFO")"
+node -e 'const v=JSON.parse(process.argv[1]); if (!v.version || !v.buildTime || Number.isNaN(Date.parse(v.buildTime))) process.exit(1)' "$BUILD_INFO"
+export EDGESONIC_VERSION="$VERSION"
+export EDGESONIC_BUILD_TIME="$BUILD_TIME"
+
 if [ "$DO_BUILD" -eq 1 ]; then
-  echo "▶ [构建] 安装依赖 + 生成前端 web/dist（worker 通过 [assets] 打包它）…"
-  npm install
+  echo "▶ [构建] 安装锁定依赖 + 生成前端 web/dist（worker 通过 [assets] 打包它）…"
+  npm ci
   npm run build:web
+  test -s web/dist/build-info.json
 else
   echo "▶ [构建] 已跳过（--no-build）；确保 web/dist 是最新的。"
 fi
@@ -59,15 +71,14 @@ if [ -n "$MIGRATE_FILE" ]; then
   npx wrangler d1 execute "$DB" --remote --config "$CONFIG" --file "$MIGRATE_FILE"
 fi
 
-VERSION="$(date +%s)"
 if [ "$VERSION_ONLY" -eq 1 ]; then
   echo "▶ [版本] 上传新版本（不切生产流量）…"
-  npx wrangler versions upload --config "$CONFIG" --var WORKER_VERSION:"$VERSION"
+  npx wrangler versions upload --config "$CONFIG" --var WORKER_VERSION:"$VERSION" --var EDGESONIC_VERSION:"$VERSION" --var EDGESONIC_BUILD_TIME:"$BUILD_TIME"
   echo ""
   echo "✓ 完成。WORKER_VERSION=$VERSION（版本上传，未切生产，cron 未受影响）"
 else
   echo "▶ [部署] wrangler deploy（含 web/dist 静态资源）…"
-  npx wrangler deploy --config "$CONFIG" $CONTAINERS_FLAG --var WORKER_VERSION:"$VERSION"
+  npx wrangler deploy --config "$CONFIG" $CONTAINERS_FLAG --var WORKER_VERSION:"$VERSION" --var EDGESONIC_VERSION:"$VERSION" --var EDGESONIC_BUILD_TIME:"$BUILD_TIME"
 
   # wrangler deploy 会清空 Cloudflare 上的所有 cron 触发器（[triggers] 留空时 CF 认为「无计划」）。
   # 部署完毕后立即通过 CF API 恢复默认时间表，避免每次 deploy 后都要手动点 UI。
@@ -76,9 +87,6 @@ else
   ACCOUNT_ID=$(grep -m1 '^account_id' "$CONFIG" | sed 's/[^"]*"\([^"]*\)".*/\1/')
   WORKER_NAME=$(grep -m1 '^name' "$CONFIG" | sed 's/[^"]*"\([^"]*\)".*/\1/')
 
-  echo ""
-  echo "✓ 完成。WORKER_VERSION=$VERSION"
-
   if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "$ACCOUNT_ID" ] && [ -n "$WORKER_NAME" ]; then
     echo "▶ [Cron] 恢复 cron 触发器（${CRON_EXPR}）…"
     CF_RESP=$(curl -s -X PUT \
@@ -86,15 +94,17 @@ else
       -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
       -H "Content-Type: application/json" \
       --data-raw "[{\"cron\":\"${CRON_EXPR}\"}]")
-    if echo "$CF_RESP" | grep -q '"success":true'; then
+    if node -e 'let body=""; process.stdin.on("data", (chunk) => body += chunk); process.stdin.on("end", () => { try { process.exit(JSON.parse(body).success ? 0 : 1); } catch { process.exit(1); } });' <<<"$CF_RESP"; then
       echo "✓ Cron 已恢复：${CRON_EXPR}"
     else
-      echo "⚠ Cron 自动恢复失败，请到 Settings → Cloudflare → \"Ensure default cron\""
+      echo "✗ Cron 自动恢复失败。"
       echo "  CF 响应：$(echo "$CF_RESP" | cut -c1-300)"
+      exit 1
     fi
   else
-    echo "  提醒：未设置 CLOUDFLARE_API_TOKEN，无法自动恢复 cron。"
-    echo "  请到 Settings → Cloudflare → \"Ensure default cron\" 重新应用定时任务（见 worker/CF_CRON.md）。"
-    echo "  或：export CLOUDFLARE_API_TOKEN=<token> 后重新运行，deploy.sh 将自动恢复。"
+    echo "✗ 缺少 CLOUDFLARE_API_TOKEN，拒绝完成会清空 cron 的部署。" >&2
+    exit 1
   fi
+  echo ""
+  echo "✓ 完成。WORKER_VERSION=$VERSION"
 fi

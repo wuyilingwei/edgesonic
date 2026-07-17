@@ -175,12 +175,29 @@ export function getTrackLyrics(track: PrefetchTrack, auth: Pick<TrackPrefetchAut
   }, TTL_LYRICS_MS);
 }
 
+const COVER_TIMEOUT_MS = 15 * 1000;
+
 function preloadImage(url: string): Promise<void> {
   if (typeof Image === "undefined") return Promise.resolve();
   return new Promise((resolve, reject) => {
     const image = new Image();
-    image.onload = () => resolve();
-    image.onerror = () => reject(new Error("cover preload failed"));
+    let done = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (settle: () => void) => {
+      if (done) return;
+      done = true;
+      if (timer !== undefined) clearTimeout(timer);
+      image.onload = null;
+      image.onerror = null;
+      settle();
+    };
+    timer = setTimeout(() => {
+      // Drop the request so a stalled cover cannot hold its budget slot.
+      image.src = "";
+      finish(() => reject(new Error("cover preload timed out")));
+    }, COVER_TIMEOUT_MS);
+    image.onload = () => finish(resolve);
+    image.onerror = () => finish(() => reject(new Error("cover preload failed")));
     image.src = url;
   });
 }
@@ -199,8 +216,10 @@ function preloadCover(track: PrefetchTrack, auth: TrackPrefetchAuth, size: numbe
 }
 
 export function preloadTrack(track: PrefetchTrack, auth: TrackPrefetchAuth): void {
-  void runLowPriority(() => getTrackMetadataXml(track, auth)).catch(() => {});
-  void runLowPriority(() => getTrackLyrics(track, auth)).catch(() => {});
-  void runLowPriority(() => preloadCover(track, auth, 96)).catch(() => {});
-  void runLowPriority(() => preloadCover(track, auth, 512)).catch(() => {});
+  // "prefetch" priority: this is for the track about to play, so it must not
+  // queue behind a media-library page worth of cover art.
+  void runLowPriority(() => getTrackMetadataXml(track, auth), "prefetch").catch(() => {});
+  void runLowPriority(() => getTrackLyrics(track, auth), "prefetch").catch(() => {});
+  void runLowPriority(() => preloadCover(track, auth, 96), "prefetch").catch(() => {});
+  void runLowPriority(() => preloadCover(track, auth, 512), "prefetch").catch(() => {});
 }

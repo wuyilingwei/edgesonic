@@ -14,10 +14,9 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 //
-// The poller in main.ts calls notify() with the latest version+startedAt
-// payload from /edgesonic/version. On the first call we capture the baseline;
-// on any subsequent mismatch (worker redeployed → WORKER_VERSION bumped or
-// isolate restarted → new startedAt) we flip `available` to true and the
+// The poller in main.ts calls notify() with the latest build metadata from
+// /edgesonic/version. On the first call we capture the baseline; on any later
+// build mismatch we flip `available` to true and the
 // UpdateBanner component renders itself.
 //
 // Dismissal is per-session: clicking "Later" sets dismissed=true; we stay
@@ -29,7 +28,7 @@ import { ref, computed } from "vue";
 
 interface VersionPayload {
   version: string;
-  startedAt: string;
+  buildTime: string | null;
 }
 
 export const useUpdateBanner = defineStore("updateBanner", () => {
@@ -42,7 +41,7 @@ export const useUpdateBanner = defineStore("updateBanner", () => {
     if (dismissed.value) return false;
     return (
       initial.value.version !== latest.value.version ||
-      initial.value.startedAt !== latest.value.startedAt
+      initial.value.buildTime !== latest.value.buildTime
     );
   });
 

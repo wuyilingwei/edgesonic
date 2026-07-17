@@ -17,6 +17,7 @@ import { defineStore } from "pinia";
 import { ref, computed, watch } from "vue";
 import { useAuth, parseXmlAttrs } from "../api";
 import { getTrackMetadataXml, preloadTrack } from "../lib/trackPrefetch";
+import { getCachedTrack, putCachedTrack, deleteCachedTrack } from "../lib/audioCache";
 import { setPlaybackActive } from "../lib/requestBudget";
 
 export interface Track {
@@ -138,6 +139,8 @@ export const usePlayerStore = defineStore("player", () => {
   let preloaded: PreloadedTrack | null = null;
   // Pending seek position to restore after loadedmetadata fires (page-reload resume).
   let _pendingRestoreTime: number | null = null;
+  // Guards the ~4×/s timeupdate gate from re-queueing the same prefetch.
+  let prefetchedTrackId: string | null = null;
   const FALLBACK_RANGE_STEPS = [1_200_000, 2_400_000, 4_800_000, 9_600_000];
   const blobSrcByElement = new WeakMap<HTMLAudioElement, string>();
   const fallbackAttemptByElement = new WeakMap<HTMLAudioElement, string>();
@@ -220,9 +223,13 @@ export const usePlayerStore = defineStore("player", () => {
   async function fetchFullBlob(trackId: string, signal?: AbortSignal): Promise<Blob> {
     const { streamUrl, downloadUrl } = useAuth();
     let lastError: unknown = null;
-    for (const [label, url] of [["download-full", downloadUrl(trackId)], ["stream-full", streamUrl(trackId)]] as const) {
+    // Stream first: it is the same URL the <audio> element uses, so both share
+    // one HTTP cache entry. /rest/download is a different URL and would always
+    // cost a separate transfer. Letting the browser cache also means a replay
+    // or a seek can be served locally instead of re-fetching the whole file.
+    for (const [label, url] of [["stream-full", streamUrl(trackId)], ["download-full", downloadUrl(trackId)]] as const) {
       try {
-        const resp = await fetch(url, { credentials: "same-origin", cache: "no-store", signal });
+        const resp = await fetch(url, { credentials: "same-origin", signal });
         if (!resp.ok) throw new Error(`fallback fetch failed: ${resp.status}`);
         const blob = await resp.blob();
         await logFallbackBlob(label, resp, blob);
@@ -318,6 +325,9 @@ export const usePlayerStore = defineStore("player", () => {
       while (state.stepIndex < FALLBACK_RANGE_STEPS.length) {
         const target = FALLBACK_RANGE_STEPS[state.stepIndex++];
         if (target <= state.downloaded) continue;
+        // This runs only after playback already failed, so it deliberately
+        // keeps no-store: recovery must never be served a cached copy of
+        // whatever the browser could not play.
         const resp = await fetch(state.sourceUrl, {
           credentials: "same-origin",
           cache: "no-store",
@@ -381,6 +391,9 @@ export const usePlayerStore = defineStore("player", () => {
     if (failedSrc.startsWith("blob:")) {
       const state = fallbackStateByElement.get(el);
       if (blobSrcByElement.get(el) !== failedSrc) return;
+      // An unplayable blob must not stay in the manual cache, or every later
+      // play would be served the same broken copy before falling back.
+      void deleteCachedTrack(track.id);
       if (state?.phase === "range") {
         void continueIncrementalFallback(el, state, resumeAt, shouldPlay);
       } else if (state?.phase === "full") {
@@ -482,7 +495,12 @@ export const usePlayerStore = defineStore("player", () => {
       if (isFinite(dur) && dur > 0) {
         const remaining = dur - el.currentTime;
         const timingOk = remaining <= NEXT_TRACK_PRELOAD_SECONDS || el.currentTime / dur >= NEXT_TRACK_PRELOAD_FRACTION;
-        if (timingOk && isFullyBuffered(el, dur)) preloadNext();
+        if (timingOk) {
+          // Metadata, lyrics and cover art are small and must not wait on the
+          // current track's full-file fetch; only the next audio download does.
+          prefetchNextTrackData();
+          if (isFullyBuffered(el, dur)) preloadNext();
+        }
       }
     });
     el.addEventListener("durationchange", () => {
@@ -560,16 +578,37 @@ export const usePlayerStore = defineStore("player", () => {
     }
   }
 
+  /**
+   * Index the queue will actually advance to, mirroring next(). Returns -1 when
+   * there is nothing to prepare or the target cannot be predicted.
+   */
+  function upcomingIndex(): number {
+    if (!hasTrack.value) return -1;
+    if (playMode.value === "single") return -1;
+    if (playMode.value === "shuffle") return _shuffleNextIndex(index.value);
+    if (index.value < queue.value.length - 1) return index.value + 1;
+    return queue.value.length > 1 ? 0 : -1;
+  }
+
+  /** Warm the small per-track data (metadata, lyrics, cover art) for the next entry. */
+  function prefetchNextTrackData() {
+    const ni = upcomingIndex();
+    if (ni < 0 || ni === index.value) return;
+    const nextTrack = queue.value[ni];
+    if (!nextTrack || prefetchedTrackId === nextTrack.id) return;
+    prefetchedTrackId = nextTrack.id;
+    const { authFetch, coverArtUrl, username } = useAuth();
+    preloadTrack(nextTrack, { authFetch, coverArtUrl, scope: username.value });
+  }
+
   /** Fully prebuffer the next queue entry into the inactive element. */
   function preloadNext() {
     ensureElements();
-    const ni = index.value + 1;
-    if (ni >= queue.value.length) { invalidatePreload(); return; }
+    const ni = upcomingIndex();
+    if (ni < 0 || ni === index.value) { invalidatePreload(); return; }
     if (preloaded?.index === ni) return;
     invalidatePreload();
     const nextTrack = queue.value[ni];
-    const { authFetch, coverArtUrl, username } = useAuth();
-    preloadTrack(nextTrack, { authFetch, coverArtUrl, scope: username.value });
     const el = inactiveEl();
     resetFallbackState(el);
     el.pause();
@@ -580,28 +619,40 @@ export const usePlayerStore = defineStore("player", () => {
     preloaded = candidate;
     // A native audio element may stop an auto preload after a small buffer.
     // Consume the complete response ourselves, then hand the ready Blob to
-    // the inactive element for an instant swap.
-    startFullDownload(
-      el,
-      nextTrack.id,
-      async (blob) => {
-        const playableBlob = await normalizePlayableBlob(blob);
-        if (preloaded !== candidate || el === active) return;
-        playPreparedBlob(el, playableBlob, 0, false, "background");
+    // the inactive element for an instant swap. A hit in the manual cache
+    // skips the download entirely.
+    void (async () => {
+      const cached = await getCachedTrack(nextTrack.id);
+      if (preloaded !== candidate || el === active) return;
+      if (cached) {
+        playPreparedBlob(el, cached, 0, false, "background");
         candidate.ready = true;
-      },
-      (error) => {
-        if (preloaded === candidate) {
-          console.warn("[Player] next-track full preload failed:", error);
-        }
-      },
-    );
+        return;
+      }
+      startFullDownload(
+        el,
+        nextTrack.id,
+        async (blob) => {
+          const playableBlob = await normalizePlayableBlob(blob);
+          void putCachedTrack(nextTrack.id, playableBlob, nextTrack.duration || 0);
+          if (preloaded !== candidate || el === active) return;
+          playPreparedBlob(el, playableBlob, 0, false, "background");
+          candidate.ready = true;
+        },
+        (error) => {
+          if (preloaded === candidate) {
+            console.warn("[Player] next-track full preload failed:", error);
+          }
+        },
+      );
+    })();
   }
 
   function loadCurrent(autoplay = true) {
     const track = current.value;
     if (!track) return;
     ensureElements();
+    prefetchedTrackId = null;
     // If restoring a saved position, show it immediately; otherwise reset to 0.
     currentTime.value = _pendingRestoreTime ?? 0;
     duration.value = track.duration || 0;
@@ -619,29 +670,62 @@ export const usePlayerStore = defineStore("player", () => {
       syncBuffered(active);
     } else {
       invalidatePreload();
-      const { streamUrl } = useAuth();
       active!.pause();
       resetFallbackState(active!);
       const targetEl = active!;
-      const sourceUrl = streamUrl(track.id);
-      targetEl.src = sourceUrl;
-      targetEl.load();
-      startFullDownload(
-        targetEl,
-        track.id,
-        async (blob) => {
-          if (active !== targetEl || current.value?.id !== track.id) return;
-          const playableBlob = await normalizePlayableBlob(blob);
-          if (active !== targetEl || current.value?.id !== track.id) return;
-          const resumeAt = Number.isFinite(targetEl.currentTime) ? targetEl.currentTime : currentTime.value;
-          const shouldContinue = !targetEl.paused && !targetEl.ended;
-          playPreparedBlob(targetEl, playableBlob, resumeAt, shouldContinue, "background");
+      const trackId = track.id;
+      // Manual cache first: a hit plays the whole track locally with zero
+      // network. On a miss, stream directly for fast start while a background
+      // fetch populates the cache (the cold-play double transfer is
+      // unavoidable without MSE; every replay is cache-served).
+      void (async () => {
+        const cached = await getCachedTrack(trackId);
+        if (active !== targetEl || current.value?.id !== trackId) return;
+        if (cached) {
+          const resumeAt = _pendingRestoreTime ?? 0;
+          _pendingRestoreTime = null;
+          targetEl.volume = volume.value;
+          playPreparedBlob(targetEl, cached, resumeAt, autoplay, "background");
           syncBuffered(targetEl);
-        },
-        (error) => {
-          console.warn("[Player] complete current-track preload failed; native stream remains active:", error);
-        },
-      );
+          return;
+        }
+        const { streamUrl } = useAuth();
+        const sourceUrl = streamUrl(trackId);
+        targetEl.src = sourceUrl;
+        targetEl.load();
+        startFullDownload(
+          targetEl,
+          trackId,
+          async (blob) => {
+            if (active !== targetEl || current.value?.id !== trackId) return;
+            const playableBlob = await normalizePlayableBlob(blob);
+            void putCachedTrack(trackId, playableBlob, track.duration || 0);
+            if (active !== targetEl || current.value?.id !== trackId) return;
+            const resumeAt = Number.isFinite(targetEl.currentTime) ? targetEl.currentTime : currentTime.value;
+            const shouldContinue = !targetEl.paused && !targetEl.ended;
+            playPreparedBlob(targetEl, playableBlob, resumeAt, shouldContinue, "background");
+            syncBuffered(targetEl);
+          },
+          (error) => {
+            console.warn("[Player] complete current-track preload failed; native stream remains active:", error);
+          },
+        );
+        targetEl.volume = volume.value;
+
+        // One-shot seek to restored position once audio metadata is available.
+        if (_pendingRestoreTime !== null) {
+          const t = _pendingRestoreTime;
+          _pendingRestoreTime = null;
+          const onMeta = () => {
+            if (active) { active.currentTime = t; currentTime.value = t; }
+            active?.removeEventListener("loadedmetadata", onMeta);
+          };
+          targetEl.addEventListener("loadedmetadata", onMeta);
+        }
+
+        if (autoplay) void targetEl.play().catch(() => { playing.value = false; });
+      })();
+      return;
     }
     active!.volume = volume.value;
 

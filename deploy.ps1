@@ -46,10 +46,25 @@ if (-not (Test-Path $Config)) {
   exit 1
 }
 
+if ($NoBuild -and (Test-Path "web/dist/build-info.json")) {
+  $BuildInfo = Get-Content "web/dist/build-info.json" -Raw | ConvertFrom-Json
+} else {
+  $BuildInfo = node scripts/build-info.mjs | ConvertFrom-Json
+}
+$Version = [string]$BuildInfo.version
+$BuildTime = [string]$BuildInfo.buildTime
+if (-not $Version -or -not $BuildTime) {
+  throw "无效的 web/dist/build-info.json"
+}
+try { [DateTimeOffset]::Parse($BuildTime) | Out-Null } catch { throw "无效的 web/dist/build-info.json" }
+$env:EDGESONIC_VERSION = $Version
+$env:EDGESONIC_BUILD_TIME = $BuildTime
+
 if (-not $NoBuild) {
-  Write-Host "▶ [构建] 安装依赖 + 生成前端 web/dist（worker 通过 [assets] 打包它）…"
-  npm install
+  Write-Host "▶ [构建] 安装锁定依赖 + 生成前端 web/dist（worker 通过 [assets] 打包它）…"
+  npm ci
   npm run build:web
+  if (-not (Test-Path "web/dist/build-info.json")) { throw "前端构建未生成 build-info.json" }
 } else {
   Write-Host "▶ [构建] 已跳过（-NoBuild）；确保 web/dist 是最新的。"
 }
@@ -63,16 +78,14 @@ if ($Migrate) {
   npx wrangler d1 execute $DB --remote --config $Config --file $Migrate
 }
 
-$Version = [string][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-
 if ($VersionOnly) {
   Write-Host "▶ [版本] 上传新版本（不切生产流量）…"
-  npx wrangler versions upload --config $Config --var "WORKER_VERSION:$Version"
+  npx wrangler versions upload --config $Config --var "WORKER_VERSION:$Version" --var "EDGESONIC_VERSION:$Version" --var "EDGESONIC_BUILD_TIME:$BuildTime"
   Write-Host ""
   Write-Host "✓ 完成。WORKER_VERSION=$Version（版本上传，未切生产，cron 未受影响）"
 } else {
   Write-Host "▶ [部署] wrangler deploy（含 web/dist 静态资源）…"
-  npx wrangler deploy --config $Config $ContainersFlag --var "WORKER_VERSION:$Version"
+  npx wrangler deploy --config $Config $ContainersFlag --var "WORKER_VERSION:$Version" --var "EDGESONIC_VERSION:$Version" --var "EDGESONIC_BUILD_TIME:$BuildTime"
 
   # wrangler deploy 会清空 Cloudflare 上的所有 cron 触发器。
   # 部署完毕后立即通过 CF API 恢复默认时间表。
@@ -86,9 +99,6 @@ if ($VersionOnly) {
   $AccountId = if ($AcctLine) { $AcctLine.Matches.Groups[1].Value } else { "" }
   $WorkerName = if ($NameLine) { $NameLine.Matches.Groups[1].Value } else { "edgesonic" }
 
-  Write-Host ""
-  Write-Host "✓ 完成。WORKER_VERSION=$Version"
-
   if ($env:CLOUDFLARE_API_TOKEN -and $AccountId -and $WorkerName) {
     Write-Host "▶ [Cron] 恢复 cron 触发器（$CronExpr）…"
     $CronBody = "[{`"cron`":`"$CronExpr`"}]"
@@ -100,16 +110,14 @@ if ($VersionOnly) {
       if ($CronResp.success) {
         Write-Host "✓ Cron 已恢复：$CronExpr"
       } else {
-        Write-Host "⚠ Cron 自动恢复失败，请到 Settings → Cloudflare → `"Ensure default cron`""
-        Write-Host "  CF 响应：$($CronResp | ConvertTo-Json -Depth 3 | Select-Object -First 1)"
+        throw "Cron 自动恢复失败：$($CronResp | ConvertTo-Json -Depth 3 -Compress)"
       }
     } catch {
-      Write-Host "⚠ Cron 自动恢复失败，请到 Settings → Cloudflare → `"Ensure default cron`""
-      Write-Host "  错误：$($_.Exception.Message)"
+      throw "Cron 自动恢复失败：$($_.Exception.Message)"
     }
   } else {
-    Write-Host "  提醒：未设置 CLOUDFLARE_API_TOKEN，无法自动恢复 cron。"
-    Write-Host "  请到 Settings → Cloudflare → `"Ensure default cron`" 重新应用定时任务（见 worker/CF_CRON.md）。"
-    Write-Host "  或设置 CLOUDFLARE_API_TOKEN 环境变量后重新运行，deploy.ps1 将自动恢复。"
+    throw "缺少 CLOUDFLARE_API_TOKEN，拒绝完成会清空 cron 的部署。"
   }
+  Write-Host ""
+  Write-Host "✓ 完成。WORKER_VERSION=$Version"
 }

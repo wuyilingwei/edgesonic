@@ -727,6 +727,16 @@
     "system": {
       "title": "System"
     },
+    "audioCache": {
+      "title": "Audio Cache",
+      "desc": "Fully played tracks are cached in this browser (IndexedDB), so replays start instantly without using the network.",
+      "usage": "{count} track(s) · {size} used · limit {max}",
+      "capLabel": "Cache limit",
+      "clear": "CLEAR CACHE",
+      "cleared": "Audio cache cleared",
+      "clearFailed": "Failed to clear audio cache",
+      "unavailable": "Audio cache is unavailable in this browser."
+    },
     "sessions": {
       "title": "Sessions",
       "desc": "Active login sessions for this account",

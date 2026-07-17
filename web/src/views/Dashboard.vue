@@ -83,6 +83,8 @@ const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3
 
 const edgesonicVersion = ref(__EDGESONIC_VERSION__);
 const edgesonicBuildTime = new Date(__EDGESONIC_BUILD_TIME__).toLocaleString();
+const releaseVersion = edgesonicVersion.value.replace(/-dev\.[^.]+$/, "");
+const isDevelopmentBuild = releaseVersion !== edgesonicVersion.value;
 const workerVersion = ref("—");
 const latestVersion = ref("");
 const updateAvailable = ref(false);
@@ -97,7 +99,7 @@ async function loadVersionInfo() {
       const rel = await r2.json() as { tag_name?: string };
       const tag = rel.tag_name?.replace(/^v/, "") ?? "";
       latestVersion.value = tag;
-      if (tag && tag !== edgesonicVersion.value) {
+      if (tag && tag !== releaseVersion) {
         updateAvailable.value = true;
       }
     }
@@ -479,7 +481,7 @@ onUnmounted(() => {
               <a v-if="updateAvailable" href="https://github.com/wuyilingwei/edgesonic/releases/latest" target="_blank" rel="noopener" class="update-link">
                 v{{ latestVersion }} — 有新版本
               </a>
-              <span v-else-if="latestVersion" class="update-current">v{{ latestVersion }} — 已是最新</span>
+              <span v-else-if="latestVersion" class="update-current">v{{ latestVersion }} — {{ isDevelopmentBuild ? "当前开发构建" : "已是最新" }}</span>
               <span v-else-if="updateChecking" class="muted">检查中…</span>
               <span v-else class="muted">—</span>
             </span>

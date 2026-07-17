@@ -20,7 +20,13 @@ import type { Context } from "hono";
 import { permissionMiddleware, subsonicError } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
 import { createQueries } from "../../db/queries";
-import { parseStorageUri, getSourceCredentials } from "../../adapters/index";
+import { parseStorageUri } from "../../adapters/index";
+import type { StreamResult } from "../../adapters/index";
+import { createR2Adapter } from "../../adapters/r2";
+import { urlAdapter } from "../../adapters/url";
+import { createWebDAVAdapter } from "../../adapters/webdav";
+import { createSubsonicAdapter } from "../../adapters/subsonic";
+import { AUDIO_MAX_AGE_SEC, applyPrivateCache, etagMatches, instanceEtag } from "../../utils/httpCache";
 
 export const downloadRoutes = new Hono();
 
@@ -34,14 +40,8 @@ const downloadHandler = async (c: Context): Promise<Response> => {
 
   const env = c.env as Env;
   const queries = createQueries(env.DB);
-  // Subsonic song id = song_masters.id ('sm-' prefix) — that's what every
-  // client (and every other endpoint: getSong, star, createShare, stream…)
-  // passes here. getSongInstance() looks up by song_instances.id ('si-'
-  // prefix) instead, so `id` never matched anything and every download 404'd
-  // with a generic "File not found" XML. Resolve like streamHandler does:
-  // getSongInstances(masterId) and take its top pick (ordered r2-first, then
-  // highest bit_rate — see queries.ts). Still tolerate a raw instance id for
-  // any caller that has one directly.
+  // Callers pass a song_masters id; resolve it to its top instance the way
+  // streamHandler does. A raw 'si-' instance id is still accepted.
   const instance = id.startsWith("si-")
     ? await queries.getSongInstance(id)
     : (await queries.getSongInstances(id))[0] ?? null;
@@ -53,60 +53,73 @@ const downloadHandler = async (c: Context): Promise<Response> => {
   }
 
   const parsed = parseStorageUri(instance.storage_uri);
+  const range = c.req.header("Range");
 
-  let body: ReadableStream<Uint8Array> | null = null;
-  let contentType = instance.content_type || "application/octet-stream";
   let fileName = `${id}.${instance.suffix}`;
-
   try {
     const master = await queries.getSongMaster(instance.master_id);
     if (master) fileName = `${master.title}.${instance.suffix}`;
   } catch {}
 
+  // Resolve through the storage adapters, exactly like streamHandler does, so
+  // this endpoint inherits Range support and the upstream's real byte length
+  // instead of re-deriving either from the database row.
+  let result: StreamResult;
   switch (parsed.scheme) {
-    case "r2": {
-      const object = await env.MUSIC_BUCKET.get(instance.storage_uri.substring("r2://".length));
-      if (object) { body = object.body; contentType = object.httpMetadata?.contentType || contentType; }
+    case "r2":
+      result = await createR2Adapter(env.MUSIC_BUCKET).stream(instance.storage_uri, range);
       break;
-    }
-    case "url": {
-      const resp = await fetch(instance.storage_uri.substring("url://".length));
-      if (resp.ok) body = resp.body!;
+    case "url":
+      result = await urlAdapter.stream(instance.storage_uri, range);
       break;
-    }
-    case "webdav": {
-      const creds = await getSourceCredentials(env.DB, "webdav", env);
-      if (creds) {
-        const fullUrl = `${creds.baseUrl.replace(/\/$/, "")}/${parsed.path.split("/").map(encodeURIComponent).join("/")}`;
-        const resp = await fetch(fullUrl, {
-          headers: { Authorization: `Basic ${btoa(`${creds.username}:${creds.password}`)}` },
+    case "webdav":
+      result = await createWebDAVAdapter(env.DB, env).stream(instance.storage_uri, range);
+      break;
+    case "s3": {
+      const { getS3Config } = await import("../../adapters/index");
+      const { createS3Adapter } = await import("../../adapters/s3");
+      const s3config = await getS3Config(env.DB, parsed.sourceId);
+      if (!s3config) {
+        return c.text(subsonicError(70, "S3 source not found or disabled"), 404, {
+          "Content-Type": "application/xml; charset=UTF-8",
         });
-        if (resp.ok) body = resp.body!;
       }
+      result = await createS3Adapter(s3config).stream(instance.storage_uri, range);
       break;
     }
-    case "subsonic": {
-      const { createSubsonicAdapter } = await import("../../adapters/subsonic");
-      const result = await createSubsonicAdapter(env.DB, {}, env).stream(instance.storage_uri);
-      body = result.body;
+    case "subsonic":
+      result = await createSubsonicAdapter(env.DB, {}, env).stream(instance.storage_uri, range);
       break;
-    }
+    default:
+      return c.text(subsonicError(0, "Unsupported storage scheme"), 500, {
+        "Content-Type": "application/xml; charset=UTF-8",
+      });
   }
 
-  if (!body) {
+  if (!result.body || result.statusCode >= 400) {
     return c.text(subsonicError(70, "File data not available"), 404, {
       "Content-Type": "application/xml; charset=UTF-8",
     });
   }
 
   const encodedFileName = encodeURIComponent(fileName);
-  return new Response(body, {
-    headers: {
-      "Content-Type": contentType,
-      "Content-Disposition": `attachment; filename*=UTF-8''${encodedFileName}`,
-      "Content-Length": String(instance.size || 0),
-    },
-  });
+  const headers = new Headers();
+  headers.set("Content-Type", result.contentType || instance.content_type || "application/octet-stream");
+  headers.set("Content-Disposition", `attachment; filename*=UTF-8''${encodedFileName}`);
+  // Only advertise a length the upstream actually confirmed. Declaring a stale
+  // size makes the client wait for bytes that never arrive.
+  if (result.contentLength) headers.set("Content-Length", String(result.contentLength));
+  if (result.acceptRanges) headers.set("Accept-Ranges", "bytes");
+  if (result.contentRange) headers.set("Content-Range", result.contentRange);
+
+  const etag = instanceEtag(instance);
+  applyPrivateCache(headers, AUDIO_MAX_AGE_SEC, etag);
+  // Only a full response may 304 here; a range request needs its own bytes.
+  if (result.statusCode === 200 && etagMatches(c, etag)) {
+    return new Response(null, { status: 304, headers });
+  }
+
+  return new Response(result.body, { status: result.statusCode, headers });
 };
 
 const downloadMultipleHandler = async (c: Context): Promise<Response> => {

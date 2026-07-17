@@ -30,10 +30,9 @@
 //  1. apiKey → 200 on /rest/*, 403 on /tag/*, /storage/*, /edgesonic/*
 //  2. subsonic_cred (t+s against subsonic_credentials) → 200 on /rest/*,
 //     403 on all three management prefixes
-//  3. session (t+s against the sessions table, i.e. the web app's own login
-//     token used as a Subsonic credential) → 200 on /rest/*, 403 on all three
-//     management prefixes because built-in APIs are cookie-only.
-//  4. Session auto-renew: expires_at bumped to now+24h when under the 20h
+//  3. session (t+s against the sessions table) → 401 everywhere: session
+//     tokens are cookie-only and no longer double as Subsonic credentials.
+//  4. Session auto-renew: expires_at bumped to now+7d when under the 3d
 //     threshold; left untouched when comfortably far from expiry (no
 //     unnecessary D1 write)
 //
@@ -125,9 +124,11 @@ function makeApp(sqlite: DatabaseSync) {
   app.get("/edgesonic/whoami", ok);
   const env = { DB: makeD1(sqlite) };
   return {
-    async get(path: string, qs: string) {
+    async get(path: string, qs: string, cookie?: string) {
+      const headers: Record<string, string> = {};
+      if (cookie) headers["Cookie"] = cookie;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return app.fetch(new Request(`http://test${path}?${qs}`), env as any);
+      return app.fetch(new Request(`http://test${path}?${qs}`, { headers }), env as any);
     },
   };
 }
@@ -162,7 +163,7 @@ async function main() {
     }
   }
 
-  console.log("\nsession (web login token as t+s) → 200 on /rest, 403 on management prefixes:");
+  console.log("\nsession (web login token as t+s) → 401 everywhere: session tokens are cookie-only, not Subsonic credentials:");
   {
     const sqlite = buildDb();
     const sessionToken = "web-session-token-abc";
@@ -172,34 +173,33 @@ async function main() {
     const salt = "sess-salt";
     const token = md5(sessionToken + salt);
     const rest = await get("/rest/ping", `u=alice&t=${token}&s=${salt}`);
-    assert(rest.status === 200, `/rest 200 (got ${rest.status})`);
-    const restBody = await rest.json() as { authMethod?: string };
-    assert(restBody.authMethod === "session", `authMethod=session (got ${restBody.authMethod})`);
+    assert(rest.status === 401, `/rest 401 for query-session (got ${rest.status})`);
 
     for (const p of ["/tag/whoami", "/storage/whoami", "/edgesonic/whoami"]) {
       const s = `salt-${p}`;
       const t = md5(sessionToken + s);
       const r = await get(p, `u=alice&t=${t}&s=${s}`);
-      assert(r.status === 403, `${p} 403 for query-session (got ${r.status})`);
+      assert(r.status === 401, `${p} 401 for query-session (got ${r.status})`);
     }
   }
 
-  console.log("\nSession auto-renew: bumped when <20h remain:");
+  console.log("\nSession auto-renew: bumped when <3d remain (new 7d TTL, cookie path):");
   {
     const sqlite = buildDb();
     const token = "renew-me";
     const now = Math.floor(Date.now() / 1000);
-    const soonExpiry = now + 3600; // 1h left — well under the 20h threshold
+    const soonExpiry = now + 3600; // 1h left — well under the 3d threshold
     insertSession(sqlite, token, soonExpiry);
     const { get } = makeApp(sqlite);
-    const salt = "rs";
-    const t = md5(token + salt);
-    const r = await get("/rest/ping", `u=alice&t=${t}&s=${salt}`);
+    const r = await get("/rest/ping", "", `edgesonic_session=${token}`);
     assert(r.status === 200, `200 (got ${r.status})`);
 
     const row = sqlite.prepare("SELECT expires_at FROM sessions WHERE token = ?").get(token) as { expires_at: number };
     assert(row.expires_at > soonExpiry, `expires_at bumped forward (was ${soonExpiry}, now ${row.expires_at})`);
-    assert(row.expires_at >= now + 86000, `bumped to ~+24h (got ${row.expires_at}, now=${now})`);
+    assert(row.expires_at >= now + 604000, `bumped to ~+7d (got ${row.expires_at}, now=${now})`);
+    // Sliding cookie renewal: the response must refresh the cookie Max-Age.
+    const sc = r.headers.get("Set-Cookie") || "";
+    assert(sc.includes("Max-Age=604800"), `renewed cookie Max-Age=604800 (got ${sc})`);
   }
 
   console.log("\nSession auto-renew: untouched when comfortably far from expiry:");
@@ -207,12 +207,10 @@ async function main() {
     const sqlite = buildDb();
     const token = "no-renew-needed";
     const now = Math.floor(Date.now() / 1000);
-    const farExpiry = now + 82800; // 23h left — above the 20h threshold
+    const farExpiry = now + 345600; // 4d left — above the 3d threshold
     insertSession(sqlite, token, farExpiry);
     const { get } = makeApp(sqlite);
-    const salt = "nr";
-    const t = md5(token + salt);
-    const r = await get("/rest/ping", `u=alice&t=${t}&s=${salt}`);
+    const r = await get("/rest/ping", "", `edgesonic_session=${token}`);
     assert(r.status === 200, `200 (got ${r.status})`);
 
     const row = sqlite.prepare("SELECT expires_at FROM sessions WHERE token = ?").get(token) as { expires_at: number };

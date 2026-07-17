@@ -73,7 +73,7 @@ app.use(i18n);
 app.mount("#app");
 
 // deploy. We poll a tiny public endpoint and feed the result into the update
-// banner store; the banner only renders once the version or isolate start time
+// banner store; the banner only renders once the deployed build metadata
 // differs from the first sample we recorded.
 //
 // Initial probe runs 5s after mount (give the auth bootstrap room to breathe),
@@ -89,9 +89,9 @@ async function checkVersion() {
     const banner = useUpdateBanner(pinia);
     const r = await fetch("/edgesonic/version", { cache: "no-store" });
     if (!r.ok) return;
-    const j = (await r.json()) as { ok?: boolean; version?: string; startedAt?: string };
-    if (!j.ok || typeof j.version !== "string" || typeof j.startedAt !== "string") return;
-    banner.notify({ version: j.version, startedAt: j.startedAt });
+    const j = (await r.json()) as { ok?: boolean; version?: string; buildTime?: string | null };
+    if (!j.ok || typeof j.version !== "string" || (j.buildTime !== null && typeof j.buildTime !== "string")) return;
+    banner.notify({ version: j.version, buildTime: j.buildTime ?? null });
   } catch {
     // Network blip / offline tab: ignore. We'll retry next interval.
   }

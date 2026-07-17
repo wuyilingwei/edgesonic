@@ -1,3 +1,5 @@
+<img align="right" width="112" src="web/public/logo.svg" alt="EdgeSonic logo" />
+
 # EdgeSonic
 
 [English](README.md) | [简体中文](README.zh-CN.md)
