@@ -16,13 +16,30 @@
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 import { readFileSync } from "fs";
+import { execFileSync } from "child_process";
 
-const pkg = JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf-8"));
+const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8"));
+
+function git(args: string[]): string | undefined {
+  try {
+    return execFileSync("git", args, { encoding: "utf8" }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const tag = git(["describe", "--exact-match", "--tags", "HEAD"]);
+const revision = git(["rev-parse", "--short", "HEAD"]) || "unknown";
+const version = process.env.EDGESONIC_VERSION || (
+  tag?.replace(/^v/, "") || `${pkg.version}-dev.${revision}`
+);
+const buildTime = process.env.EDGESONIC_BUILD_TIME || new Date().toISOString();
 
 export default defineConfig({
   plugins: [vue()],
   server: { port: 5173 },
   define: {
-    __EDGESONIC_VERSION__: JSON.stringify(pkg.version),
+    __EDGESONIC_VERSION__: JSON.stringify(version),
+    __EDGESONIC_BUILD_TIME__: JSON.stringify(buildTime),
   },
 });

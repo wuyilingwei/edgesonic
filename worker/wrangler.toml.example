@@ -28,8 +28,8 @@ routes = [
 # 每个实例应唯一，可用 `uuidgen` 生成
 INSTANCE_ID = "<GENERATE_A_UUID>"
 MAX_PROXY_DEPTH = "3"
-# 每次部署前 bump（或用 `wrangler deploy --var WORKER_VERSION:$(date +%s)` 覆盖）。
-WORKER_VERSION = "1"
+# 部署脚本会覆盖此值；保留 dev 以避免本地默认值被误认为 Unix 时间戳。
+WORKER_VERSION = "dev"
 
 # Static Assets (Vue frontend) — 需先 `npm run build:web` 生成 web/dist
 [assets]

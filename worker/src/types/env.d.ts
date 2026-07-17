@@ -29,7 +29,7 @@ interface Env {
   // to INSTANCE_ID + static salt; see worker/src/utils/workUploadToken.ts.
   WORK_UPLOAD_HMAC_KEY?: string;
   // can detect a deploy without a hard refresh. Bump per deploy via either:
-  //  - wrangler.toml [vars] WORKER_VERSION = "<n>" (default; bump before deploy)
+  //  - wrangler.toml [vars] WORKER_VERSION = "<label>" (default; bump before deploy)
   //  - `wrangler deploy --var WORKER_VERSION:$(date +%s)` (one-shot override)
   // Unset → endpoint returns "0".
   WORKER_VERSION?: string;

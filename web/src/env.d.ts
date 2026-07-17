@@ -14,3 +14,4 @@
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 declare const __EDGESONIC_VERSION__: string;
+declare const __EDGESONIC_BUILD_TIME__: string;

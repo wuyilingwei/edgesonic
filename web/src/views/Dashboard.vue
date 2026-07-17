@@ -82,6 +82,7 @@ const r2presignStatus = ref<R2PresignStatus>("checking");
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 
 const edgesonicVersion = ref(__EDGESONIC_VERSION__);
+const edgesonicBuildTime = new Date(__EDGESONIC_BUILD_TIME__).toLocaleString();
 const workerVersion = ref("—");
 const latestVersion = ref("");
 const updateAvailable = ref(false);
@@ -464,8 +465,9 @@ onUnmounted(() => {
       </div>
       <div class="info-two-col">
         <div class="info-col">
-          <div class="info-row"><span class="info-key">EdgeSonic</span><span class="info-val">v{{ edgesonicVersion }}</span></div>
-          <div class="info-row"><span class="info-key">{{ t("dashboard.infoApiVersion") }}</span><span class="info-val">1.16.1</span></div>
+           <div class="info-row"><span class="info-key">EdgeSonic</span><span class="info-val">v{{ edgesonicVersion }}</span></div>
+           <div class="info-row"><span class="info-key">Build</span><span class="info-val">{{ edgesonicBuildTime }}</span></div>
+           <div class="info-row"><span class="info-key">{{ t("dashboard.infoApiVersion") }}</span><span class="info-val">1.16.1</span></div>
         <div class="info-row"><span class="info-key">{{ t("dashboard.infoPlatform") }}</span><span class="info-val">Cloudflare Workers</span></div>
         </div>
         <div class="info-col">
