@@ -26,12 +26,14 @@
 //                                ops can monitor cadence)
 //  scan_interval_hours = N>1 → only run when now - last_scan_ts >= N * 3600
 //
-// Each run dispatches one scan_jobs row per enabled WebDAV source, then fires
-// asyncScanSource via ctx.waitUntil so individual sources don't block each
-// other. Per-source errors are recorded into scan_jobs.error_message (not
-// thrown) so a broken iCloud feed doesn't poison the rest.
+// Each run dispatches one scan_jobs row per enabled WebDAV/S3/R2 source, then
+// fires the matching asyncScan*Source via ctx.waitUntil so individual sources
+// don't block each other. Per-source errors are recorded into
+// scan_jobs.error_message (not thrown) so a broken iCloud feed (or a stalled
+// R2 listing) doesn't poison the rest.
 
-import { asyncScanSource } from "../endpoints/storage/scan";
+import { asyncScanSource, asyncScanS3Source, asyncScanR2Source } from "../endpoints/storage/scan";
+import { synthesizeR2Row } from "../endpoints/storage/sources";
 import { createQueries } from "../db/queries";
 import { getFeatureString } from "./features";
 
@@ -42,6 +44,16 @@ interface SourceRow {
   password: string | null;
   root_path: string | null;
   // 089 S2 — 'library' (default) | 'sync_only' (scan but skip DB inserts)
+  mode?: string | null;
+}
+
+interface S3SourceRow {
+  id: string;
+  base_url: string;
+  username: string | null;
+  password: string | null;
+  root_path: string | null;
+  region: string | null;
   mode?: string | null;
 }
 
@@ -73,14 +85,38 @@ export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Pr
   ).bind(LAST_RUN_KEY, String(now), now).run();
 
   // ------------------------------------------------------------------
-  // Enumerate enabled WebDAV sources
+  // Enumerate enabled sources across all three scan-capable types. R2 gets
+  // the same synthesize-if-missing treatment as the manual scan/start
+  // handler (endpoints/storage/scan.ts) — an admin who never explicitly
+  // edited the built-in R2 source still gets it auto-scanned, and scan_jobs
+  // needs a real storage_sources row to satisfy its FK before we can insert.
   // ------------------------------------------------------------------
   const db = env.DB;
-  const sources = (await db.prepare(
+  const davSources = (await db.prepare(
     `SELECT id, base_url, username, password, root_path, mode FROM storage_sources
      WHERE type = 'webdav' AND enabled = 1`,
   ).all<SourceRow>()).results;
-  if (!sources.length) return;
+  const s3Sources = (await db.prepare(
+    `SELECT id, base_url, username, password, root_path, region, mode FROM storage_sources
+     WHERE type = 's3' AND enabled = 1`,
+  ).all<S3SourceRow>()).results;
+  const r2Real = (await db.prepare(
+    `SELECT id, mode FROM storage_sources WHERE type = 'r2' AND enabled = 1`,
+  ).all<{ id: string; mode: string | null }>()).results;
+  const r2Sources: Array<{ id: string; mode: string | null }> = r2Real.length > 0
+    ? r2Real
+    : [{ id: synthesizeR2Row().id, mode: synthesizeR2Row().mode }];
+  if (r2Real.length === 0) {
+    const now2 = Math.floor(Date.now() / 1000);
+    const defaults = synthesizeR2Row();
+    await db.prepare(
+      `INSERT INTO storage_sources (id, type, name, base_url, root_path, mode, enabled, created_at, updated_at)
+       VALUES (?, 'r2', ?, '', '', ?, 1, ?, ?)
+       ON CONFLICT(id) DO NOTHING`
+    ).bind(defaults.id, defaults.name, defaults.mode, now2, now2).run();
+  }
+
+  if (!davSources.length && !s3Sources.length && !r2Sources.length) return;
 
   // ------------------------------------------------------------------
   // Read scan_etag_check once for this tick so all dispatched jobs share
@@ -89,7 +125,7 @@ export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Pr
   const etagCheck = (await getFeatureString(env, "scan_etag_check", "1")) !== "0";
 
   const queries = createQueries(db);
-  for (const src of sources) {
+  for (const src of davSources) {
     const jobId = "sj-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
     try {
       await queries.insertScanJob({ id: jobId, sourceId: src.id });
@@ -102,6 +138,34 @@ export async function maybeRunScheduledScan(env: Env, ctx: ExecutionContext): Pr
     ctx.waitUntil(
       asyncScanSource(db, src, jobId, { etagCheck, env }).catch((e) => {
         console.error(`scheduled scan source=${src.id} failed:`, e);
+      }),
+    );
+  }
+  for (const src of s3Sources) {
+    const jobId = "sj-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
+    try {
+      await queries.insertScanJob({ id: jobId, sourceId: src.id });
+    } catch (e) {
+      console.error("scheduled scan: insertScanJob failed (s3)", e);
+      continue;
+    }
+    ctx.waitUntil(
+      asyncScanS3Source(env, db, src, jobId, { etagCheck }).catch((e) => {
+        console.error(`scheduled scan source=${src.id} (s3) failed:`, e);
+      }),
+    );
+  }
+  for (const src of r2Sources) {
+    const jobId = "sj-" + crypto.randomUUID().replace(/-/g, "").substring(0, 16);
+    try {
+      await queries.insertScanJob({ id: jobId, sourceId: src.id });
+    } catch (e) {
+      console.error("scheduled scan: insertScanJob failed (r2)", e);
+      continue;
+    }
+    ctx.waitUntil(
+      asyncScanR2Source(env, db, src, jobId, { etagCheck }).catch((e) => {
+        console.error(`scheduled scan source=${src.id} (r2) failed:`, e);
       }),
     );
   }

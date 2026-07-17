@@ -18,7 +18,9 @@
 //
 // Asserts maybeRunScheduledScan honours scan_interval_hours:
 //   0   → returns without touching kv_store or scan_jobs
-//   1   → runs every tick, dispatches one job per enabled WebDAV source
+//   1   → runs every tick, dispatches one job per enabled WebDAV/S3 source
+//         PLUS the built-in R2 source (always auto-included — same
+//         synthesize-if-missing default the manual scan/start handler uses)
 //  N > 1 → skipped when (now - last_scan_ts) < N*3600; ran otherwise
 //
 // Run: npx tsx test/internal/scheduled_scan.test.ts
@@ -38,6 +40,9 @@ interface SourceRow {
   password: string | null; root_path: string | null;
   // 089 S2 — scan mode column; optional in fixtures (defaults to library).
   mode?: string | null;
+  // Which storage_sources.type this fixture belongs to. Omitted = "webdav"
+  // (all pre-existing fixtures predate the s3/r2 cron dispatch).
+  type?: "webdav" | "s3" | "r2";
 }
 
 // ---------------------------------------------------------------------------
@@ -97,9 +102,18 @@ function makeDb(
             ) as unknown as T[],
           };
         }
-        // storage_sources query
-        if (trimmed.startsWith("SELECT id, base_url, username, password") && trimmed.includes("FROM storage_sources")) {
-          return { results: sources as unknown as T[] };
+        // storage_sources queries — one per type, matched on the WHERE
+        // clause (all three SELECTs share a "SELECT id, ... FROM
+        // storage_sources" shape, so the type filter is what disambiguates
+        // them, mirroring scheduledScan.ts's three separate queries).
+        if (trimmed.includes("FROM storage_sources") && trimmed.includes("type = 'webdav'")) {
+          return { results: sources.filter((s) => (s.type ?? "webdav") === "webdav") as unknown as T[] };
+        }
+        if (trimmed.includes("FROM storage_sources") && trimmed.includes("type = 's3'")) {
+          return { results: sources.filter((s) => s.type === "s3") as unknown as T[] };
+        }
+        if (trimmed.includes("FROM storage_sources") && trimmed.includes("type = 'r2'")) {
+          return { results: sources.filter((s) => s.type === "r2") as unknown as T[] };
         }
         // existing-instance query inside asyncScanSource
         if (trimmed.startsWith("SELECT id, storage_uri, source_etag")) {
@@ -162,8 +176,26 @@ function makeCtx() {
     const { ctx, settle } = makeCtx();
     await maybeRunScheduledScan({ DB: db } as unknown as Env, ctx);
     await settle();
-    assert(jobs.length === 2, "one scan_jobs row per enabled WebDAV source");
+    // 2 WebDAV fixtures + the built-in R2 source (always auto-included).
+    assert(jobs.length === 3, "one scan_jobs row per enabled WebDAV source, plus built-in R2");
+    assert(jobs.some((j) => j.source_id === "r2-local"), "built-in R2 source got its own scan_jobs row");
     assert(kvStore.has("cron:last_scan_ts"), "last_scan_ts stamped");
+  }
+
+  console.log("\nscan_interval_hours=1 → also dispatches enabled S3 and explicit R2 sources:");
+  {
+    const { db, jobs } = makeDb({ scan_interval_hours: "1", scan_etag_check: "1" }, [
+      { id: "src-1", base_url: "http://dav.example.com/dav", username: "u", password: "p", root_path: null },
+      { id: "src-s3", base_url: "https://s3.example.com", username: "key", password: "secret", root_path: null, type: "s3" },
+      { id: "r2-local", base_url: "", username: null, password: null, root_path: null, type: "r2" },
+    ]);
+    const { ctx, settle } = makeCtx();
+    await maybeRunScheduledScan({ DB: db } as unknown as Env, ctx);
+    await settle();
+    assert(jobs.length === 3, "one scan_jobs row per source across all three types");
+    assert(jobs.some((j) => j.source_id === "src-1"), "webdav source dispatched");
+    assert(jobs.some((j) => j.source_id === "src-s3"), "s3 source dispatched");
+    assert(jobs.some((j) => j.source_id === "r2-local"), "explicit r2 source dispatched (not re-synthesized)");
   }
 
   console.log("\nscan_interval_hours=2 with no last_ts → run + stamp:");
@@ -174,7 +206,7 @@ function makeCtx() {
     const { ctx, settle } = makeCtx();
     await maybeRunScheduledScan({ DB: db } as unknown as Env, ctx);
     await settle();
-    assert(jobs.length === 1, "ran because last_ts unset");
+    assert(jobs.length === 2, "ran because last_ts unset (1 WebDAV + built-in R2)");
     assert(kvStore.has("cron:last_scan_ts"), "stamped last_scan_ts");
   }
 
@@ -207,19 +239,22 @@ function makeCtx() {
     const { ctx, settle } = makeCtx();
     await maybeRunScheduledScan({ DB: db } as unknown as Env, ctx);
     await settle();
-    assert(jobs.length === 1, "ran because last_ts older than threshold");
+    assert(jobs.length === 2, "ran because last_ts older than threshold (1 WebDAV + built-in R2)");
     assert(Number(kvStore.get("cron:last_scan_ts")) > stale, "last_ts refreshed");
   }
 
-  console.log("\nno enabled sources → no jobs even at interval=1:");
+  console.log("\nno enabled WebDAV/S3 sources → still auto-scans the built-in R2 source:");
   {
     const { db, jobs, kvStore } = makeDb({ scan_interval_hours: "1", scan_etag_check: "1" }, []);
     const { ctx, settle } = makeCtx();
     await maybeRunScheduledScan({ DB: db } as unknown as Env, ctx);
     await settle();
-    assert(jobs.length === 0, "empty source list → empty jobs");
-    // last_ts still stamped (we don't want to retry every tick when 0 sources)
-    assert(kvStore.has("cron:last_scan_ts"), "stamp even with 0 sources");
+    // R2 is synthesized as a default source (same as the manual scan/start
+    // handler does) even when nothing else is configured, so this is no
+    // longer a true "0 jobs" case.
+    assert(jobs.length === 1, "built-in R2 still gets a scan_jobs row");
+    assert(jobs[0]?.source_id === "r2-local", "the one job is the built-in R2 source");
+    assert(kvStore.has("cron:last_scan_ts"), "stamp even with 0 configured sources");
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PASS");
