@@ -40,7 +40,6 @@ async function submit() {
           <img src="/logo.svg" alt="EdgeSonic" class="login-logo-img" />
           <span class="logo-text">EDGESONIC</span>
         </div>
-        <p class="login-subtitle">{{ t("login.subtitle") }}</p>
       </div>
 
       <form @submit.prevent="submit" class="login-form">
@@ -108,8 +107,8 @@ async function submit() {
   margin-bottom: 0.5rem;
 }
 .login-logo-img {
-  height: 56px;
-  width: 56px;
+  height: 96px;
+  width: 96px;
   object-fit: contain;
 }
 .login-logo .logo-text {
@@ -118,14 +117,6 @@ async function submit() {
   font-weight: 700;
   color: var(--color-accent-primary);
   letter-spacing: 0.15em;
-}
-
-.login-subtitle {
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  color: var(--color-text-muted);
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
 }
 
 .login-form {

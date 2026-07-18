@@ -378,14 +378,14 @@ async function main() {
       return next();
     });
     app.route("/edgesonic", featuresRoutes);
-    // Seed user_permissions so manage_permissions check passes
+    // Seed user_permissions so the manage_settings check passes
     sqlite.exec(`
       CREATE TABLE user_permissions (
         level INTEGER NOT NULL, permission TEXT NOT NULL,
         enabled INTEGER DEFAULT 0, max_rph INTEGER DEFAULT 0,
         PRIMARY KEY (level, permission)
       );
-      INSERT INTO user_permissions VALUES (3, 'manage_permissions', 1, 0);
+      INSERT INTO user_permissions VALUES (3, 'manage_settings', 1, 0);
     `);
     const env: any = { DB: makeD1(sqlite), INSTANCE_ID: "t" };
 

@@ -726,10 +726,12 @@ export const usePlayerStore = defineStore("player", () => {
       resetFallbackState(active!);
       const targetEl = active!;
       const trackId = track.id;
+      targetEl.removeAttribute("src");
+      targetEl.load();
       // Manual cache first: a hit plays the whole track locally with zero
       // network. On a miss, stream directly for fast start while a background
-      // fetch populates the cache (the cold-play double transfer is
-      // unavoidable without MSE; every replay is cache-served).
+      // fetch populates the cache. Clearing the old source before the async
+      // lookup prevents its media events from restoring the previous time.
       void (async () => {
         const cached = await getCachedTrack(trackId);
         if (active !== targetEl || current.value?.id !== trackId) return;
@@ -766,11 +768,6 @@ export const usePlayerStore = defineStore("player", () => {
             if (active !== targetEl || current.value?.id !== trackId) return;
             const playableBlob = await normalizePlayableBlob(blob);
             void putCachedTrack(trackId, playableBlob, track.duration || 0);
-            if (active !== targetEl || current.value?.id !== trackId) return;
-            const resumeAt = Number.isFinite(targetEl.currentTime) ? targetEl.currentTime : currentTime.value;
-            const shouldContinue = !targetEl.paused && !targetEl.ended;
-            playPreparedBlob(targetEl, playableBlob, resumeAt, shouldContinue, "background");
-            syncBuffered(targetEl);
           },
           (error) => {
             console.warn("[Player] complete current-track preload failed; native stream remains active:", error);

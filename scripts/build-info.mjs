@@ -15,8 +15,10 @@ function git(args) {
 export function getBuildInfo() {
   const tag = git(["describe", "--exact-match", "--tags", "HEAD"]);
   const revision = git(["rev-parse", "--short", "HEAD"]) || "unknown";
+  const dirty = Boolean(git(["status", "--porcelain"]));
+  const version = tag?.replace(/^v/, "") || `${pkg.version}-dev.${revision}`;
   return {
-    version: process.env.EDGESONIC_VERSION || tag?.replace(/^v/, "") || `${pkg.version}-dev.${revision}`,
+    version: process.env.EDGESONIC_VERSION || `${version}${dirty ? "-dirty" : ""}`,
     buildTime: process.env.EDGESONIC_BUILD_TIME || new Date().toISOString(),
   };
 }

@@ -169,7 +169,7 @@ function drawParticle(ctx: CanvasRenderingContext2D, kind: ParticleKind, p: P, n
   else { p.x += p.vx * dt; p.y += p.vy * dt; }
 
   ctx.save();
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = Math.min(1, t / 0.1, (1 - t) / 0.15);
   ctx.fillStyle = color;
 
   if (kind === "ember") {

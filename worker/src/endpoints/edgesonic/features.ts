@@ -16,7 +16,22 @@
 import { Hono } from "hono";
 import { invalidateFeature, invalidateFeatureString } from "../../utils/features";
 import { permissionMiddleware } from "../../auth";
+import { hasPermission } from "../../utils/permissions";
 import type { User } from "../../types/entities";
+
+// System settings are gated on `manage_settings` (default L3, grantable to L2
+// via the Permissions UI) rather than the never-grantable `manage_permissions`,
+// so a super-admin can delegate settings without also handing over the
+// permission matrix. hasPermission honours the env override → D1 precedence.
+async function requireManageSettings(
+  c: import("hono").Context<{ Bindings: Env; Variables: { user: User } }>,
+): Promise<Response | null> {
+  const user = c.get("user");
+  if (!(await hasPermission(c.env, user, "manage_settings"))) {
+    return c.json({ ok: false, error: "manage_settings permission required" }, 403);
+  }
+  return null;
+}
 
 // Feature flag management (DESIGN.md §3.3).
 // Both endpoints are in SESSION_ONLY_PATHS — authMiddleware already guarantees
@@ -26,11 +41,10 @@ export const featuresRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-// endpoints below). Pre-087 used a hardcoded `if (user.level < 2)` which
-// violated the permission-model rule; the new check now flows through
-// user_permissions.manage_permissions (L3=1, L2=0 by default — operators can
-// flip L2 on via the Permissions UI without a code change).
-featuresRoutes.get("/features/list", permissionMiddleware("manage_permissions"), async (c) => {
+// System settings read/write flows through user_permissions.manage_settings
+// (L3=1, L2=0 by default — a super-admin can grant L2 via the Permissions UI
+// without a code change).
+featuresRoutes.get("/features/list", permissionMiddleware("manage_settings"), async (c) => {
   const result = await c.env.DB.prepare(
     "SELECT key, value, description, updated_at FROM features ORDER BY key ASC"
   ).all<{ key: string; value: number; description: string | null; updated_at: number }>();
@@ -50,15 +64,8 @@ featuresRoutes.get("/features/list", permissionMiddleware("manage_permissions"),
 });
 
 featuresRoutes.post("/features/update", async (c) => {
-  const user = c.get("user");
-  const perm = await c.env.DB.prepare(
-    "SELECT enabled FROM user_permissions WHERE level = ? AND permission = 'manage_permissions'"
-  )
-    .bind(user.level)
-    .first<{ enabled: number }>();
-  if (!perm || !perm.enabled) {
-    return c.json({ ok: false, error: "manage_permissions permission required" }, 403);
-  }
+  const denied = await requireManageSettings(c);
+  if (denied) return denied;
 
   let body: { key?: string; value?: number };
   try {
@@ -83,7 +90,7 @@ featuresRoutes.post("/features/update", async (c) => {
   return c.json({ ok: true });
 });
 
-// Same authorisation as updateFeature (manage_permissions). The set of valid
+// Same authorisation as updateFeature (manage_settings). The set of valid
 // keys is constrained server-side so we never write into an unknown row.
 const STRING_FEATURE_KEYS = new Set([
   "transcode_engine",
@@ -290,13 +297,8 @@ function validateFeatureString(key: string, value: string): string | null {
 }
 
 featuresRoutes.post("/features/updateString", async (c) => {
-  const user = c.get("user");
-  const perm = await c.env.DB.prepare(
-    "SELECT enabled FROM user_permissions WHERE level = ? AND permission = 'manage_permissions'"
-  ).bind(user.level).first<{ enabled: number }>();
-  if (!perm || !perm.enabled) {
-    return c.json({ ok: false, error: "manage_permissions permission required" }, 403);
-  }
+  const denied = await requireManageSettings(c);
+  if (denied) return denied;
 
   let body: { key?: string; value?: string };
   try {
@@ -330,13 +332,8 @@ featuresRoutes.post("/features/updateString", async (c) => {
 // GET returns only a "set/unset" boolean — the actual value never leaves
 // the Worker except when the engine itself uses it for outbound requests.
 featuresRoutes.get("/features/secrets/get", async (c) => {
-  const user = c.get("user");
-  const perm = await c.env.DB.prepare(
-    "SELECT enabled FROM user_permissions WHERE level = ? AND permission = 'manage_permissions'"
-  ).bind(user.level).first<{ enabled: number }>();
-  if (!perm || !perm.enabled) {
-    return c.json({ ok: false, error: "manage_permissions permission required" }, 403);
-  }
+  const denied = await requireManageSettings(c);
+  if (denied) return denied;
   const key = c.req.query("key") || "external_transcoder_key";
   const row = await c.env.DB.prepare(
     "SELECT value, updated_at FROM external_secrets WHERE key = ?"
@@ -350,13 +347,8 @@ featuresRoutes.get("/features/secrets/get", async (c) => {
 });
 
 featuresRoutes.post("/features/secrets/set", async (c) => {
-  const user = c.get("user");
-  const perm = await c.env.DB.prepare(
-    "SELECT enabled FROM user_permissions WHERE level = ? AND permission = 'manage_permissions'"
-  ).bind(user.level).first<{ enabled: number }>();
-  if (!perm || !perm.enabled) {
-    return c.json({ ok: false, error: "manage_permissions permission required" }, 403);
-  }
+  const denied = await requireManageSettings(c);
+  if (denied) return denied;
   let body: { key?: string; value?: string };
   try {
     body = await c.req.json();

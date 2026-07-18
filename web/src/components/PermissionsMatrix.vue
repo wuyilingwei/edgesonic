@@ -14,7 +14,7 @@ const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
-const permKeys = ["browse", "search", "stream", "download", "upload", "edit_tags", "manage_sources", "manage_users"];
+const permKeys = ["browse", "search", "stream", "download", "upload", "delete", "edit_tags", "manage_files", "manage_sources", "manage_users", "maintenance_cleanup", "manage_settings"];
 
 async function load() {
   try {

@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS users (
   level INTEGER DEFAULT 1 CHECK (level BETWEEN 0 AND 3),
   enabled INTEGER DEFAULT 1,
   avatar_r2_key TEXT,                                -- 014/035: R2 key for getAvatar (NULL → no avatar)
+  nickname TEXT,                                      -- EdgeSonic display name (NULL → fall back to username)
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );
@@ -257,6 +258,20 @@ INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VAL
   (2, 'view_all_users_items',   0, NULL),
   (1, 'view_all_users_items',   0, NULL),
   (0, 'view_all_users_items',   0, NULL);
+
+-- delete: destructive removal of files/folders and library master records
+INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (3, 'delete', 1, NULL),
+  (2, 'delete', 1, NULL),
+  (1, 'delete', 0, NULL),
+  (0, 'delete', 0, NULL);
+
+-- manage_settings: read/write system settings (transcode, scraping, scan, cron, COI)
+INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  (3, 'manage_settings', 1, NULL),
+  (2, 'manage_settings', 0, NULL),
+  (1, 'manage_settings', 0, NULL),
+  (0, 'manage_settings', 0, NULL);
 
 -- ============================================================================
 -- 6. Guest Tokens (temporary browser access)
@@ -678,7 +693,11 @@ INSERT OR IGNORE INTO features (key, value, description) VALUES
 
 -- 0011: scrape_enabled master switch
 INSERT OR IGNORE INTO features (key, value, description, updated_at) VALUES
-  ('scrape_enabled', 1, 'Master switch for metadata scraping', unixepoch());
+  ('scrape_enabled', 1, '元数据刮削总开关', unixepoch());
+-- Back-fill the Chinese description on databases seeded with the old English
+-- text (guarded so a user-edited description is never overwritten).
+UPDATE features SET description = '元数据刮削总开关'
+  WHERE key = 'scrape_enabled' AND description = 'Master switch for metadata scraping';
 
 -- ============================================================================
 -- ============================================================================

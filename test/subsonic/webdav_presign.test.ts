@@ -379,6 +379,7 @@ async function main() {
       );
       INSERT INTO user_permissions VALUES (2, 'manage_credentials', 1, 0);
       INSERT INTO user_permissions VALUES (2, 'manage_permissions', 1, 0);
+      INSERT INTO user_permissions VALUES (2, 'manage_settings', 1, 0);
     `);
     const { featuresRoutes } = await import("../../worker/src/endpoints/edgesonic/features");
     const { edgesonicAuthRoutes } = await import("../../worker/src/endpoints/edgesonic/auth");
@@ -443,7 +444,7 @@ async function main() {
         enabled INTEGER DEFAULT 0, max_rph INTEGER DEFAULT 0,
         PRIMARY KEY (level, permission)
       );
-      INSERT INTO user_permissions VALUES (3, 'manage_permissions', 1, 0);
+      INSERT INTO user_permissions VALUES (3, 'manage_settings', 1, 0);
     `);
     const { featuresRoutes } = await import("../../worker/src/endpoints/edgesonic/features");
     const app = new Hono<{ Bindings: any; Variables: any }>();

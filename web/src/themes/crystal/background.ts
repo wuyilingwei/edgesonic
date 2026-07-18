@@ -333,23 +333,24 @@ export type DriftMotion = "ltr" | "rtl" | "rise" | "fall" | "diagonal";
 function driftPathAt(m: Pick<DriftCandidate, "top" | "midOffset" | "endOffset" | "size" | "durationS">, tMs: number, motion: DriftMotion = "ltr"): { x: number; y: number; half: number } {
   const frac = Math.max(0, Math.min(1, tMs / (m.durationS * 1000)));
   const wob = frac <= 0.5 ? m.midOffset * (frac * 2) : m.midOffset + (m.endOffset - m.midOffset) * ((frac - 0.5) * 2);
-  let xVw: number, yVh: number;
+  const vw = window.innerWidth || 1280, vh = window.innerHeight || 900;
+  const extent = m.size * 1.35 + 2;
+  let x: number, y: number;
   if (motion === "rise" || motion === "fall") {
     const p = motion === "rise" ? 1 - frac : frac; // 0(top)→1(bottom)
-    yVh = -12 + p * 124;
-    xVw = (m.top / 88) * 100 + wob; // spread columns across width + horizontal sway
+    y = -extent + p * (vh + extent * 2);
+    x = (((m.top / 88) * 100 + wob) * vw) / 100;
   } else if (motion === "diagonal") {
-    xVw = -10 + frac * 120;
-    yVh = m.top + (frac - 0.5) * 36 + wob;
+    x = -extent + frac * (vw + extent * 2);
+    y = ((m.top + (frac - 0.5) * 36 + wob) * vh) / 100;
   } else if (motion === "rtl") {
-    xVw = 110 - frac * 120;
-    yVh = m.top + wob;
+    x = vw + extent - frac * (vw + extent * 2);
+    y = ((m.top + wob) * vh) / 100;
   } else {
-    xVw = -10 + frac * 120;
-    yVh = m.top + wob;
+    x = -extent + frac * (vw + extent * 2);
+    y = ((m.top + wob) * vh) / 100;
   }
-  const vw = window.innerWidth || 1280, vh = window.innerHeight || 900;
-  return { x: (xVw * vw) / 100, y: (yVh * vh) / 100, half: m.size / 2 };
+  return { x, y, half: m.size / 2 };
 }
 function driftCollides(candidate: DriftCandidate, candidateStart: number, slots: (Drift | null)[], excludeSlot: number, motion: DriftMotion): boolean {
   const candEnd = candidateStart + candidate.durationS * 1000;

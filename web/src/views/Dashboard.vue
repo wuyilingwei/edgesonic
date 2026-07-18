@@ -83,8 +83,9 @@ const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3
 
 const edgesonicVersion = ref(__EDGESONIC_VERSION__);
 const edgesonicBuildTime = new Date(__EDGESONIC_BUILD_TIME__).toLocaleString();
-const releaseVersion = edgesonicVersion.value.replace(/-dev\.[^.]+$/, "");
-const isDevelopmentBuild = releaseVersion !== edgesonicVersion.value;
+const releaseVersion = edgesonicVersion.value.replace(/-dev\.[^-]+(?:-dirty)?$|-dirty$/, "");
+const isDevelopmentBuild = /-dev\./.test(edgesonicVersion.value);
+const isDirtyBuild = /-dirty$/.test(edgesonicVersion.value);
 const workerVersion = ref("—");
 const latestVersion = ref("");
 const updateAvailable = ref(false);
@@ -481,7 +482,7 @@ onUnmounted(() => {
               <a v-if="updateAvailable" href="https://github.com/wuyilingwei/edgesonic/releases/latest" target="_blank" rel="noopener" class="update-link">
                 v{{ latestVersion }} — 有新版本
               </a>
-              <span v-else-if="latestVersion" class="update-current">v{{ latestVersion }} — {{ isDevelopmentBuild ? "当前开发构建" : "已是最新" }}</span>
+               <span v-else-if="latestVersion" class="update-current">v{{ latestVersion }} — {{ isDirtyBuild ? "当前工作区有未提交修改" : isDevelopmentBuild ? "当前开发构建" : "已是最新" }}</span>
               <span v-else-if="updateChecking" class="muted">检查中…</span>
               <span v-else class="muted">—</span>
             </span>

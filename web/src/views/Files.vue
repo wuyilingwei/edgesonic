@@ -12,7 +12,7 @@ import type { ScrapeResult } from "../lib/scrape";
 import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
-const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, batchWriteTags, tidyFolder, restUrl, level, coverArtUrl } = useAuth();
+const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, batchWriteTags, tidyFolder, restUrl, hasPerm, coverArtUrl } = useAuth();
 const workerPool = useWorkerPool();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
@@ -76,8 +76,8 @@ function showToast(msg: string, type = "success") {
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-const canUpload = computed(() => level.value >= 2);
-const canScan = computed(() => level.value >= 2);
+const canUpload = computed(() => hasPerm("upload"));
+const canScan = computed(() => hasPerm("manage_files"));
 const isR2 = computed(() => currentSource.value === "r2");
 const crumbs = computed(() => (path.value ? path.value.split("/") : []));
 const uploadTarget = computed(() => (currentSource.value === "r2" ? "r2" : "webdav"));
@@ -614,7 +614,7 @@ const editMsg = ref("");
 const editErr = ref(false);
 const editExistingCoverUrl = computed(() => editCoverArt.value ? coverArtUrl(editCoverArt.value, 200) : undefined);
 
-const canEditTags = computed(() => level.value >= 2);
+const canEditTags = computed(() => hasPerm("edit_tags"));
 const isAudio = (name: string) => /\.(mp3|flac|wav|ogg|opus|m4a|aac)$/i.test(name);
 
 async function lookupSongByFilename(f: FileEntry, songCount = 5): Promise<Record<string, string> | null> {
@@ -715,7 +715,7 @@ const tidyPlanned = ref<Array<{ id: string; instanceId: string; from: string; to
 const tidyApplied = ref<Array<{ id: string; instanceId: string; ok: boolean; error?: string }>>([]);
 const tidyTargetIds = ref<string[]>([]);
 
-const canTidy = computed(() => level.value >= 2);
+const canTidy = computed(() => hasPerm("manage_files"));
 
 async function openTidyFolder() {
   // Resolve master_ids for every audio file in the current dir, the same way

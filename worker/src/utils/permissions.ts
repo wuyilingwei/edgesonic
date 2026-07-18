@@ -55,6 +55,33 @@ function readOverride(env: { PERMISSIONS_OVERRIDE?: string }): Record<string, Re
   }
 }
 
+// Whole effective permission map for a user's level, used by the SPA to gate
+// navigation and settings by real capability (GET /edgesonic/auth/me). Same
+// precedence as hasPermission: D1 rows for the level are the base, the
+// PERMISSIONS_OVERRIDE env cache wins per-key, and manage_permissions is
+// hardcoded to level 3.
+export async function getEffectivePermissions(
+  env: { DB: D1Database; PERMISSIONS_OVERRIDE?: string },
+  user: User,
+): Promise<Record<string, boolean>> {
+  const rows = await env.DB
+    .prepare("SELECT permission, enabled FROM user_permissions WHERE level = ?")
+    .bind(user.level)
+    .all<{ permission: string; enabled: number }>();
+  const perms: Record<string, boolean> = {};
+  for (const r of rows.results) perms[r.permission] = r.enabled === 1;
+
+  const override = readOverride(env)?.[String(user.level)];
+  if (override) {
+    for (const [k, v] of Object.entries(override)) {
+      if (typeof v === "boolean") perms[k] = v;
+    }
+  }
+
+  perms["manage_permissions"] = user.level === 3;
+  return perms;
+}
+
 export async function hasPermission(
   env: { DB: D1Database; PERMISSIONS_OVERRIDE?: string },
   user: User,

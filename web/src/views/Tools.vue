@@ -354,6 +354,53 @@ function cloneUpstreamUrl(path: string, params?: Record<string, string>): string
   return cloneUpstreamUrlFor(cloneForm.value.username, cloneForm.value.password, path, params);
 }
 
+// Subsonic error code → short label. Table mirrors the canonical API codes.
+const SUBSONIC_ERROR_CODES: Record<number, string> = {
+  0: "Generic error",
+  10: "Missing parameter",
+  20: "Incompatible server version",
+  30: "Not supported / trial expired",
+  40: "Wrong username or password",
+  50: "Not authorized",
+  60: "Trial expired",
+  70: "Data not found",
+};
+
+function extractSubsonicError(resp: any): { code: number; message: string } | null {
+  if (!resp) return null;
+  if (resp?._xml) {
+    const m = /<error\s+code="(\d+)"\s+message="([^"]*)"/.exec(resp._xml)
+      || /message="([^"]*)"\s+code="(\d+)"/.exec(resp._xml);
+    if (m) {
+      const code = Number(m[1] ?? m[2]);
+      const message = m[2] ?? m[1] ?? "";
+      return { code, message };
+    }
+    if (/status="failed"/.test(resp._xml)) {
+      return { code: 0, message: "upstream returned status=failed (no error detail)" };
+    }
+    return null;
+  }
+  if (resp?.status === "failed" || resp?.status === "error") {
+    const err = resp?.error;
+    if (err && typeof err === "object") {
+      const code = Number(err.code ?? 0);
+      const message = String(err.message ?? "");
+      return { code: Number.isFinite(code) ? code : 0, message };
+    }
+    if (typeof err === "string") {
+      return { code: 0, message: err };
+    }
+    return { code: 0, message: "upstream returned status=failed (no error detail)" };
+  }
+  return null;
+}
+
+function subsonicErrorMessage(err: { code: number; message: string }): string {
+  const label = SUBSONIC_ERROR_CODES[err.code] ?? `error ${err.code}`;
+  return err.message ? `${label}: ${err.message}` : label;
+}
+
 async function cloneFetchJsonAs(username: string, password: string, path: string, params?: Record<string, string>): Promise<any> {
   const resp = cloneProxyEnabled.value
     ? await fetch("/edgesonic/clone/proxy", {
@@ -369,12 +416,23 @@ async function cloneFetchJsonAs(username: string, password: string, path: string
       })
     : await fetch(cloneUpstreamUrlFor(username, password, path, params));
   const text = await resp.text();
+  let parsed: any;
   try {
     const json = JSON.parse(text);
-    return json?.["subsonic-response"] ?? json;
+    parsed = json?.["subsonic-response"] ?? json;
   } catch {
-    return { _xml: text };
+    parsed = { _xml: text };
   }
+  const subErr = extractSubsonicError(parsed);
+  if (subErr) {
+    throw new Error(`upstream ${path}: ${subsonicErrorMessage(subErr)}`);
+  }
+  // HTTP-level failure (e.g. upstream offline, 502) with a non-Subsonic body —
+  // surface it instead of letting stages treat it as "0 items found".
+  if (!cloneProxyEnabled.value && !resp.ok && !parsed?._xml && !parsed?.status) {
+    throw new Error(`upstream ${path}: HTTP ${resp.status}`);
+  }
+  return parsed;
 }
 async function cloneFetchJson(path: string, params?: Record<string, string>): Promise<any> {
   return cloneFetchJsonAs(cloneForm.value.username, cloneForm.value.password, path, params);
@@ -1219,16 +1277,61 @@ async function runClone() {
     cloneStages.value[k] = newCloneProgress();
   }
   try {
+    // Ping upstream with a tiny request first so that wrong credentials /
+    // offline upstreams surface before the clone "completes 0 items" and
+    // confuse the user. getAlbumList2 size=1 is cheap and exercises the
+    // full auth path on every Subsonic-compatible server.
+    try {
+      await cloneFetchJson("getAlbumList2", { type: "alphabeticalByName", size: "1" });
+    } catch (pingErr: unknown) {
+      const msg = pingErr instanceof Error ? pingErr.message : String(pingErr);
+      cloneLogPush(`ping: ✗ ${msg}`);
+      const text = t("settings.common.clone.pingFailed", { error: msg });
+      showToast(text, "error");
+      return;
+    }
+    cloneLogPush(`ping: ✓ upstream reachable, credentials accepted`);
+
     cloneFilterSongIds.value = await buildCloneFilterSet();
     if (cloneFilterSongIds.value) {
       cloneLogPush(`filter: enabled, ${cloneFilterSongIds.value.size} song id(s) allowed by playlists/starred rules`);
     }
     const target = cloneUserMode.value === "specified" ? cloneTargetUsername.value.trim() : currentUsername.value;
-    await cloneMetadataStage();
-    await cloneAudioStage();
-    await clonePlaylistsStage(target);
-    await cloneStarredStage(target);
-    await cloneUsersStage();
+    // Wrap each stage so a Subsonic-level error (status=failed) thrown from
+    // cloneFetchJson aborts only that stage and marks it error, instead of
+    // silently treating "0 items" as success. Users-stage may legitimately
+    // hit 50 (not super-admin on upstream) — log + continue.
+    const runStage = async (name: string, fn: () => Promise<void>) => {
+      try {
+        await fn();
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const stg = cloneStages.value[name as keyof typeof cloneStages.value];
+        if (stg) {
+          stg.status = "error";
+          stg.message = msg;
+        }
+        cloneLogPush(`${name}: ✗ aborted — ${msg}`);
+        throw e;
+      }
+    };
+    try {
+      await runStage("metadata", cloneMetadataStage);
+      await runStage("audio", cloneAudioStage);
+      await runStage("playlists", clonePlaylistsStage.bind(null, target));
+      await runStage("starred", cloneStarredStage.bind(null, target));
+    } catch (e: unknown) {
+      // A stage aborted on an upstream error — log it but keep going for
+      // users-stage, which has independent value (and may also surface its
+      // own upstream error below).
+      const msg = e instanceof Error ? e.message : String(e);
+      cloneLogPush(`clone: continuing to users stage despite error — ${msg}`);
+    }
+    try {
+      await runStage("users", cloneUsersStage);
+    } catch {
+      // users-stage already logged via runStage; don't fail the whole run.
+    }
     showToast(t("settings.common.clone.done"));
   } catch (e: unknown) {
     showToast(`${t("settings.common.clone.failed")}: ${e instanceof Error ? e.message : String(e)}`, "error");

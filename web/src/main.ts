@@ -26,18 +26,20 @@ import Sources from "./views/Sources.vue";
 import Files from "./views/Files.vue";
 import Users from "./views/Users.vue";
 import Settings from "./views/Settings.vue";
+import { useUpdateBanner } from "./stores/updateBanner";
 const routes = [
   { path: "/login", component: Login, meta: { title: "Login", public: true } },
   { path: "/", component: Dashboard, meta: { title: "Dashboard" } },
   { path: "/library", component: Library, meta: { title: "Library" } },
   { path: "/starred", component: Library, props: { starredOnly: true }, meta: { title: "Liked" } },
-  { path: "/sources", component: Sources, meta: { title: "Sources" } },
-  { path: "/files", component: Files, meta: { title: "Files" } },
-  { path: "/users", component: Users, meta: { title: "Users" } },
+  { path: "/sources", component: Sources, meta: { title: "Sources", perm: "manage_sources" } },
+  { path: "/files", component: Files, meta: { title: "Files", perm: "manage_files" } },
+  { path: "/users", component: Users, meta: { title: "Users", perm: "manage_users" } },
   // Permissions matrix now lives inside Settings; keep the old route working.
   { path: "/permissions", redirect: "/settings" },
   { path: "/settings", component: Settings, meta: { title: "Settings" } },
-  // Settings. Lazy-loaded — super-admin workflows, rarely visited.
+  // Tools hosts the Subsonic sync (clone-to-self) available to every non-guest;
+  // admin-only tools inside gate themselves. Lazy-loaded, rarely visited.
   { path: "/tools", component: () => import("./views/Tools.vue"), meta: { title: "Tools" } },
   // non-admin users so we keep it out of the main chunk.
   { path: "/radio", component: () => import("./views/Radio.vue"), meta: { title: "Radio" } },
@@ -62,6 +64,21 @@ router.beforeEach((to) => {
   const loggedIn = !!localStorage.getItem("edgesonic_logged_in");
   if (!to.meta.public && !loggedIn) return "/login";
   if (to.path === "/login" && loggedIn) return "/";
+
+  // Permission-gated routes: block direct-URL access to admin pages the user
+  // lacks the capability for (nav already hides the tab; this stops typing the
+  // path). Uses the cached /auth/me permission map. When the cache is empty
+  // (cold reload before fetchMe), allow through — the page's own gate and the
+  // backend still enforce, and we don't want to bounce a genuine admin.
+  const perm = to.meta.perm as string | string[] | undefined;
+  if (perm && loggedIn) {
+    let perms: Record<string, boolean> = {};
+    try { perms = JSON.parse(localStorage.getItem("edgesonic_perms") || "null") || {}; } catch { perms = {}; }
+    if (Object.keys(perms).length > 0) {
+      const list = Array.isArray(perm) ? perm : [perm];
+      if (!list.some((p) => perms[p] === true)) return "/";
+    }
+  }
   return true;
 });
 
@@ -70,6 +87,14 @@ app.use(router);
 const pinia = createPinia();
 app.use(pinia);
 app.use(i18n);
+
+// The loaded bundle, not the first delayed API probe, defines the baseline.
+// This preserves deploy detection when a rollout happens just after page load.
+const updateBanner = useUpdateBanner(pinia);
+updateBanner.notify({
+  version: __EDGESONIC_VERSION__,
+  buildTime: __EDGESONIC_BUILD_TIME__,
+});
 app.mount("#app");
 
 // deploy. We poll a tiny public endpoint and feed the result into the update
@@ -79,19 +104,17 @@ app.mount("#app");
 // Initial probe runs 5s after mount (give the auth bootstrap room to breathe),
 // then every 5 minutes thereafter. Errors are deliberately swallowed — a
 // transient blip must NOT trigger a banner.
-import { useUpdateBanner } from "./stores/updateBanner";
 
 const VERSION_POLL_INTERVAL_MS = 5 * 60 * 1000;
 const VERSION_FIRST_PROBE_DELAY_MS = 5_000;
 
 async function checkVersion() {
   try {
-    const banner = useUpdateBanner(pinia);
     const r = await fetch("/edgesonic/version", { cache: "no-store" });
     if (!r.ok) return;
     const j = (await r.json()) as { ok?: boolean; version?: string; buildTime?: string | null };
     if (!j.ok || typeof j.version !== "string" || (j.buildTime !== null && typeof j.buildTime !== "string")) return;
-    banner.notify({ version: j.version, buildTime: j.buildTime ?? null });
+    updateBanner.notify({ version: j.version, buildTime: j.buildTime ?? null });
   } catch {
     // Network blip / offline tab: ignore. We'll retry next interval.
   }

@@ -31,6 +31,12 @@ interface VersionPayload {
   buildTime: string | null;
 }
 
+function hasUpdate(initial: VersionPayload, latest: VersionPayload): boolean {
+  return initial.version !== latest.version || (
+    latest.buildTime !== null && initial.buildTime !== latest.buildTime
+  );
+}
+
 export const useUpdateBanner = defineStore("updateBanner", () => {
   const initial = ref<VersionPayload | null>(null);
   const latest = ref<VersionPayload | null>(null);
@@ -39,10 +45,7 @@ export const useUpdateBanner = defineStore("updateBanner", () => {
   const available = computed(() => {
     if (!initial.value || !latest.value) return false;
     if (dismissed.value) return false;
-    return (
-      initial.value.version !== latest.value.version ||
-      initial.value.buildTime !== latest.value.buildTime
-    );
+    return hasUpdate(initial.value, latest.value);
   });
 
   function notify(payload: VersionPayload) {
@@ -52,7 +55,7 @@ export const useUpdateBanner = defineStore("updateBanner", () => {
       return;
     }
     latest.value = payload;
-    if (initial.value.version !== payload.version || initial.value.buildTime !== payload.buildTime) {
+    if (hasUpdate(initial.value, payload)) {
       refresh();
     }
   }

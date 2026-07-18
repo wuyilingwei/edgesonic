@@ -93,7 +93,9 @@ function buildDb(): DatabaseSync {
     );
     INSERT INTO user_permissions (level, permission, enabled, max_rph) VALUES
       (3, 'manage_permissions', 1, 0),
-      (2, 'manage_permissions', 0, 0);
+      (2, 'manage_permissions', 0, 0),
+      (3, 'manage_settings', 1, 0),
+      (2, 'manage_settings', 0, 0);
 
     -- Simulate 0025: insert the worker_max_concurrent seed row.
     INSERT INTO feature_strings (key, value, description, updated_at) VALUES

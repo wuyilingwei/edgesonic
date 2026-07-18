@@ -92,6 +92,18 @@ localStorage.removeItem("edgesonic_auth");
 const token = ref(localStorage.getItem("edgesonic_logged_in") || "");
 const username = ref(localStorage.getItem("edgesonic_user") || "");
 const level = ref(parseInt(localStorage.getItem("edgesonic_level") || "0"));
+// Real effective permissions + profile for the current user, fetched from
+// /edgesonic/auth/me. Cached in localStorage so nav/settings gating hydrates
+// synchronously on reload (no flash of the wrong tabs) before fetchMe refreshes.
+function readCachedPerms(): Record<string, boolean> {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("edgesonic_perms") || "null");
+    return parsed && typeof parsed === "object" ? parsed as Record<string, boolean> : {};
+  } catch { return {}; }
+}
+const permissions = ref<Record<string, boolean>>(readCachedPerms());
+const nickname = ref(localStorage.getItem("edgesonic_nickname") || "");
+const avatarKey = ref(localStorage.getItem("edgesonic_avatar_key") || "");
 const salt = ref("");
 let sessionCheckInFlight: Promise<void> | null = null;
 
@@ -105,6 +117,11 @@ export function useAuth() {
   const isSuperAdmin = computed(() => level.value >= 3);
   const isGuest = computed(() => level.value === 0);
   const isUser = computed(() => level.value >= 1);
+  // Display name falls back to username when no nickname is set.
+  const displayName = computed(() => nickname.value || username.value);
+  // Real-capability check backing nav/settings gating. Reads the effective
+  // permission map from /auth/me; unknown key → false.
+  function hasPerm(key: string): boolean { return permissions.value[key] === true; }
 
   function makeSalt() {
     salt.value = Array.from({ length: 10 }, () => Math.random().toString(36)[2]).join("");
@@ -132,6 +149,9 @@ export function useAuth() {
       localStorage.setItem("edgesonic_logged_in", "1");
       localStorage.setItem("edgesonic_user", data.username);
       localStorage.setItem("edgesonic_level", String(data.level));
+      // Load effective permissions + profile before the router redirects so
+      // the nav renders the correct tabs on the first paint after login.
+      await fetchMe();
       return { ok: true, name: data.username, level: data.level };
     }
     return { ok: false, error: data.error || "Login failed" };
@@ -139,9 +159,13 @@ export function useAuth() {
 
   async function logout() {
     token.value = ""; username.value = ""; level.value = 0;
+    permissions.value = {}; nickname.value = ""; avatarKey.value = "";
     localStorage.removeItem("edgesonic_logged_in");
     localStorage.removeItem("edgesonic_user");
     localStorage.removeItem("edgesonic_level");
+    localStorage.removeItem("edgesonic_perms");
+    localStorage.removeItem("edgesonic_nickname");
+    localStorage.removeItem("edgesonic_avatar_key");
     // Best-effort: clear the cookie + delete the session row server-side.
     // If the request fails (offline, worker down) the SPA-side state is
     // already cleared; the cookie will lapse at its natural 24h expiry
@@ -298,6 +322,56 @@ export function useAuth() {
   const edgesonicFetch = (path: string, params?: Record<string, string>, signal?: AbortSignal) => fetchAt(EDGESONIC_BASE, path, params, signal);
   const edgesonicPost = (path: string, body: unknown, signal?: AbortSignal) => postAt(EDGESONIC_BASE, path, body, signal);
 
+  // Refresh the current user's effective permissions + profile. Called after
+  // login and on app mount; a 401 flows through handleAuthError (logout), any
+  // other failure keeps the cached values so the UI stays usable offline.
+  async function fetchMe(): Promise<void> {
+    try {
+      const data = JSON.parse(await edgesonicFetch("auth/me")) as {
+        ok: boolean; level?: number; nickname?: string | null; avatarKey?: string | null;
+        permissions?: Record<string, boolean>;
+      };
+      if (!data.ok) return;
+      if (typeof data.level === "number") {
+        level.value = data.level;
+        localStorage.setItem("edgesonic_level", String(data.level));
+      }
+      nickname.value = data.nickname || "";
+      avatarKey.value = data.avatarKey || "";
+      permissions.value = data.permissions || {};
+      localStorage.setItem("edgesonic_nickname", nickname.value);
+      localStorage.setItem("edgesonic_avatar_key", avatarKey.value);
+      localStorage.setItem("edgesonic_perms", JSON.stringify(permissions.value));
+    } catch (e) {
+      handleAuthError(e);
+    }
+  }
+
+  // Self-service profile edits (Settings → account). Nickname goes through the
+  // dedicated self endpoint; password reuses Subsonic changePassword (self).
+  async function updateNickname(next: string): Promise<void> {
+    const data = JSON.parse(await edgesonicPost("users/updateSelf", { nickname: next })) as {
+      ok: boolean; error?: string; nickname?: string | null;
+    };
+    if (!data.ok) throw new Error(data.error || "update failed");
+    nickname.value = data.nickname || "";
+    localStorage.setItem("edgesonic_nickname", nickname.value);
+  }
+
+  async function changeOwnPassword(next: string): Promise<void> {
+    const xml = await authPost("changePassword", { username: username.value, password: next });
+    if (/status="failed"|<error/i.test(xml)) throw new Error("changePassword failed");
+  }
+
+  // Upload own avatar (reuses the shared setAvatar endpoint; self-allowed).
+  async function updateOwnAvatar(imageBase64: string, mimeType: string): Promise<void> {
+    const data = JSON.parse(await edgesonicPost("users/setAvatar", {
+      username: username.value, imageBase64, mimeType,
+    })) as { ok?: boolean; error?: string };
+    if (!data.ok) throw new Error(data.error || "upload failed");
+    avatarKey.value = `avatars/${username.value}`;
+  }
+
   // === Tag edit helpers (task 039) — thin sugar over authFetch/authPost ===
   // readTags returns the latest known song row (used by editors to prefill).
   async function readTags(id: string): Promise<Record<string, string> | null> {
@@ -420,6 +494,8 @@ export function useAuth() {
   }
 
   return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
+    permissions, hasPerm, nickname, avatarKey, displayName,
+    fetchMe, updateNickname, changeOwnPassword, updateOwnAvatar,
     login, logout, handleAuthError, authFetch, authPost, uploadFile, crossCopy, makeSalt, md5,
     tagFetch, tagPost, storageFetch, storagePost, edgesonicFetch, edgesonicPost,
     readTags, writeTags, batchWriteTags, rescanSongs, submitMetadata, tidyFolder,

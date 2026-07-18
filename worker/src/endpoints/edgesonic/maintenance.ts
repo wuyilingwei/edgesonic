@@ -401,7 +401,7 @@ maintenanceRoutes.get("/maintenance/orphanSongs",
 // Response: { ok: true, deleted, failed, items: [{ masterId, ok, error? }] }
 const ORPHAN_DELETE_MAX = 200;
 maintenanceRoutes.post("/maintenance/orphanSongs/delete",
-  permissionMiddleware("maintenance_cleanup"),
+  permissionMiddleware("delete"),
   async (c) => {
   const env = c.env as Env;
   const body = await c.req.json<{ masterIds?: string[] }>().catch(() => ({ masterIds: [] as string[] }));

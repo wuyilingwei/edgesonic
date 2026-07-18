@@ -61,7 +61,7 @@ async function toggleStar() {
       <button v-if="props.isAdmin" class="row-menu-item" @click="pick('edit')">✎ {{ t("library.editSong") }}</button>
       <button class="row-menu-item" @click="pick('share')">⤴ {{ t("library.share") }}</button>
       <button class="row-menu-item" @click="pick('addPlaylist')">＋ {{ t("library.addToPlaylist") }}</button>
-      <a class="row-menu-item" :href="downloadUrl(props.songId)" :download="props.title" @click="emit('close')">⬇ {{ t("library.download") }}</a>
+      <a class="row-menu-item" :href="downloadUrl(props.songId)" :download="props.title" @click="emit('close')">{{ t("library.download") }}</a>
     </div>
   </div>
 </template>

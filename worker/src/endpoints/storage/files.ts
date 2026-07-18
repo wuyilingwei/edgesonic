@@ -235,7 +235,7 @@ function normalizeFolderPath(p: string | undefined): string | null {
 }
 
 // POST /rest/files/delete body: { key: "music/file.mp3" }
-filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {
+filesRoutes.post("/files/delete", permissionMiddleware("delete"), async (c) => {
   const user = c.get("user");
   if (user.level < 2) {
     return c.json({ ok: false, error: "File deletion requires admin privileges (level 2+)" }, 403);
@@ -267,7 +267,7 @@ filesRoutes.post("/files/delete", permissionMiddleware("upload"), async (c) => {
 // whose storage_uri lived under the prefix, then orphan-collect the affected
 // masters/albums/artists. The LIKE pattern escapes \ % _ so folder names
 // containing SQL wildcards can't over-match unrelated rows.
-filesRoutes.post("/files/deleteFolder", permissionMiddleware("upload"), async (c) => {
+filesRoutes.post("/files/deleteFolder", permissionMiddleware("delete"), async (c) => {
   const env = c.env as Env;
   const body = await c.req.json<{ path?: string }>();
   const path = normalizeFolderPath(body.path);

@@ -15,8 +15,109 @@ import { useWorkerPool } from "../stores/workerPool";
 
 const router = useRouter();
 const { t, locale } = useI18n();
-const { isSuperAdmin, isAdmin, edgesonicFetch, edgesonicPost, logout, username, handleAuthError } = useAuth();
+const {
+  isSuperAdmin, isGuest, hasPerm, edgesonicFetch, edgesonicPost, logout,
+  username, nickname, restUrl, updateNickname, changeOwnPassword, updateOwnAvatar, handleAuthError,
+} = useAuth();
 const workerPool = useWorkerPool();
+
+// Advanced/system settings gate. Defaults to super-admin only (manage_settings
+// is seeded L3=1), but a super-admin can grant it to an admin via the
+// Permissions UI — the whole System section keys off this.
+const canManageSettings = computed(() => hasPerm("manage_settings"));
+
+// ---- Self-service profile (avatar / nickname / password), non-guest ----
+const profileBusy = ref(false);
+const nicknameInput = ref(nickname.value);
+const pwNew = ref("");
+const pwConfirm = ref("");
+const avatarBust = ref(0);
+const avatarPreview = ref("");
+const avatarBase64 = ref("");
+const avatarMime = ref("image/jpeg");
+const selfAvatarSrc = computed(() =>
+  restUrl("getAvatar", { username: username.value, ...(avatarBust.value ? { _ts: String(avatarBust.value) } : {}) }));
+
+async function compressAvatar(file: File): Promise<{ dataUrl: string; base64: string; mime: string }> {
+  const blobUrl = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const i = new Image();
+      i.onload = () => resolve(i);
+      i.onerror = () => reject(new Error("decode failed"));
+      i.src = blobUrl;
+    });
+    const longEdge = 200;
+    const scale = Math.min(1, longEdge / Math.max(img.width, img.height));
+    const w = Math.max(1, Math.round(img.width * scale));
+    const h = Math.max(1, Math.round(img.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("canvas unavailable");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    const MAX_BYTES = 100 * 1024;
+    let quality = 0.85;
+    let dataUrl = canvas.toDataURL("image/jpeg", quality);
+    const estimate = (s: string) => Math.floor((s.length - s.indexOf(",") - 1) * 3 / 4);
+    while (estimate(dataUrl) > MAX_BYTES && quality > 0.4) {
+      quality -= 0.1;
+      dataUrl = canvas.toDataURL("image/jpeg", quality);
+    }
+    return { dataUrl, base64: dataUrl.slice(dataUrl.indexOf(",") + 1), mime: "image/jpeg" };
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
+}
+
+async function onSelfAvatarChange(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  if (!/^image\//.test(file.type)) { showToast(t("settings.account.avatarInvalid"), "error"); return; }
+  try {
+    const { dataUrl, base64, mime } = await compressAvatar(file);
+    avatarPreview.value = dataUrl; avatarBase64.value = base64; avatarMime.value = mime;
+  } catch { showToast(t("settings.account.avatarFailed"), "error"); }
+}
+
+async function saveSelfAvatar() {
+  if (!avatarBase64.value || profileBusy.value) return;
+  profileBusy.value = true;
+  try {
+    await updateOwnAvatar(avatarBase64.value, avatarMime.value);
+    avatarBust.value = Date.now();
+    avatarPreview.value = ""; avatarBase64.value = "";
+    showToast(t("settings.account.avatarSaved"));
+  } catch { showToast(t("settings.account.avatarFailed"), "error"); }
+  finally { profileBusy.value = false; }
+}
+
+async function saveNickname() {
+  if (profileBusy.value) return;
+  profileBusy.value = true;
+  try {
+    await updateNickname(nicknameInput.value);
+    showToast(t("settings.account.nicknameSaved"));
+  } catch { showToast(t("settings.account.nicknameFailed"), "error"); }
+  finally { profileBusy.value = false; }
+}
+
+async function saveSelfPassword() {
+  if (profileBusy.value) return;
+  if (!pwNew.value || pwNew.value.length < 4) { showToast(t("settings.account.passwordTooShort"), "error"); return; }
+  if (pwNew.value !== pwConfirm.value) { showToast(t("settings.account.passwordMismatch"), "error"); return; }
+  profileBusy.value = true;
+  try {
+    await changeOwnPassword(pwNew.value);
+    pwNew.value = ""; pwConfirm.value = "";
+    showToast(t("settings.account.passwordSaved"));
+  } catch { showToast(t("settings.account.passwordFailed"), "error"); }
+  finally { profileBusy.value = false; }
+}
 
 type SectionKey = "user" | "audioCache" | "system" | "sessions" | "clients" | "permissions";
 const open = ref<Record<SectionKey, boolean>>({ user: true, audioCache: false, system: false, sessions: false, clients: false, permissions: false });
@@ -385,7 +486,7 @@ function hydratePresignFromFeatures() {
 }
 
 async function loadR2PresignStatus() {
-  if (!isSuperAdmin.value) return;
+  if (!canManageSettings.value) return;
   try {
     const data = JSON.parse(await edgesonicFetch("r2presign/status"));
     if (data?.ok) r2SecretsConfigured.value = !!data.secretsConfigured;
@@ -536,7 +637,7 @@ const cfAnalyticsBusy = ref(false);
 const cfEnsureCronBusy = ref(false);
 
 async function loadCfStatus() {
-  if (!isSuperAdmin.value) return;
+  if (!canManageSettings.value) return;
   try {
     const data = JSON.parse(await edgesonicFetch("cf/getStatus")) as CfStatus & { ok: boolean };
     if (data.ok) {
@@ -549,7 +650,7 @@ async function loadCfStatus() {
 }
 
 async function loadCfCron() {
-  if (!isSuperAdmin.value) return;
+  if (!canManageSettings.value) return;
   try {
     const data = JSON.parse(await edgesonicFetch("cf/getCron")) as {
       ok: boolean;
@@ -644,7 +745,7 @@ async function ensureDefaultCron() {
 }
 
 async function loadCfAnalytics() {
-  if (!isSuperAdmin.value) return;
+  if (!canManageSettings.value) return;
   cfAnalyticsBusy.value = true;
   try {
     const data = JSON.parse(await edgesonicFetch("cf/getAnalytics")) as CfAnalytics & { ok: boolean };
@@ -674,7 +775,7 @@ const workerStatusLoading = ref(false);
 const workerStatusError = ref("");
 
 async function loadWorkerStatus() {
-  if (!isSuperAdmin.value) return;
+  if (!canManageSettings.value) return;
   workerStatusLoading.value = true;
   workerStatusError.value = "";
   try {
@@ -700,7 +801,7 @@ async function loadWorkerStatus() {
 const workerBackfillBusy = ref(false);
 const workerBackfillToast = ref("");
 async function onBackfillCompleted() {
-  if (!isSuperAdmin.value || workerBackfillBusy.value) return;
+  if (!canManageSettings.value || workerBackfillBusy.value) return;
   workerBackfillBusy.value = true;
   workerBackfillToast.value = "";
   try {
@@ -722,7 +823,7 @@ async function onBackfillCompleted() {
 const recheckMetadataBusy = ref(false);
 const recheckMetadataToast = ref("");
 async function onRecheckMetadataNow() {
-  if (!isSuperAdmin.value || recheckMetadataBusy.value) return;
+  if (!canManageSettings.value || recheckMetadataBusy.value) return;
   recheckMetadataBusy.value = true;
   recheckMetadataToast.value = "";
   try {
@@ -745,7 +846,7 @@ async function onRecheckMetadataNow() {
 const backfillLrcBusy = ref(false);
 const backfillLrcToast = ref("");
 async function onBackfillLrcNow() {
-  if (!isSuperAdmin.value || backfillLrcBusy.value) return;
+  if (!canManageSettings.value || backfillLrcBusy.value) return;
   backfillLrcBusy.value = true;
   backfillLrcToast.value = "";
   try {
@@ -765,7 +866,7 @@ async function onBackfillLrcNow() {
 const cleanupCoversBusy = ref(false);
 const cleanupCoversToast = ref("");
 async function onCleanupDuplicateCovers() {
-  if (!isSuperAdmin.value || cleanupCoversBusy.value) return;
+  if (!canManageSettings.value || cleanupCoversBusy.value) return;
   cleanupCoversBusy.value = true;
   cleanupCoversToast.value = "";
   try {
@@ -787,7 +888,7 @@ async function onCleanupDuplicateCovers() {
 const reclaimBusy = ref(false);
 const reclaimToast = ref("");
 async function onReclaimStaleWork() {
-  if (!isSuperAdmin.value || reclaimBusy.value) return;
+  if (!canManageSettings.value || reclaimBusy.value) return;
   reclaimBusy.value = true;
   reclaimToast.value = "";
   try {
@@ -810,7 +911,7 @@ async function onReclaimStaleWork() {
 const resetFailedBusy = ref(false);
 const resetFailedToast = ref("");
 async function onResetFailedWork() {
-  if (!isSuperAdmin.value || resetFailedBusy.value) return;
+  if (!canManageSettings.value || resetFailedBusy.value) return;
   if (!confirm(t("settings.common.maintenance.resetFailedConfirm"))) return;
   resetFailedBusy.value = true;
   resetFailedToast.value = "";
@@ -1030,11 +1131,11 @@ async function copyText(text: string) {
 }
 
 onMounted(() => {
-  loadFeatures();
+  if (canManageSettings.value) loadFeatures();
   loadSessions();
-  loadCredentials();
-  if (isSuperAdmin.value) loadWorkerStatus();
-  if (isSuperAdmin.value) {
+  if (!isGuest.value) loadCredentials();
+  if (canManageSettings.value) loadWorkerStatus();
+  if (hasPerm("manage_cloudflare")) {
     loadCfStatus();
     loadCfCron();
     loadCfAnalytics();
@@ -1049,7 +1150,6 @@ onMounted(() => {
         <div class="mono-label">{{ t("settings.label") }}</div>
         <h1 class="page-title">{{ t("settings.title") }}</h1>
       </div>
-      <span v-if="!isSuperAdmin" class="status-badge warning">{{ t("settings.readOnly") }}</span>
     </div>
 
     <!-- ============ USER ============ -->
@@ -1060,6 +1160,55 @@ onMounted(() => {
       </button>
 
       <div v-show="open.user" class="section-body">
+        <!-- Self-service account (avatar / nickname / password), non-guest -->
+        <div v-if="!isGuest" class="sub-block">
+          <div class="sub-header"><span class="mono-label">{{ t("settings.account.title") }}</span></div>
+          <div class="account-grid">
+            <div class="account-avatar">
+              <img
+                :src="avatarPreview || selfAvatarSrc"
+                class="account-avatar-img"
+                alt=""
+                @error="($event.target as HTMLImageElement).style.visibility = 'hidden'"
+              />
+              <div class="account-avatar-actions">
+                <label class="btn-secondary btn-sm">
+                  {{ t("settings.account.avatarPick") }}
+                  <input type="file" accept="image/*" hidden @change="onSelfAvatarChange" />
+                </label>
+                <button v-if="avatarBase64" class="btn-primary btn-sm" :disabled="profileBusy" @click="saveSelfAvatar">
+                  {{ t("common.save") }}
+                </button>
+              </div>
+            </div>
+            <div class="account-fields">
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.account.nickname") }}</span>
+                <input v-model="nicknameInput" type="text" maxlength="64" class="form-input" :placeholder="username" />
+              </label>
+              <div class="tc-actions">
+                <button class="btn-primary btn-sm" :disabled="profileBusy" @click="saveNickname">
+                  {{ t("settings.account.saveNickname") }}
+                </button>
+              </div>
+
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.account.newPassword") }}</span>
+                <input v-model="pwNew" type="password" maxlength="128" class="form-input" autocomplete="new-password" />
+              </label>
+              <label class="tc-row">
+                <span class="tc-key">{{ t("settings.account.confirmPassword") }}</span>
+                <input v-model="pwConfirm" type="password" maxlength="128" class="form-input" autocomplete="new-password" />
+              </label>
+              <div class="tc-actions">
+                <button class="btn-primary btn-sm" :disabled="profileBusy || !pwNew" @click="saveSelfPassword">
+                  {{ t("settings.account.savePassword") }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Language -->
         <div class="sub-block">
           <div class="sub-header"><span class="mono-label">{{ t("settings.common.language") }}</span></div>
@@ -1208,8 +1357,8 @@ onMounted(() => {
       <div class="corner corner-br"></div>
     </section>
 
-    <!-- ============ SYSTEM ============ -->
-    <section class="settings-section card" :class="{ open: open.system }">
+    <!-- ============ SYSTEM (advanced — gated on manage_settings) ============ -->
+    <section v-if="canManageSettings" class="settings-section card" :class="{ open: open.system }">
       <button class="section-header" @click="toggleSection('system')">
         <span class="section-title">{{ t("settings.system.title") }}</span>
         <span class="section-caret">{{ open.system ? "−" : "+" }}</span>
@@ -1245,7 +1394,7 @@ onMounted(() => {
             <!-- Engine -->
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.transcode.engine") }}</span>
-              <select v-model="transcodeEngine" class="form-select" :disabled="!isSuperAdmin">
+              <select v-model="transcodeEngine" class="form-select" :disabled="!canManageSettings">
                 <option value="disabled">{{ t("settings.common.transcode.engineDisabled") }}</option>
                 <option value="sandbox">{{ t("settings.common.transcode.engineSandbox") }}</option>
                 <option value="external">{{ t("settings.common.transcode.engineExternal") }}</option>
@@ -1257,7 +1406,7 @@ onMounted(() => {
             <!-- Mode -->
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.transcode.mode") }}</span>
-              <select v-model="transcodeMode" class="form-select" :disabled="!isSuperAdmin">
+              <select v-model="transcodeMode" class="form-select" :disabled="!canManageSettings">
                 <option value="on_demand">{{ t("settings.common.transcode.modeOnDemand") }}</option>
                 <option value="pre_bake">{{ t("settings.common.transcode.modePreBake") }}</option>
                 <option value="both">{{ t("settings.common.transcode.modeBoth") }}</option>
@@ -1273,7 +1422,7 @@ onMounted(() => {
                   <input
                     type="checkbox"
                     :checked="defaultProfiles.includes(p.id)"
-                    :disabled="!isSuperAdmin"
+                    :disabled="!canManageSettings"
                     @change="toggleProfile(p.id, ($event.target as HTMLInputElement).checked)"
                   />
                   <span>{{ p.label }}</span>
@@ -1289,7 +1438,7 @@ onMounted(() => {
                 v-model="externalUrl"
                 class="form-input"
                 :placeholder="t('settings.common.transcode.externalUrlPlaceholder')"
-                :disabled="!isSuperAdmin"
+                :disabled="!canManageSettings"
               />
             </label>
 
@@ -1307,14 +1456,14 @@ onMounted(() => {
                 maxlength="256"
                 class="form-input"
                 :placeholder="t('settings.common.transcode.externalKeyPlaceholder')"
-                :disabled="!isSuperAdmin"
+                :disabled="!canManageSettings"
               />
             </label>
 
             <div class="tc-actions">
               <button
                 class="btn-primary"
-                :disabled="!isSuperAdmin || transcodeBusy"
+                :disabled="!canManageSettings || transcodeBusy"
                 @click="saveTranscode"
               >
                {{ t("settings.common.transcode.save") }}
@@ -1336,7 +1485,7 @@ onMounted(() => {
                 <input
                   type="checkbox"
                   :checked="scrapeEnabledSet.has(id)"
-                  :disabled="!isSuperAdmin"
+                  :disabled="!canManageSettings"
                   @change="toggleScrapeSource(id, ($event.target as HTMLInputElement).checked)"
                 />
                 <span class="scrape-source-label">
@@ -1347,13 +1496,13 @@ onMounted(() => {
                 <span class="rank-num">{{ idx + 1 }}</span>
                 <button
                   class="rank-btn"
-                  :disabled="!isSuperAdmin || idx === 0"
+                  :disabled="!canManageSettings || idx === 0"
                   :title="t('settings.common.scrape.moveUp')"
                   @click="moveScrapeSource(id, -1)"
                 >▲</button>
                 <button
                   class="rank-btn"
-                  :disabled="!isSuperAdmin || idx === scrapeOrder.length - 1"
+                  :disabled="!canManageSettings || idx === scrapeOrder.length - 1"
                   :title="t('settings.common.scrape.moveDown')"
                   @click="moveScrapeSource(id, 1)"
                 >▼</button>
@@ -1363,7 +1512,7 @@ onMounted(() => {
           <div class="tc-actions">
             <button
               class="btn-primary"
-              :disabled="!isSuperAdmin || scrapeBusy"
+              :disabled="!canManageSettings || scrapeBusy"
               @click="saveScrape"
             >
              {{ t("settings.common.scrape.save") }}
@@ -1389,7 +1538,7 @@ onMounted(() => {
                 max="168"
                 step="1"
                 class="form-input"
-                :disabled="!isSuperAdmin"
+                :disabled="!canManageSettings"
               />
             </label>
             <p class="feature-desc tc-desc">{{ t("settings.common.scan.intervalHoursDesc") }}</p>
@@ -1401,7 +1550,7 @@ onMounted(() => {
                 <input
                   type="checkbox"
                   v-model="scanEtagCheck"
-                  :disabled="!isSuperAdmin"
+                  :disabled="!canManageSettings"
                 />
                 <span>{{ scanEtagCheck ? t("common.on") : t("common.off") }}</span>
               </span>
@@ -1411,7 +1560,7 @@ onMounted(() => {
             <!-- Rescan strategy -->
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.scan.strategy") }}</span>
-              <select v-model="scanRescanStrategy" class="form-select" :disabled="!isSuperAdmin">
+              <select v-model="scanRescanStrategy" class="form-select" :disabled="!canManageSettings">
                 <option value="auto">{{ t("settings.common.scan.strategyAuto") }}</option>
                 <option value="worker">{{ t("settings.common.scan.strategyWorker") }}</option>
                 <option value="browser">{{ t("settings.common.scan.strategyBrowser") }}</option>
@@ -1422,7 +1571,7 @@ onMounted(() => {
             <div class="tc-actions">
               <button
                 class="btn-primary"
-                :disabled="!isSuperAdmin || scanBusy"
+                :disabled="!canManageSettings || scanBusy"
                 @click="saveScan"
               >
                {{ t("settings.common.scan.save") }}
@@ -1457,7 +1606,7 @@ onMounted(() => {
                 <input
                   type="checkbox"
                   v-model="cioEnabled"
-                  :disabled="!isSuperAdmin"
+                  :disabled="!canManageSettings"
                 />
                 <span>{{ cioEnabled ? t("common.on") : t("common.off") }}</span>
               </span>
@@ -1467,7 +1616,7 @@ onMounted(() => {
             <div class="tc-actions">
               <button
                 class="btn-primary"
-                :disabled="!isSuperAdmin || cioBusy"
+                :disabled="!canManageSettings || cioBusy"
                 @click="saveCio"
               >
                {{ t("settings.common.crossOriginIsolation.save") }}
@@ -1476,7 +1625,7 @@ onMounted(() => {
           </div>
         </div>
 
-        <div v-if="isSuperAdmin" class="sub-block">
+        <div v-if="hasPerm('manage_cloudflare')" class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.cf.title") }}</span>
             <span class="status-badge" :class="cfStatus.configured ? 'success' : 'muted'">
@@ -1607,7 +1756,7 @@ onMounted(() => {
            </div>
          </div>
 
-        <div v-if="isSuperAdmin" class="sub-block">
+        <div v-if="canManageSettings" class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.presign.title") }}</span>
             <span class="status-badge" :class="r2SecretsConfigured ? 'success' : 'warning'">
@@ -1639,7 +1788,7 @@ onMounted(() => {
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.presign.r2Toggle") }}</span>
               <span class="scan-toggle">
-                <input type="checkbox" v-model="r2PresignEnabled" :disabled="!isSuperAdmin" />
+                <input type="checkbox" v-model="r2PresignEnabled" :disabled="!canManageSettings" />
                 <span>{{ r2PresignEnabled ? t("common.on") : t("common.off") }}</span>
               </span>
             </label>
@@ -1647,7 +1796,7 @@ onMounted(() => {
             <div class="tc-actions">
               <button
                 class="btn-primary"
-                :disabled="!isSuperAdmin || r2PresignBusy"
+                :disabled="!canManageSettings || r2PresignBusy"
                 @click="saveR2Presign"
               >
                {{ t("settings.common.presign.save") }}
@@ -1657,7 +1806,7 @@ onMounted(() => {
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.presign.webdavToggle") }}</span>
               <span class="scan-toggle">
-                <input type="checkbox" v-model="webdavPresignEnabled" :disabled="!isSuperAdmin" />
+                <input type="checkbox" v-model="webdavPresignEnabled" :disabled="!canManageSettings" />
                 <span>{{ webdavPresignEnabled ? t("common.on") : t("common.off") }}</span>
               </span>
             </label>
@@ -1665,7 +1814,7 @@ onMounted(() => {
             <div class="tc-actions">
               <button
                 class="btn-primary"
-                :disabled="!isSuperAdmin || webdavPresignBusy"
+                :disabled="!canManageSettings || webdavPresignBusy"
                 @click="saveWebdavPresign"
               >
                {{ t("settings.common.presign.save") }}
@@ -1699,7 +1848,7 @@ onMounted(() => {
           </p>
 
           <!-- Admin queue overview -->
-          <div v-if="isSuperAdmin" class="worker-queue-overview">
+          <div v-if="canManageSettings" class="worker-queue-overview">
             <div class="sub-header" style="margin-top: 0.6rem">
               <span class="mono-label">{{ t("settings.common.workerPool.queueOverview") }}</span>
               <button class="btn-secondary btn-sm" :disabled="workerStatusLoading" @click="loadWorkerStatus">
@@ -1815,11 +1964,11 @@ onMounted(() => {
           </div>
         </div>
 
-        <!-- Maintenance tools (super-admin only). Lives in Common because
-             that's where 077 backfill lives; both are "fix the DB state" knobs
-             tied to historical data drift. Each tool here MUST be idempotent
-             and safe to re-run — no destructive cascades. -->
-        <div v-if="isSuperAdmin" class="sub-block">
+        <!-- Maintenance tools: idempotent "fix the DB state" knobs tied to
+             historical data drift. Each tool here MUST be safe to re-run — no
+             destructive cascades. Backend still enforces the granular
+             maintenance_* permissions on each action. -->
+        <div v-if="canManageSettings" class="sub-block">
           <div class="sub-header">
             <span class="mono-label">🔧 {{ t("settings.common.maintenance.title") }}</span>
           </div>
@@ -1924,11 +2073,11 @@ onMounted(() => {
                 <code class="feature-key">{{ f.key }}</code>
                 <span class="feature-desc">{{ f.description }}</span>
               </div>
-              <label class="toggle" :title="isSuperAdmin ? '' : t('settings.common.levelRequired')">
+              <label class="toggle" :title="canManageSettings ? '' : t('settings.common.levelRequired')">
                 <input
                   type="checkbox"
                   :checked="f.value === 1"
-                  :disabled="!isSuperAdmin"
+                  :disabled="!canManageSettings"
                   @change="toggleFeature(f, ($event.target as HTMLInputElement).checked)"
                 />
                 <span class="toggle-slider"></span>
@@ -1990,7 +2139,7 @@ onMounted(() => {
     </section>
 
     <!-- ============ SUBSONIC CLIENTS ============ -->
-    <section class="settings-section card" :class="{ open: open.clients }">
+    <section v-if="hasPerm('manage_credentials')" class="settings-section card" :class="{ open: open.clients }">
       <button class="section-header" @click="toggleSection('clients')">
         <span class="section-title">{{ t("settings.clients.title") }}</span>
         <span class="section-caret">{{ open.clients ? "−" : "+" }}</span>
@@ -2091,7 +2240,7 @@ onMounted(() => {
     </section>
 
     <!-- ============ PERMISSIONS ============ -->
-    <section class="settings-section card" :class="{ open: open.permissions }">
+    <section v-if="isSuperAdmin" class="settings-section card" :class="{ open: open.permissions }">
       <button class="section-header" @click="toggleSection('permissions')">
         <span class="section-title">{{ t("settings.permissions.title") }}</span>
         <span class="section-side">
@@ -2445,4 +2594,13 @@ onMounted(() => {
 .rank-btn:hover:not(:disabled) { color: var(--color-accent-primary); background: var(--color-bg-primary); }
 .rank-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
+/* Self-service account block */
+.account-grid { display: flex; gap: 1.2rem; flex-wrap: wrap; align-items: flex-start; }
+.account-avatar { display: flex; flex-direction: column; align-items: center; gap: 0.6rem; }
+.account-avatar-img {
+  width: 96px; height: 96px; border-radius: 50%; object-fit: cover;
+  border: 1px solid var(--color-border-subtle); background: var(--color-bg-primary);
+}
+.account-avatar-actions { display: flex; flex-direction: column; gap: 0.4rem; align-items: stretch; }
+.account-fields { flex: 1; min-width: 240px; display: flex; flex-direction: column; gap: 0.6rem; }
 </style>

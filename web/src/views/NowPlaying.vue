@@ -115,6 +115,10 @@ function resetLyricsScroll() {
 watch(() => player.current?.id, async (id) => {
   const request = ++lyricsRequest;
   const trackAtChange = player.current;
+  if (lyricsReturnTimer) {
+    clearTimeout(lyricsReturnTimer);
+    lyricsReturnTimer = null;
+  }
   userScrolled.value = false;
   suppressScrollUntil.value = Date.now() + 600;
   autoScrolling.value = false;
@@ -139,7 +143,7 @@ watch(() => player.current?.id, async (id) => {
   } finally {
     if (request === lyricsRequest) lyricsLoading.value = false;
   }
-}, { immediate: true });
+}, { immediate: true, flush: "sync" });
 
 function decodeEntities(s: string): string {
   return s.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'");

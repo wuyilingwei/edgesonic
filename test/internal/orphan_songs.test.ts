@@ -121,7 +121,11 @@ function buildDb(): DatabaseSync {
       (3, 'maintenance_cleanup', 1, 0),
       (2, 'maintenance_cleanup', 0, 0),
       (1, 'maintenance_cleanup', 0, 0),
-      (0, 'maintenance_cleanup', 0, 0);
+      (0, 'maintenance_cleanup', 0, 0),
+      (3, 'delete', 1, 0),
+      (2, 'delete', 0, 0),
+      (1, 'delete', 0, 0),
+      (0, 'delete', 0, 0);
     INSERT INTO artists (id, name) VALUES ('unknown-artist', 'Unknown Artist');
     INSERT INTO albums (id, name) VALUES ('pending-uploads', 'Pending Uploads');
     INSERT INTO artists (id, name) VALUES ('artist-real', 'Real Artist');

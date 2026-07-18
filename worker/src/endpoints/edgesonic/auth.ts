@@ -20,6 +20,8 @@ import { Hono } from "hono";
 import { permissionMiddleware, subsonicError, sha256, SESSION_TTL_SEC, buildSessionCookieHeader } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
 import { recoverCronIfStale } from "../../utils/cronRecovery";
+import { getEffectivePermissions } from "../../utils/permissions";
+import { ensureNicknameColumn } from "../../utils/schema_patch";
 import type { User } from "../../types/entities";
 
 // only request that legitimately arrives without a session) and is exported
@@ -158,6 +160,31 @@ function parseSessionCookie(cookieHeader: string): string | null {
 export const edgesonicAuthRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
 const XML = { "Content-Type": "application/xml; charset=UTF-8" } as const;
+
+// ─── Current user (identity + effective permissions) ────────────────────────
+// The SPA gates navigation and settings by real capability, not just level.
+// This returns the caller's effective permission map (env override → D1) plus
+// their display name and avatar so App.vue / Settings can render accordingly.
+edgesonicAuthRoutes.get("/auth/me", async (c) => {
+  const user = c.get("user");
+  await ensureNicknameColumn(c.env);
+  const permissions = await getEffectivePermissions(c.env, user);
+
+  let nickname: string | null = null;
+  let avatarKey: string | null = null;
+  try {
+    const row = await c.env.DB
+      .prepare("SELECT nickname, avatar_r2_key FROM users WHERE username = ?")
+      .bind(user.username)
+      .first<{ nickname: string | null; avatar_r2_key: string | null }>();
+    nickname = row?.nickname ?? null;
+    avatarKey = row?.avatar_r2_key ?? null;
+  } catch {
+    // nickname column may be absent on a database not yet back-filled.
+  }
+
+  return c.json({ ok: true, username: user.username, level: user.level, nickname, avatarKey, permissions });
+});
 
 // ─── Sessions ───────────────────────────────────────────────────────────────
 edgesonicAuthRoutes.get("/auth/sessions/list", async (c) => {

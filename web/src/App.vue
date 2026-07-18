@@ -17,11 +17,14 @@ import { activeToast, dismissToast } from "./stores/toast";
 const router = useRouter();
 const route = useRoute();
 const { t } = useI18n();
-const { isLoggedIn, username, level, logout } = useAuth();
+const { isLoggedIn, level, logout, hasPerm, fetchMe, displayName } = useAuth();
 const player = usePlayerStore();
 const workerPool = useWorkerPool();
 watch(isLoggedIn, (now) => {
   if (now) {
+    // Refresh real effective permissions so nav gates by capability, not just
+    // level (covers reloads where login()'s fetchMe never ran this session).
+    void fetchMe();
     void restoreSavedTheme();
     void workerPool.hydrateConfig().then(() => workerPool.start());
     player.resumePlaybackIfNeeded();
@@ -54,8 +57,19 @@ router.beforeEach((to, from) => {
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
 const levelLabel = computed(() => levelKeys[level.value] ? t(`app.levels.${levelKeys[level.value]}`) : String(level.value));
 
-interface NavItem { label: string; path: string; minLevel: number; icon?: string; }
+// `perm` gates a nav item on real effective capability (from /auth/me), not
+// just level: an admin without manage_users sees no Users tab, without
+// manage_sources no Sources tab, etc. An array is any-of (Tools serves several
+// admin capabilities). `minLevel` is only a coarse floor (guests never
+// manage). Settings sits in the bottom group and is visible to every signed-in
+// user — its advanced section gates on manage_settings inside.
+interface NavItem { label: string; path: string; minLevel: number; perm?: string | string[]; icon?: string; }
 interface NavGroup { label: string; items: NavItem[]; }
+
+function permitted(perm?: string | string[]): boolean {
+  if (!perm) return true;
+  return Array.isArray(perm) ? perm.some(hasPerm) : hasPerm(perm);
+}
 
 const groups = computed<NavGroup[]>(() => {
   const defs: NavGroup[] = [
@@ -74,22 +88,24 @@ const groups = computed<NavGroup[]>(() => {
     {
       label: t("app.groups.management"),
       items: [
-        { label: t("app.menu.files"), path: "/files", minLevel: 2 },
-        { label: t("app.menu.sources"), path: "/sources", minLevel: 2 },
-        { label: t("app.menu.users"), path: "/users", minLevel: 2 },
-        { label: t("app.menu.tools"), path: "/tools", minLevel: 3 },
-        { label: t("app.menu.settings"), path: "/settings", minLevel: 3 },
+        { label: t("app.menu.files"), path: "/files", minLevel: 1, perm: "manage_files" },
+        { label: t("app.menu.sources"), path: "/sources", minLevel: 1, perm: "manage_sources" },
+        { label: t("app.menu.users"), path: "/users", minLevel: 1, perm: "manage_users" },
+        // Tools hosts the Subsonic sync (clone-to-self), which every non-guest
+        // may use; admin-only tools inside gate themselves individually.
+        { label: t("app.menu.tools"), path: "/tools", minLevel: 1 },
       ],
     },
     {
       label: t("app.groups.help"),
       items: [
+        { label: t("app.menu.settings"), path: "/settings", minLevel: 0 },
         { label: t("app.menu.about"), path: "/about", minLevel: 0 },
       ],
     },
   ];
   return defs
-    .map((g) => ({ ...g, items: g.items.filter((i) => level.value >= i.minLevel) }))
+    .map((g) => ({ ...g, items: g.items.filter((i) => level.value >= i.minLevel && permitted(i.perm)) }))
     .filter((g) => g.items.length > 0);
 });
 
@@ -172,7 +188,7 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
 
       <!-- right: user -->
       <div class="nav-user">
-        <span class="nav-username">{{ username }}</span>
+        <span class="nav-username">{{ displayName }}</span>
         <span class="status-badge" :class="level >= 3 ? 'warning' : level >= 2 ? 'info' : 'muted'">{{ levelLabel }}</span>
         <button class="btn-secondary btn-sm" @click="doLogout">{{ t("app.logout") }}</button>
       </div>
@@ -327,7 +343,7 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   position: fixed;
   top: calc(var(--nav-h) + 0.75rem);
   left: calc(var(--sidebar-w) + 1.75rem);
-  z-index: 220;
+  z-index: 130;
   display: none;
   align-items: center;
   justify-content: center;
@@ -371,6 +387,7 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
   padding: 1.25rem 0.9rem;
   display: flex;
   flex-direction: column;
@@ -413,6 +430,7 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   inset: 0;
   z-index: 140;
   background: var(--color-bg-overlay);
+  touch-action: none;
 }
 
 /* Reserved space at the bottom of the sidebar flex column, sized from the

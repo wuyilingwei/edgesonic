@@ -28,9 +28,36 @@
 import { Hono } from "hono";
 import { permissionMiddleware, sha256 } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
+import { ensureNicknameColumn } from "../../utils/schema_patch";
 import type { User } from "../../types/entities";
 
 export const usersRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
+
+// Self-service profile edit — any signed-in non-guest may set their own
+// display name. Avatar (setAvatar) and password (subsonic changePassword)
+// already have self-service paths; this covers the nickname. An empty value
+// clears it, falling back to the username at read time.
+usersRoutes.post("/users/updateSelf", async (c) => {
+  const caller = c.get("user");
+  if (caller.level < 1) {
+    return c.json({ ok: false, error: "Guests cannot edit their profile" }, 403);
+  }
+  const body = await c.req.json<{ nickname?: string | null }>().catch(() => null);
+  if (!body || typeof body.nickname === "undefined") {
+    return c.json({ ok: false, error: "Missing nickname" }, 400);
+  }
+  let nickname: string | null = typeof body.nickname === "string" ? body.nickname.trim() : null;
+  if (nickname !== null && nickname.length === 0) nickname = null;
+  if (nickname !== null && nickname.length > 64) {
+    return c.json({ ok: false, error: "Nickname too long" }, 400);
+  }
+  await ensureNicknameColumn(c.env);
+  await c.env.DB
+    .prepare("UPDATE users SET nickname = ?, updated_at = ? WHERE username = ?")
+    .bind(nickname, Math.floor(Date.now() / 1000), caller.username)
+    .run();
+  return c.json({ ok: true, nickname });
+});
 
 usersRoutes.get("/users/list", permissionMiddleware("manage_users"), async (c) => {
   const db = c.env.DB;
