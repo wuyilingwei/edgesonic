@@ -52,6 +52,8 @@ export interface SongMaster {
   participants: string | null;
   // external fetch the first time /rest/getLyrics(BySongId) sees an empty row.
   lyrics: string | null;
+  // JSON-serialized RichLyrics payload (cueLine/cue/agents) for songLyrics v2.
+  lyrics_rich: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -75,6 +77,7 @@ export interface SongInstance {
   size: number | null;
   missing: number;
   expires_at: number | null;
+  last_accessed_at: number | null;
   created_at: number;
   updated_at: number;
 }

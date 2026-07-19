@@ -127,3 +127,13 @@ setTimeout(() => {
     void checkVersion();
   }, VERSION_POLL_INTERVAL_MS);
 }, VERSION_FIRST_PROBE_DELAY_MS);
+
+// PWA service worker — only in production (served from same origin with a
+// real bundle). Vite dev server would conflict with the SW cache strategy.
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("./sw.js", { scope: "./" })
+      .catch((err) => console.warn("[PWA] service worker registration failed:", err));
+  });
+}

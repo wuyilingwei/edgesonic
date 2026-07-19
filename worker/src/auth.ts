@@ -26,6 +26,7 @@ export type AuthMethod = "session" | "subsonic_cred" | "apikey" | "guest";
 export const SESSION_COOKIE = "edgesonic_session";
 export const SESSION_TTL_SEC = 7 * 24 * 60 * 60; // 7 days
 export const SESSION_RENEW_THRESHOLD_SEC = 3 * 24 * 60 * 60; // renew when < 3 days left
+export const GUEST_USERNAME = "guest";
 
 function parseSessionCookie(cookieHeader: string): string | null {
   for (const part of cookieHeader.split(";")) {
@@ -91,6 +92,7 @@ const NO_AUTH_PATHS = new Set([
   // for every other request, so it has to live outside the auth filter.
   "/edgesonic/auth/login",
   "/edgesonic/auth/logout",
+  "/edgesonic/auth/guest",
   // build version and isolate start time (non-sensitive); the SPA polls it
   // every 5 minutes including AFTER the session has expired so the "refresh
   // me" banner still appears on stale tabs.
@@ -113,6 +115,7 @@ const GUEST_ALLOWED_PATHS = new Set([
   // clients to call. External fetch fallback only writes to D1, never to files.
   "/rest/getLyrics",
   "/rest/getLyricsBySongId",
+  "/edgesonic/auth/me",
 ]);
 
 // Inside /rest/* there are still a handful of endpoints that must reject
@@ -365,6 +368,9 @@ export const authMiddleware = createMiddleware<{
   if (!user || !user.enabled) {
     return authFail(40, "Wrong username or password", 401);
   }
+  if (user.level === 0 && user.username !== GUEST_USERNAME) {
+    return authFail(40, "Wrong username or password", 401);
+  }
 
   // --- Authenticate (records which credential type succeeded) ---
   let authMethod: AuthMethod | null = null;
@@ -422,10 +428,7 @@ export const authMiddleware = createMiddleware<{
         return authFail(50, "Guest access denied or token expired", 403);
       }
     } else if (GUEST_ALLOWED_PATHS.has(path)) {
-      const guestPerm = await db
-        .prepare("SELECT enabled FROM user_permissions WHERE level = 0 AND permission = 'browse'")
-        .first<{ enabled: number }>();
-      if (!guestPerm || !guestPerm.enabled) {
+      if (!(await hasPermission(c.env, user, "browse"))) {
         return authFail(50, "Guest access is disabled", 403);
       }
     } else {

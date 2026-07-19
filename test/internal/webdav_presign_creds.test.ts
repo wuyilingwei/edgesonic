@@ -69,6 +69,7 @@ function buildDb() {
       root_path TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT 'us-east-1',
       last_sync INTEGER, enabled INTEGER DEFAULT 1,
       mode TEXT NOT NULL DEFAULT 'library',
+      cache_tier TEXT NOT NULL DEFAULT 'off',
       created_at INTEGER DEFAULT (unixepoch()), updated_at INTEGER DEFAULT (unixepoch())
     );
     CREATE TABLE user_permissions (
@@ -82,7 +83,13 @@ function buildDb() {
     -- footprint; empty is fine, the query just needs the table to exist.
     CREATE TABLE song_instances (
       id TEXT PRIMARY KEY, source_id TEXT, size INTEGER DEFAULT 0,
-      missing INTEGER DEFAULT 0
+      missing INTEGER DEFAULT 0, source_type TEXT, parent_instance_id TEXT
+    );
+    -- /sources/list resolves cache tier budgets via feature_strings
+    -- even when nothing's configured yet (resolveTierConfig still queries it).
+    CREATE TABLE feature_strings (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', description TEXT,
+      updated_at INTEGER DEFAULT 0
     );
 
     INSERT INTO storage_sources (id, type, name, base_url, username, password, root_path, enabled)

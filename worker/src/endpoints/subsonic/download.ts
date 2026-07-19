@@ -116,7 +116,14 @@ const downloadHandler = async (c: Context): Promise<Response> => {
   applyPrivateCache(headers, AUDIO_MAX_AGE_SEC, etag);
   // Only a full response may 304 here; a range request needs its own bytes.
   if (result.statusCode === 200 && etagMatches(c, etag)) {
-    return new Response(null, { status: 304, headers });
+    // 304 must not carry body-descriptor headers (Content-Length / Content-Range
+    // / Content-Type). Browsers reject or hang on a 304 advertising bytes that
+    // never arrive. Rebuild a clean header set with only validators + cache.
+    const notModified = new Headers();
+    notModified.set("Cache-Control", headers.get("Cache-Control") || `private, max-age=${AUDIO_MAX_AGE_SEC}`);
+    notModified.set("ETag", etag);
+    notModified.set("Accept-Ranges", "bytes");
+    return new Response(null, { status: 304, headers: notModified });
   }
 
   return new Response(result.body, { status: result.statusCode, headers });

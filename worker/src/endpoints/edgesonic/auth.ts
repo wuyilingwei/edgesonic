@@ -17,10 +17,10 @@
 // runs *before* the global authMiddleware (it issues the session token used by
 // every other endpoint in /tag /storage /edgesonic).
 import { Hono } from "hono";
-import { permissionMiddleware, subsonicError, sha256, SESSION_TTL_SEC, buildSessionCookieHeader } from "../../auth";
+import { permissionMiddleware, subsonicError, sha256, SESSION_TTL_SEC, buildSessionCookieHeader, GUEST_USERNAME } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
 import { recoverCronIfStale } from "../../utils/cronRecovery";
-import { getEffectivePermissions } from "../../utils/permissions";
+import { getEffectivePermissions, hasPermission } from "../../utils/permissions";
 import { ensureNicknameColumn } from "../../utils/schema_patch";
 import type { User } from "../../types/entities";
 
@@ -59,6 +59,9 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
     .bind(username)
     .first<{ username: string; password: string; level: number; enabled: number }>();
   if (!user || !user.enabled) {
+    return c.json({ ok: false, error: "Invalid credentials" }, 401);
+  }
+  if (user.level === 0 && user.username !== GUEST_USERNAME) {
     return c.json({ ok: false, error: "Invalid credentials" }, 401);
   }
 
@@ -115,6 +118,39 @@ webLoginRoutes.post("/edgesonic/auth/login", async (c) => {
     },
     200,
   );
+});
+
+webLoginRoutes.get("/edgesonic/auth/guest", async (c) => {
+  const user = await c.env.DB
+    .prepare("SELECT username, level, enabled FROM users WHERE username = ? AND level = 0 AND enabled = 1")
+    .bind(GUEST_USERNAME)
+    .first<{ username: string; level: number; enabled: number }>();
+  return c.json({ ok: true, enabled: !!user && await hasPermission(c.env, user, "browse") });
+});
+
+webLoginRoutes.post("/edgesonic/auth/guest", async (c) => {
+  const db = c.env.DB;
+  const user = await db
+    .prepare("SELECT username, level, enabled FROM users WHERE username = ? AND level = 0 AND enabled = 1")
+    .bind(GUEST_USERNAME)
+    .first<{ username: string; level: number; enabled: number }>();
+  if (!user || !(await hasPermission(c.env, user, "browse"))) {
+    return c.json({ ok: false, error: "Guest access is disabled" }, 403);
+  }
+
+  const sessionId = crypto.randomUUID();
+  const sessionToken = crypto.randomUUID().replace(/-/g, "");
+  const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SEC;
+  await db
+    .prepare(
+      "INSERT INTO sessions (id, username, token, user_agent, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)"
+    )
+    .bind(sessionId, user.username, sessionToken, c.req.header("User-Agent") || "", expiresAt, Math.floor(Date.now() / 1000))
+    .run();
+
+  const isHttps = new URL(c.req.url).protocol === "https:";
+  c.header("Set-Cookie", buildSessionCookieHeader(sessionToken, SESSION_TTL_SEC) + (isHttps ? "; Secure" : ""));
+  return c.json({ ok: true, username: user.username, level: user.level, expiresAt });
 });
 
 webLoginRoutes.post("/edgesonic/auth/logout", async (c) => {
@@ -363,8 +399,18 @@ edgesonicAuthRoutes.post("/auth/guestToken", permissionMiddleware("manage_users"
   const body = await c.req.json<{ expiresIn?: number }>();
   const db = c.env.DB;
   const user = c.get("user");
+  // Cap lifetime at 30 days. A missing/undefined expiresIn falls back to the
+  // 1-day default; an explicit zero/negative is rejected; anything above the
+  // cap is clamped so a fat-fingered `expiresIn: 31536000` can't mint a token
+  // that effectively never expires.
+  const MAX_GUEST_TOKEN_TTL_SEC = 30 * 24 * 60 * 60;
+  const requestedTtl = typeof body.expiresIn === "number" ? body.expiresIn : 86400;
+  if (!Number.isFinite(requestedTtl) || requestedTtl <= 0) {
+    return c.json({ ok: false, error: "expiresIn must be a positive number of seconds" }, 400);
+  }
+  const ttlSec = Math.min(Math.floor(requestedTtl), MAX_GUEST_TOKEN_TTL_SEC);
   const token = crypto.randomUUID();
-  const expiresAt = Math.floor(Date.now() / 1000) + (body.expiresIn || 86400);
+  const expiresAt = Math.floor(Date.now() / 1000) + ttlSec;
 
   await db.prepare(
     "INSERT INTO guest_tokens (token, created_by, expires_at, created_at) VALUES (?, ?, ?, ?)"
@@ -382,4 +428,3 @@ edgesonicAuthRoutes.post("/auth/guestToken", permissionMiddleware("manage_users"
     200, XML,
   );
 });
-

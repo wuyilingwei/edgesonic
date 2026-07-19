@@ -157,6 +157,25 @@ export function useAuth() {
     return { ok: false, error: data.error || "Login failed" };
   }
 
+  async function guestLogin(): Promise<LoginResult> {
+    const resp = await fetch(`${EDGESONIC_BASE}/auth/guest`, {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      token.value = "1";
+      username.value = data.username;
+      level.value = data.level;
+      localStorage.setItem("edgesonic_logged_in", "1");
+      localStorage.setItem("edgesonic_user", data.username);
+      localStorage.setItem("edgesonic_level", String(data.level));
+      await fetchMe();
+      return { ok: true, name: data.username, level: data.level };
+    }
+    return { ok: false, error: data.error || "Guest login failed" };
+  }
+
   async function logout() {
     token.value = ""; username.value = ""; level.value = 0;
     permissions.value = {}; nickname.value = ""; avatarKey.value = "";
@@ -496,7 +515,7 @@ export function useAuth() {
   return { token, username, level, salt, isLoggedIn, isAdmin, isSuperAdmin, isGuest, isUser,
     permissions, hasPerm, nickname, avatarKey, displayName,
     fetchMe, updateNickname, changeOwnPassword, updateOwnAvatar,
-    login, logout, handleAuthError, authFetch, authPost, uploadFile, crossCopy, makeSalt, md5,
+    login, guestLogin, logout, handleAuthError, authFetch, authPost, uploadFile, crossCopy, makeSalt, md5,
     tagFetch, tagPost, storageFetch, storagePost, edgesonicFetch, edgesonicPost,
     readTags, writeTags, batchWriteTags, rescanSongs, submitMetadata, tidyFolder,
     signedParams, restUrl, streamUrl, coverArtUrl, downloadUrl };

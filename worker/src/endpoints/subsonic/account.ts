@@ -48,6 +48,15 @@ const changePasswordHandler = async (c: import("hono").Context<{ Bindings: Env; 
   const isSelf = caller.username === username;
   // by /edgesonic/users/{create,update,delete}). Pre-087 used a hardcoded
   // `caller.level < 3` which violated the permission-model rule.
+  // Guests (level 0) are blocked from self-profile edits entirely — they
+  // cannot change their own password, set their own avatar, or edit their
+  // own nickname (see users.ts setAvatar / updateSelf for the matching
+  // guards). A signed-in guest can only stream/browse.
+  if (isSelf && caller.level < 1) {
+    return c.text(subsonicError(50, "Guests cannot edit their profile"), 403, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
   if (!isSelf) {
     const canManage = await hasPermission(c.env, caller, "manage_users");
     if (!canManage) {

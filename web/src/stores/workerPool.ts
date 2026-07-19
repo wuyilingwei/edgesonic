@@ -15,7 +15,7 @@
 
 // ---------------------------------------------------------------------------
 // The store is registered on app start (main.ts). Whenever the page is
-// visible AND `enabled` is true AND the user has level ≥ 2, we hit
+// visible AND `enabled` is true AND the user holds participate_work, we hit
 // /edgesonic/work/poll every `pollIntervalMs` (default 5 min) and drain the
 // returned tasks via the Web Worker entry in workers/taskExecutor.ts.
 //
@@ -133,7 +133,7 @@ export function nextConcurrency(
 }
 
 export const useWorkerPool = defineStore("workerPool", () => {
-  const { level, edgesonicFetch, edgesonicPost, restUrl } = useAuth();
+  const { hasPerm, edgesonicFetch, edgesonicPost, restUrl } = useAuth();
 
   // --- reactive state ---
   // Opt-in (default off): only enabled once the user explicitly turns it on;
@@ -326,10 +326,12 @@ export const useWorkerPool = defineStore("workerPool", () => {
     return c;
   });
 
-  // Only level ≥ 2 may participate. Lower levels get the toggle disabled in
-  // Settings, but we double-check here in case someone localStorage-hacks the
-  // flag — the server permission check (participate_work) is the real gate.
-  const eligible = computed(() => level.value >= 2);
+  // Gated by the participate_work permission (level 1 "user" and up have it
+  // by default; only guests are denied — see Schema.sql's permission seed).
+  // Users without it get the toggle disabled in Tools.vue, but we
+  // double-check here in case someone localStorage-hacks the flag — the
+  // server permission check on /work/poll is the real, authoritative gate.
+  const eligible = computed(() => hasPerm("participate_work"));
 
   // --- internal state ---
   let draining = false;

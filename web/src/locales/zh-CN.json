@@ -50,6 +50,7 @@
     "username": "用户名",
     "password": "密码",
     "submit": "登录",
+    "guest": "以访客身份登录",
     "submitting": "登录中…",
     "failed": "登录失败"
   },
@@ -488,17 +489,57 @@
         "saveFailed": "保存失败"
       },
       "lastfm": {
-        "title": "Last.fm 代理",
-        "desc": "可选功能。粘贴 Last.fm API 密钥以启用 getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs。留空则这些接口返回 Subsonic 错误码 30（未支持），其余功能不受影响。",
-        "label": "API Key",
-        "placeholder": "32 位 Last.fm API 密钥",
-        "setStatus": "已设置",
+        "title": "Last.fm",
+        "userDesc": "关联你的 Last.fm 账号以读取个人播放历史、收藏曲目与热门曲目。需要你自己填入 Last.fm API Key（下方）加上你的 Last.fm 用户名——和系统级 Key 完全隔离，不会共用。只读——不支持 scrobble / love。",
+        "userApiKeyDesc": "上面这些个人读取项（近期/收藏/热门曲目、资料）需要这个 Key 才能用。和系统级 Key 完全隔离——留空就是留空，不会回落到系统级 Key。",
+        "apiKeyLabel": "API Key",
+        "apiKeyField": "API Key",
+        "apiKeyPlaceholder": "32 位 Last.fm API Key",
+        "apiKeySaved": "Last.fm API Key 已保存",
+        "apiKeyCleared": "Last.fm API Key 已清除",
+        "systemTitle": "Last.fm（系统级）",
+        "systemDesc": "全用户共享的 API Key。只用于 Subsonic getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs——和上面的用户级 Key 完全隔离，不会被用于任何用户的个人近期/收藏/热门曲目。留空则 last.fm 不再作为艺人信息来源，album/similar/topSongs 端点也会禁用（Subsonic 返回错误码 30）。",
+        "usernameLabel": "Last.fm 用户名",
+        "usernamePlaceholder": "你的 Last.fm 账号名",
+        "usernameSaved": "Last.fm 用户名已保存",
+        "usernameCleared": "Last.fm 用户名已清除",
+        "systemKeySaved": "Last.fm API Key 已保存",
+        "systemKeyCleared": "Last.fm API Key 已清除",
+        "fallbackTitle": "艺人信息来源",
+        "fallbackDesc": "艺人简介/封面从哪里来，按下面的顺序从上到下依次尝试，命中就停。Last.fm 默认不是主要来源——CN 源（网易云/QQ音乐）对 CN 歌手覆盖率通常好得多，默认排在前面；last.fm 仍然可用，只是默认排最后，可以自己调整顺序。每个源可单独开关，用箭头调整优先级。CN 源仅高置信度匹配（搜索结果名称必须与查询歌手名一致）。",
+        "fallbackSaved": "艺人信息来源优先级已保存",
+        "scrapeIntervalTitle": "自动补全节奏",
+        "scrapeIntervalDesc": "Cron 定期扫描缺少传记/封面的歌手，从已启用的 CN 源补全，这样 getArtistInfo 热路径无需临时刮刮。",
+        "scrapeIntervalField": "间隔（小时）",
+        "scrapeIntervalHint": "0 = 关闭；1 = 每次 cron tick；N>1 = 每 N 小时。默认 24。",
+        "scrapeIntervalSaved": "补全节奏已保存",
+        "fullStatus": "就绪",
+        "partialStatus": "部分",
         "unsetStatus": "未设置",
-        "save": "保存密钥",
+        "setStatus": "已设置",
+        "save": "保存",
         "clear": "清除",
-        "saved": "Last.fm 密钥已保存",
-        "cleared": "Last.fm 密钥已清除",
         "saveFailed": "保存失败"
+      },
+      "sync": {
+        "title": "对端同步",
+        "desc": "将收藏和歌单镜像到另一台 Subsonic 兼容服务器。出站立即推送，入站每小时拉取一次。按曲名 + 艺术家匹配，双方 ID 无需一致。",
+        "url": "对端地址",
+        "username": "用户名",
+        "password": "密码",
+        "passwordKept": "已保存 — 重新输入以替换",
+        "on": "已开启",
+        "off": "已关闭",
+        "saved": "已保存",
+        "saveFailed": "保存失败",
+        "scope": {
+          "title": "同步的歌单范围",
+          "desc": "选择哪些歌单会镜像到对端。两端选择相同范围可形成干净的双向镜像；否则各端按各自配置独立过滤。",
+          "own": "仅自己拥有的",
+          "ownPublic": "自己 + 公开",
+          "custom": "按名称自定义",
+          "customPlaceholder": "歌单名称，逗号分隔"
+        }
       },
       "scan": {
         "title": "扫描设置",
@@ -741,7 +782,12 @@
       "title": "用户"
     },
     "system": {
-      "title": "系统"
+      "title": "系统",
+      "subMedia": "媒体处理与扫描",
+      "subIntegrations": "系统集成",
+      "subLastfm": "Last.fm",
+      "subWorkers": "浏览器工作池",
+      "subFeatureFlags": "功能开关"
     },
     "audioCache": {
       "title": "音频缓存",
@@ -791,6 +837,7 @@
         "edit_tags": "编辑标签",
         "manage_files": "管理文件",
         "manage_sources": "管理存储源",
+        "manage_credentials": "签发凭据",
         "manage_users": "管理用户",
         "manage_settings": "系统设置",
         "maintenance_cleanup": "维护清理",
@@ -896,6 +943,14 @@
       "library": "入库模式（扫描时索引）",
       "syncOnly": "仅同步",
       "hint": "仅同步模式不会将文件索引到媒体库，适合用作跨源复制的目标存储。"
+    },
+    "cacheTier": {
+      "label": "缓存档位",
+      "off": "关闭",
+      "standard": "标准",
+      "extended": "扩展",
+      "usage": "已缓存",
+      "hint": "首次播放时把文件拷贝到 R2，之后重播更快。标准＝小预算、保留较久；扩展＝更大预算和单文件上限，但 TTL 较短——不适合长期存储。空间不够时会自动淘汰旧缓存为新歌腾地方。"
     },
     "scanStatus": {
       "idle": "扫描",

@@ -252,9 +252,25 @@ export const usePlayerStore = defineStore("player", () => {
     // one HTTP cache entry. /rest/download is a different URL and would always
     // cost a separate transfer. Letting the browser cache also means a replay
     // or a seek can be served locally instead of re-fetching the whole file.
+    //
+    // Each attempt gets its own timeout. A presign 302 whose cached Location
+    // expired can hang the fetch indefinitely; without a timeout the
+    // background-download slot leaks and the next-track preload starves.
+    const ATTEMPT_TIMEOUT_MS = 60_000;
     for (const [label, url] of [["stream-full", streamUrl(trackId)], ["download-full", downloadUrl(trackId)]] as const) {
+      const attemptController = new AbortController();
+      const timer = setTimeout(() => attemptController.abort(), ATTEMPT_TIMEOUT_MS);
+      // Tie the attempt to the caller's signal so a skip/track change still
+      // cancels immediately, even mid-timeout.
+      const onAbort = () => attemptController.abort();
+      signal?.addEventListener("abort", onAbort, { once: true });
       try {
-        const resp = await fetch(url, { credentials: "same-origin", signal });
+        const resp = await fetch(url, {
+          credentials: "same-origin",
+          signal: attemptController.signal,
+          // Keep redirects followable so 302 to R2 still works; the timeout
+          // above bounds the worst case.
+        });
         if (!resp.ok) throw new Error(`fallback fetch failed: ${resp.status}`);
         const blob = await resp.blob();
         await logFallbackBlob(label, resp, blob);
@@ -262,6 +278,9 @@ export const usePlayerStore = defineStore("player", () => {
       } catch (e) {
         if (signal?.aborted) throw e;
         lastError = e;
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
       }
     }
     throw lastError ?? new Error("fallback fetch failed");

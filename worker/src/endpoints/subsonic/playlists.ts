@@ -19,6 +19,7 @@ import { subsonicOK } from "../../utils/xml";
 import { mapPlaylist, mapPlaylistDetail } from "../../types/subsonic";
 import { permissionMiddleware, subsonicError } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
+import { pushPlaylistUpsert, pushPlaylistDeleted } from "../../utils/peerSync";
 import type { User } from "../../types/entities";
 
 export const playlistsRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
@@ -157,6 +158,9 @@ const createPlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
     if (name) {
       await queries.updatePlaylistMeta(playlistId, { name });
     }
+    if (existing.owner === user.username) {
+      c.executionCtx.waitUntil(pushPlaylistUpsert(c.env.DB, user.username, playlistId).catch(() => {}));
+    }
     const updated = await queries.getPlaylistById(playlistId);
     const songs = await queries.getPlaylistSongs(playlistId);
     if (!updated) return c.text(subsonicError(70, "Playlist not found"), 404, XML);
@@ -178,6 +182,7 @@ const createPlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
 
   const newId = crypto.randomUUID().substring(0, 12);
   await queries.createPlaylist({ id: newId, name, owner: user.username, songIds });
+  c.executionCtx.waitUntil(pushPlaylistUpsert(c.env.DB, user.username, newId).catch(() => {}));
   const created = await queries.getPlaylistById(newId);
   if (!created) return c.text(subsonicError(0, "Playlist creation failed"), 500, XML);
   const songs = await queries.getPlaylistSongs(newId);
@@ -232,6 +237,10 @@ const updatePlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
     await queries.addSongsToPlaylist(playlistId, songIdsToAdd);
   }
 
+  if (existing.owner === user.username) {
+    c.executionCtx.waitUntil(pushPlaylistUpsert(c.env.DB, user.username, playlistId).catch(() => {}));
+  }
+
   return c.text(subsonicOK({}), 200, XML);
 };
 
@@ -254,6 +263,17 @@ const deletePlaylistHandler = async (c: import("hono").Context<{ Bindings: Env; 
   }
 
   await queries.deletePlaylist(id);
+  // Outbound peer sync: pass through the playlist's pre-deletion owner/public
+  // so the scope filter (252 Phase 7) decides whether to propagate.
+  {
+    const ownerIsLocalUser = existing.owner === user.username;
+    const wasPublic = existing.public === 1;
+    if (ownerIsLocalUser || wasPublic) {
+      c.executionCtx.waitUntil(
+        pushPlaylistDeleted(c.env.DB, user.username, existing.name, ownerIsLocalUser, wasPublic).catch(() => {}),
+      );
+    }
+  }
   return c.text(subsonicOK({}), 200, XML);
 };
 

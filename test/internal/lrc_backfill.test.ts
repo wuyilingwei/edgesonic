@@ -20,7 +20,9 @@
 //      in the (mocked) R2 bucket.
 //   2. A candidate with no sidecar stays a candidate (lyrics still empty,
 //      counted in `candidates` but not `filled`).
-//   3. Songs that already have lyrics are excluded from selection entirely.
+//   3. Songs that already have plain lyrics but no lyrics_rich are still
+//      selected (for the rich-lyrics pass) but their `lyrics` column is
+//      left untouched.
 //   4. Instances with source_type != 'original' (cached/transcoded) are
 //      excluded — their storage_uri points at a synthetic cache path with no
 //      meaningful sibling file.
@@ -77,7 +79,7 @@ function buildDb(): DatabaseSync {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(`
     CREATE TABLE song_masters (
-      id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', lyrics TEXT,
+      id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', lyrics TEXT, lyrics_rich TEXT,
       updated_at INTEGER DEFAULT 0
     );
     CREATE TABLE song_instances (
@@ -101,7 +103,8 @@ function buildDb(): DatabaseSync {
     INSERT INTO song_instances (id, master_id, storage_uri, source_type)
       VALUES ('si-2', 'sm-2', 'r2://music/Artist/Album/02 No Sidecar.flac', 'original');
 
-    -- sm-3: already has lyrics → excluded from selection entirely.
+    -- sm-3: already has plain lyrics but no lyrics_rich → still selected
+    -- (rich-lyrics pass), but its 'lyrics' column must stay untouched.
     INSERT INTO song_masters (id, title, lyrics) VALUES ('sm-3', 'Already Has Lyrics', 'la la la');
     INSERT INTO song_instances (id, master_id, storage_uri, source_type)
       VALUES ('si-3', 'sm-3', 'r2://music/Artist/Album/03 Already Has Lyrics.flac', 'original');
@@ -166,7 +169,9 @@ async function main() {
     const result = await runLrcBackfill(env.DB as any, env as any);
     // sm-4 is excluded by the SQL WHERE (source_type='original') before we
     // ever get to fetchLrcSidecar, so it never counts as a candidate at all.
-    assert(result.candidates === 2, `2 candidates selected (sm-1, sm-2) — got ${result.candidates}`);
+    // sm-3 IS selected despite already having plain lyrics — it still lacks
+    // lyrics_rich, and the WHERE clause ORs the two conditions together.
+    assert(result.candidates === 3, `3 candidates selected (sm-1, sm-2, sm-3) — got ${result.candidates}`);
     assert(result.filled === 1, `1 filled (sm-1 only) — got ${result.filled}`);
 
     const sm1 = sqlite.prepare("SELECT lyrics FROM song_masters WHERE id = 'sm-1'").get() as { lyrics: string };
@@ -176,7 +181,7 @@ async function main() {
     assert(sm2.lyrics === null, "sm-2 lyrics still null (no sidecar found)");
 
     const sm3 = sqlite.prepare("SELECT lyrics FROM song_masters WHERE id = 'sm-3'").get() as { lyrics: string };
-    assert(sm3.lyrics === "la la la", "sm-3 untouched (already had lyrics, never selected)");
+    assert(sm3.lyrics === "la la la", "sm-3 lyrics untouched (already set, guarded by WHERE on UPDATE)");
 
     const sm4 = sqlite.prepare("SELECT lyrics FROM song_masters WHERE id = 'sm-4'").get() as { lyrics: string | null };
     assert(sm4.lyrics === null, "sm-4 lyrics still null (cached instance excluded by source_type filter)");

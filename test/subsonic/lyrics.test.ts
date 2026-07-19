@@ -93,6 +93,7 @@ function buildDb() {
       compilation INTEGER DEFAULT 0,
       participants TEXT,
       lyrics TEXT,
+      lyrics_rich TEXT,
       created_at INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT 0
     );
@@ -101,6 +102,13 @@ function buildDb() {
       id TEXT PRIMARY KEY, master_id TEXT NOT NULL, storage_uri TEXT NOT NULL DEFAULT '',
       suffix TEXT DEFAULT '', content_type TEXT, bit_rate INTEGER, size INTEGER,
       duration INTEGER, missing INTEGER DEFAULT 0
+    );
+    -- 0259 -- song_artists table for getSongMaster's SONG_ROW_COLS JOIN
+    CREATE TABLE song_artists (
+      song_id TEXT NOT NULL,
+      artist_id TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (song_id, artist_id)
     );
     CREATE TABLE albums (
       id TEXT PRIMARY KEY,
@@ -284,6 +292,98 @@ async function main() {
     const { get } = makeApp(sqlite);
     const r = await get("/rest/getLyricsBySongId");
     assert(r.status === 400, `400 (got ${r.status})`);
+  }
+
+  console.log("\ngetLyricsBySongId — pre-populated lyrics_rich + enhanced=true → cueLine:");
+  {
+    fetchCalls = [];
+    fetchHandler = () => new Response("UNEXPECTED", { status: 500 });
+    const sqlite = buildDb();
+    const richJson = JSON.stringify({
+      tracks: [
+        {
+          kind: "main",
+          lang: "ko",
+          synced: true,
+          line: [
+            { start: 1000, value: "Hello" },
+            { start: 2000, value: "world" },
+          ],
+          cueLine: [
+            {
+              index: 0,
+              start: 1000,
+              end: 2000,
+              value: "Hello",
+              cue: [
+                { start: 1000, end: 1500, value: "Hel", byteStart: 0, byteEnd: 3 },
+                { start: 1500, end: 2000, value: "lo", byteStart: 3, byteEnd: 5 },
+              ],
+            },
+          ],
+          agents: [],
+        },
+        {
+          kind: "translation",
+          lang: "en",
+          synced: true,
+          line: [
+            { start: 1000, value: "Hi" },
+            { start: 2000, value: "world" },
+          ],
+          cueLine: [],
+          agents: [],
+        },
+      ],
+    });
+    sqlite.prepare("UPDATE song_masters SET lyrics_rich = ? WHERE id = 'sg-1'")
+      .run(richJson);
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getLyricsBySongId?id=sg-1&enhanced=true");
+    assert(r.status === 200, `200 (got ${r.status})`);
+    const xml = await r.text();
+    assert(xml.includes("<cueLine"), "cueLine element present");
+    assert(xml.includes("<cue "), "cue element present");
+    assert(xml.includes('byteStart="0"'), "byteStart attr");
+    assert(xml.includes('kind="translation"'), "translation kind attr");
+    assert(xml.includes('lang="ko"'), "main lang=ko");
+    assert(xml.includes('lang="en"'), "translation lang=en");
+    assert(fetchCalls.length === 0, "did NOT hit external fetch (lyrics_rich populated)");
+  }
+
+  console.log("\ngetLyricsBySongId — v1 (no enhanced) strips cueLine/kind:");
+  {
+    fetchCalls = [];
+    fetchHandler = () => new Response("UNEXPECTED", { status: 500 });
+    const sqlite = buildDb();
+    const richJson = JSON.stringify({
+      tracks: [
+        {
+          kind: "main",
+          lang: "ko",
+          synced: true,
+          line: [{ start: 1000, value: "Hello" }],
+          cueLine: [
+            {
+              index: 0, start: 1000, end: 2000, value: "Hello",
+              cue: [{ start: 1000, end: 1500, value: "Hel", byteStart: 0, byteEnd: 3 }],
+            },
+          ],
+          agents: [],
+        },
+      ],
+    });
+    sqlite.prepare("UPDATE song_masters SET lyrics_rich = ? WHERE id = 'sg-1'")
+      .run(richJson);
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getLyricsBySongId?id=sg-1");
+    assert(r.status === 200, `200 (got ${r.status})`);
+    const xml = await r.text();
+    assert(!xml.includes("<cueLine"), "no cueLine in v1 response");
+    assert(!xml.includes("<cue "), "no cue in v1 response");
+    assert(!xml.includes('kind="main"'), "no kind attr in v1 response (main is omitted)");
+    assert(xml.includes("<line"), "line element still present");
+    assert(xml.includes("Hello"), "line text still present");
   }
 
   restoreFetch();

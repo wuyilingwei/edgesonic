@@ -208,24 +208,8 @@ jobs:
             --var WORKER_VERSION:"${VERSION}" \
             --var EDGESONIC_VERSION:"${VERSION}" \
             --var EDGESONIC_BUILD_TIME:"${BUILD_TIME}"
-
-      - name: Restore cron schedule
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
-          CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
-          WORKER_NAME: ${{ inputs.worker_name }}
+      - name: Cron restore reminder
         run: |
-          # wrangler deploy clears all cron triggers — PUT the default back immediately.
-          CRON_EXPR="0 */1 * * *"
-          CF_RESP=$(curl -s -X PUT \
-            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/schedules" \
-            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-            -H "Content-Type: application/json" \
-            --data-raw "[{\"cron\":\"${CRON_EXPR}\"}]")
-          if node -e 'let body=""; process.stdin.on("data", (chunk) => body += chunk); process.stdin.on("end", () => { try { process.exit(JSON.parse(body).success ? 0 : 1); } catch { process.exit(1); } });' <<<"$CF_RESP"; then
-            echo "Cron restored: ${CRON_EXPR}"
-          else
-            echo "::error::Cron restore failed"
-            echo "$CF_RESP" | cut -c1-400
-            exit 1
-          fi
+          echo "wrangler deploy clears all cron triggers."
+          echo "After deploy, sign in and open Settings → Cloudflare → 'Ensure default cron'"
+          echo "(or GET /edgesonic/cf/ensureDefaultCron) to restore the hourly schedule."

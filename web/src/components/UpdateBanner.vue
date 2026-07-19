@@ -10,7 +10,7 @@ const banner = useUpdateBanner();
 
 <template>
   <transition name="banner-slide">
-    <div v-if="banner.available" class="update-banner" role="alert" aria-live="polite">
+    <div v-if="banner.available || banner.showStale" class="update-banner" role="alert" aria-live="polite">
       <div class="update-banner-inner">
         <div class="update-banner-text">
           <span class="update-banner-icon" aria-hidden="true">⟳</span>

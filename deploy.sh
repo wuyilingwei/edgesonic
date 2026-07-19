@@ -79,29 +79,6 @@ if [ "$VERSION_ONLY" -eq 1 ]; then
 else
   echo "▶ [部署] wrangler deploy（含 web/dist 静态资源）…"
   npx wrangler deploy --config "$CONFIG" $CONTAINERS_FLAG --var WORKER_VERSION:"$VERSION" --var EDGESONIC_VERSION:"$VERSION" --var EDGESONIC_BUILD_TIME:"$BUILD_TIME"
-
-  # wrangler deploy 会清空 Cloudflare 上的所有 cron 触发器（[triggers] 留空时 CF 认为「无计划」）。
-  # 部署完毕后立即通过 CF API 恢复默认时间表，避免每次 deploy 后都要手动点 UI。
-  # 自定义 cron 表达式：export EDGESONIC_CRON="*/30 * * * *"（默认每小时整点）。
-  CRON_EXPR="${EDGESONIC_CRON:-0 */1 * * *}"
-  ACCOUNT_ID=$(grep -m1 '^account_id' "$CONFIG" | sed 's/[^"]*"\([^"]*\)".*/\1/')
-  WORKER_NAME=$(grep -m1 '^name' "$CONFIG" | sed 's/[^"]*"\([^"]*\)".*/\1/')
-
-  if [ -n "${CLOUDFLARE_API_TOKEN:-}" ] && [ -n "$ACCOUNT_ID" ] && [ -n "$WORKER_NAME" ]; then
-    echo "▶ [Cron] 恢复 cron 触发器（${CRON_EXPR}）…"
-    CF_RESP=$(curl -s -X PUT \
-      "https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID}/workers/scripts/${WORKER_NAME}/schedules" \
-      -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-      -H "Content-Type: application/json" \
-      --data-raw "[{\"cron\":\"${CRON_EXPR}\"}]")
-    if node -e 'let body=""; process.stdin.on("data", (chunk) => body += chunk); process.stdin.on("end", () => { try { process.exit(JSON.parse(body).success ? 0 : 1); } catch { process.exit(1); } });' <<<"$CF_RESP"; then
-      echo "✓ Cron 已恢复：${CRON_EXPR}"
-    else
-      echo "✗ Cron 自动恢复失败。"
-      echo "  CF 响应：$(echo "$CF_RESP" | cut -c1-300)"
-      exit 1
-    fi
-  fi
   echo ""
   echo "✓ 完成。WORKER_VERSION=$VERSION"
 fi

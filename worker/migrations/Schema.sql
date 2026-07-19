@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS storage_sources (
   last_sync INTEGER,
   enabled INTEGER DEFAULT 1,
   mode TEXT NOT NULL DEFAULT 'library',              -- 026: 'library' | 'sync_only'
+  cache_tier TEXT NOT NULL DEFAULT 'off'             -- R2 hot-cache tier for this source's remote files
+    CHECK (cache_tier IN ('off', 'standard', 'extended')),
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );
@@ -124,154 +126,134 @@ CREATE TABLE IF NOT EXISTS user_permissions (
   PRIMARY KEY (level, permission)
 );
 
--- Level 3 (Super Admin): ALL permissions
+-- ============================================================================
+-- Default permission matrix
+-- ----------------------------------------------------------------------------
+-- Level 3 (Super Admin): always holds every permission server-side regardless
+--   of the rows below (see utils/permissions.ts hasPermission / getEffective
+--   Permissions — level 3 short-circuits to true). The rows for level 3 here
+--   are kept only for /permissions/list display parity and as a recovery
+--   fallback in case the short-circuit is ever removed.
+-- Level 2 (Admin): edit-class + baseline read/write. Cannot manage
+--   permissions, system settings, Cloudflare integration, or maintenance
+--   tooling — those stay super-admin-only.
+-- Level 1 (User): playback + download + browse + self annotations + own
+--   playlists + sharing + work-pool participation. No edit_tags, no
+--   manage_files, no delete, no upload, no user/source management.
+-- Level 0 (Guest): web-only playback. stream + browse + search only; no
+--   download, no annotations, no playlists, no shares, no credentials, no
+--   self-profile edits (avatar/nickname/password blocked server-side).
+-- ============================================================================
 INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  -- Level 3 (Super Admin): all permissions (cosmetic — short-circuited at read)
   (3, 'stream',              1, 0),
   (3, 'download',            1, 0),
   (3, 'upload',              1, 0),
+  (3, 'delete',              1, 0),
   (3, 'edit_tags',           1, 0),
+  (3, 'edit_annotations',    1, 0),
+  (3, 'manage_files',        1, 0),
+  (3, 'manage_playlists',    1, 0),
+  (3, 'manage_radio',        1, 0),
+  (3, 'manage_podcasts',     1, 0),
+  (3, 'share',               1, 0),
   (3, 'manage_sources',      1, 0),
   (3, 'manage_users',        1, 0),
-  (3, 'manage_permissions',  1, 0),
   (3, 'manage_credentials',  1, 0),
-  (3, 'manage_files',        1, 0),
+  (3, 'manage_permissions',  1, 0),
+  (3, 'manage_settings',     1, 0),
+  (3, 'manage_cloudflare',   1, 0),
+  (3, 'maintenance_cleanup', 1, 0),
+  (3, 'maintenance_reclaim', 1, 0),
+  (3, 'maintenance_reset',   1, 0),
+  (3, 'participate_work',    1, 0),
+  (3, 'dispatch_work',       1, 0),
+  (3, 'view_all_users_items',1, 0),
   (3, 'browse',              1, 0),
-  (3, 'search',              1, 0);
+  (3, 'search',              1, 0),
 
--- Level 2 (Admin): edit tags, upload, download, stream, manage sources & users
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  -- Level 2 (Admin): edit-class + baseline read/write
   (2, 'stream',              1, 0),
   (2, 'download',            1, 0),
   (2, 'upload',              1, 0),
+  (2, 'delete',              1, 0),
   (2, 'edit_tags',           1, 0),
+  (2, 'edit_annotations',    1, 0),
+  (2, 'manage_files',        1, 0),
+  (2, 'manage_playlists',    1, 0),
+  (2, 'manage_radio',        1, 0),
+  (2, 'manage_podcasts',     1, 0),
+  (2, 'share',               1, 0),
   (2, 'manage_sources',      1, 0),
   (2, 'manage_users',        1, 0),
-  (2, 'manage_permissions',  0, 0),
   (2, 'manage_credentials',  1, 0),
-  (2, 'manage_files',        1, 0),
+  (2, 'manage_permissions',  0, 0),
+  (2, 'manage_settings',     0, 0),
+  (2, 'manage_cloudflare',   0, 0),
+  (2, 'maintenance_cleanup', 0, 0),
+  (2, 'maintenance_reclaim', 0, 0),
+  (2, 'maintenance_reset',   0, 0),
+  (2, 'participate_work',    1, 0),
+  (2, 'dispatch_work',       0, 0),
+  (2, 'view_all_users_items',0, 0),
   (2, 'browse',              1, 0),
-  (2, 'search',              1, 0);
+  (2, 'search',              1, 0),
 
--- Level 1 (User): stream, download, browse, search, manage own credentials
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
+  -- Level 1 (User): playback + download + browse + self annotations + own
+  -- playlists + sharing + work-pool participation
   (1, 'stream',              1, 0),
   (1, 'download',            1, 100),
   (1, 'upload',              0, 0),
+  (1, 'delete',              0, 0),
   (1, 'edit_tags',           0, 0),
+  (1, 'edit_annotations',    1, 0),
+  (1, 'manage_files',        0, 0),
+  (1, 'manage_playlists',    1, 0),
+  (1, 'manage_radio',        0, 0),
+  (1, 'manage_podcasts',     0, 0),
+  (1, 'share',               1, 0),
   (1, 'manage_sources',      0, 0),
   (1, 'manage_users',        0, 0),
+  (1, 'manage_credentials',  0, 0),
   (1, 'manage_permissions',  0, 0),
-  (1, 'manage_credentials',  1, 0),
-  (1, 'manage_files',        0, 0),
+  (1, 'manage_settings',     0, 0),
+  (1, 'manage_cloudflare',   0, 0),
+  (1, 'maintenance_cleanup', 0, 0),
+  (1, 'maintenance_reclaim', 0, 0),
+  (1, 'maintenance_reset',  0, 0),
+  (1, 'participate_work',    1, 0),
+  (1, 'dispatch_work',       0, 0),
+  (1, 'view_all_users_items',0, 0),
   (1, 'browse',              1, 0),
-  (1, 'search',              1, 0);
+  (1, 'search',              1, 0),
 
--- Level 0 (Guest): all disabled by default
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (0, 'stream',              0, 0),
+  -- Level 0 (Guest): web-only playback
+  (0, 'stream',              1, 0),
   (0, 'download',            0, 0),
   (0, 'upload',              0, 0),
+  (0, 'delete',              0, 0),
   (0, 'edit_tags',           0, 0),
+  (0, 'edit_annotations',    0, 0),
+  (0, 'manage_files',        0, 0),
+  (0, 'manage_playlists',    0, 0),
+  (0, 'manage_radio',        0, 0),
+  (0, 'manage_podcasts',     0, 0),
+  (0, 'share',               0, 0),
   (0, 'manage_sources',      0, 0),
   (0, 'manage_users',        0, 0),
-  (0, 'manage_permissions',  0, 0),
   (0, 'manage_credentials',  0, 0),
-  (0, 'manage_files',        0, 0),
-  (0, 'browse',              0, 0),
-  (0, 'search',              0, 0);
+  (0, 'manage_permissions',  0, 0),
+  (0, 'manage_settings',     0, 0),
+  (0, 'manage_cloudflare',   0, 0),
+  (0, 'maintenance_cleanup', 0, 0),
+  (0, 'maintenance_reclaim', 0, 0),
+  (0, 'maintenance_reset',  0, 0),
+  (0, 'participate_work',    0, 0),
+  (0, 'dispatch_work',       0, 0),
+  (0, 'view_all_users_items',0, 0),
+  (0, 'browse',              1, 0),
+  (0, 'search',              1, 0);
 
--- 006: edit_annotations (star / unstar / setRating / scrobble)
-INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (0, 'edit_annotations', 0, 0),
-  (1, 'edit_annotations', 1, 0),
-  (2, 'edit_annotations', 1, 0),
-  (3, 'edit_annotations', 1, 0);
-
--- 007: manage_playlists (create/update/delete own playlists; admin can delete others)
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (3, 'manage_playlists', 1, 0),
-  (2, 'manage_playlists', 1, 0),
-  (1, 'manage_playlists', 1, 0),
-  (0, 'manage_playlists', 0, 0);
-
--- 013: manage_files (tidyFolder — L2+ enabled)
-INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (3, 'manage_files', 1, 0),
-  (2, 'manage_files', 1, 0),
-  (1, 'manage_files', 0, 0),
-  (0, 'manage_files', 0, 0);
-
--- 018: manage_radio
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (0, 'manage_radio', 0, 0),
-  (1, 'manage_radio', 0, 0),
-  (2, 'manage_radio', 1, 0),
-  (3, 'manage_radio', 1, 0);
-
--- 019: manage_podcasts
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (0, 'manage_podcasts', 0, 0),
-  (1, 'manage_podcasts', 0, 0),
-  (2, 'manage_podcasts', 1, 0),
-  (3, 'manage_podcasts', 1, 0);
-
--- 017/044: share
-INSERT OR REPLACE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (0, 'share', 0, 0),
-  (1, 'share', 1, 0),
-  (2, 'share', 1, 0),
-  (3, 'share', 1, 0);
-
--- 0021: participate_work / dispatch_work (052 browser work pool)
-INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (3, 'participate_work', 1, 0),
-  (2, 'participate_work', 1, 0),
-  (1, 'participate_work', 0, 0),
-  (0, 'participate_work', 0, 0),
-  (3, 'dispatch_work',    1, 0),
-  (2, 'dispatch_work',    0, 0),
-  (1, 'dispatch_work',    0, 0),
-  (0, 'dispatch_work',    0, 0);
-
--- 0024: 087 unified admin permissions
-INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  -- Cloudflare integration (054)
-  (3, 'manage_cloudflare',      1, NULL),
-  (2, 'manage_cloudflare',      0, NULL),
-  (1, 'manage_cloudflare',      0, NULL),
-  (0, 'manage_cloudflare',      0, NULL),
-  -- Maintenance tooling (078 / 080 / 082)
-  (3, 'maintenance_cleanup',    1, NULL),
-  (2, 'maintenance_cleanup',    0, NULL),
-  (1, 'maintenance_cleanup',    0, NULL),
-  (0, 'maintenance_cleanup',    0, NULL),
-  (3, 'maintenance_reclaim',    1, NULL),
-  (2, 'maintenance_reclaim',    0, NULL),
-  (1, 'maintenance_reclaim',    0, NULL),
-  (0, 'maintenance_reclaim',    0, NULL),
-  (3, 'maintenance_reset',      1, NULL),
-  (2, 'maintenance_reset',      0, NULL),
-  (1, 'maintenance_reset',      0, NULL),
-  (0, 'maintenance_reset',      0, NULL),
-  -- Cross-user data visibility (admin sees other users' items)
-  (3, 'view_all_users_items',   1, NULL),
-  (2, 'view_all_users_items',   0, NULL),
-  (1, 'view_all_users_items',   0, NULL),
-  (0, 'view_all_users_items',   0, NULL);
-
--- delete: destructive removal of files/folders and library master records
-INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (3, 'delete', 1, NULL),
-  (2, 'delete', 1, NULL),
-  (1, 'delete', 0, NULL),
-  (0, 'delete', 0, NULL);
-
--- manage_settings: read/write system settings (transcode, scraping, scan, cron, COI)
-INSERT OR IGNORE INTO user_permissions (level, permission, enabled, max_rph) VALUES
-  (3, 'manage_settings', 1, NULL),
-  (2, 'manage_settings', 0, NULL),
-  (1, 'manage_settings', 0, NULL),
-  (0, 'manage_settings', 0, NULL);
 
 -- ============================================================================
 -- 6. Guest Tokens (temporary browser access)
@@ -293,6 +275,9 @@ CREATE TABLE IF NOT EXISTS artists (
   name TEXT NOT NULL,
   sort_name TEXT,
   image_r2_key TEXT,                                 -- R2 key to artist image
+  image_url TEXT,                                    -- external image URL (e.g. last.fm / scrape fallback)
+  biography TEXT,                                    -- artist biography (last.fm content, or CN scrape fallback)
+  biography_source TEXT,                             -- which source filled biography: 'lastfm' | 'netease' | 'qmusic'
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch())
 );
@@ -334,6 +319,7 @@ CREATE TABLE IF NOT EXISTS song_masters (
   compilation INTEGER DEFAULT 0,
   participants TEXT,                                 -- JSON: [{role:"composer",name:"..."}]
   lyrics TEXT,                                       -- 015/036: full LRC / plain text; getLyrics reads here first
+  lyrics_rich TEXT,                                  -- 0259: JSON-serialized RichLyrics (cueLine/cue/agents) for songLyrics v2; NULL when only line-level LRC is available
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (album_id) REFERENCES albums(id),
@@ -385,7 +371,8 @@ CREATE TABLE IF NOT EXISTS song_instances (
   tag_scanned INTEGER NOT NULL DEFAULT 0,            -- 004: 0=not scanned, 1=tags applied, 2=no usable tags
   source_etag TEXT,                                  -- 020: remote ETag for incremental scan skip
   source_last_modified INTEGER,                      -- 020: remote last_modified (unix seconds)
-  expires_at INTEGER,                                -- for cached transcodes (TTL)
+  expires_at INTEGER,                                -- hard TTL ceiling for source_type='cached' rows, set once at cache-write time, never extended
+  last_accessed_at INTEGER,                          -- bumped on each cache hit; LRU key for evictForRoom (NULL sorts first = evicted before any real hit)
   created_at INTEGER DEFAULT (unixepoch()),
   updated_at INTEGER DEFAULT (unixepoch()),
   FOREIGN KEY (master_id) REFERENCES song_masters(id) ON DELETE CASCADE,
@@ -396,6 +383,7 @@ CREATE INDEX IF NOT EXISTS idx_instances_source ON song_instances(source_id);
 CREATE INDEX IF NOT EXISTS idx_instances_dedup ON song_instances(source_dedup_key);
 CREATE INDEX IF NOT EXISTS idx_instances_parent ON song_instances(parent_instance_id);
 CREATE INDEX IF NOT EXISTS idx_instances_expires ON song_instances(expires_at) WHERE expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_instances_cached_lru ON song_instances(parent_instance_id, last_accessed_at) WHERE source_type = 'cached' AND missing = 0;
 CREATE INDEX IF NOT EXISTS idx_si_pending_scan
   ON song_instances (source_id, tag_scanned) WHERE tag_scanned = 0;
 
@@ -725,6 +713,20 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
 INSERT OR IGNORE INTO feature_strings (key, value, description) VALUES
   ('lastfm_api_key', '', 'Last.fm API key for metadata proxy (empty = disabled)');
 
+-- 0260 (was 0253): full artist bio/cover source priority list. Tried in
+-- array order, first enabled hit wins last.fm is no longer hardcoded first —
+-- CN sources default ahead of it since they cover CN artists far better.
+-- A source not present in the array is disabled (self-healing: pre-260
+-- deployments whose stored value is '["netease","qmusic"]' keep last.fm off
+-- until an admin explicitly re-adds it — this seed only affects fresh installs).
+INSERT OR IGNORE INTO feature_strings (key, value, description) VALUES
+  ('lastfm_fallback_sources', '["netease","qmusic","lastfm"]', 'Artist bio/cover source priority list (netease/qmusic/lastfm), tried in array order; JSON array, empty = all disabled');
+
+-- 0253: cadence (hours) for the cron-driven batch backfill that scans artists
+-- missing biography / cover and tries netease/qmusic. Default 24h; 0=disabled.
+INSERT OR IGNORE INTO feature_strings (key, value, description) VALUES
+  ('artist_scrape_interval_hours', '24', 'Hours between automatic artist bio/cover backfill scans (0=disabled)');
+
 -- 178: declarative S2S relay policy advertised via getOpenSubsonicExtensions
 -- (OpenSubsonic #254). Empty → derived from allow_being_proxied (allow/deny);
 -- set explicitly to allow|deny|no-cache to override.
@@ -772,10 +774,16 @@ INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALU
    'GB of R2 free tier (10 GB total) allocated to EdgeSonic for monthly cost estimation',
    unixepoch());
 
--- 0034: 103 WebDAV play-through hot cache (default OFF — consumes R2 storage)
+-- replaces the old single global enable_webdav_hotcache boolean with a
+-- per-source cache_tier (storage_sources.cache_tier). These two rows hold the
+-- tunable budget/per-file-cap/TTL for the 'standard' and 'extended' presets;
+-- 'off' needs no config. JSON: {"budgetMb":N,"maxFileMb":N,"ttlDays":N}.
 INSERT OR IGNORE INTO feature_strings (key, value, description, updated_at) VALUES
-  ('enable_webdav_hotcache', '0',
-   'Copy WebDAV songs to R2 on first play so later plays stream from R2 (faster). Uses R2 storage.',
+  ('cache_tier_standard', '{"budgetMb":2048,"maxFileMb":300,"ttlDays":30}',
+   'Standard cache tier: total budget / per-file cap / TTL for sources set to cache_tier=standard',
+   unixepoch()),
+  ('cache_tier_extended', '{"budgetMb":10240,"maxFileMb":1024,"ttlDays":5}',
+   'Extended cache tier: larger budget and per-file cap but a short TTL, for sources set to cache_tier=extended',
    unixepoch());
 
 -- 0036: 110 periodic browser-pool metadata re-check (unsupported formats +
@@ -895,3 +903,15 @@ CREATE TABLE IF NOT EXISTS user_settings (
 --  t = md5(session_token + s)
 --  → Server finds session by token → verifies → streams audio in browser
 -- ============================================================================
+
+-- ============================================================================
+-- 0253 — artist biography / image_url columns for CN scrape fallback.
+-- Idempotent ALTERs; SQLite rejects ADD COLUMN if the column already exists,
+-- so we guard with a PRAGMA-based check via the application's schema_patch
+-- helper (see utils/schema_patch.ts). These statements are safe to re-run
+-- only through that helper; direct `wrangler d1 execute --file` will fail
+-- on the second run because the column already exists.
+-- ============================================================================
+-- ALTER TABLE artists ADD COLUMN image_url TEXT;
+-- ALTER TABLE artists ADD COLUMN biography TEXT;
+-- ALTER TABLE artists ADD COLUMN biography_source TEXT;

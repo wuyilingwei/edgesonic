@@ -89,6 +89,7 @@ function buildDb() {
       last_sync INTEGER,
       enabled INTEGER DEFAULT 1,
       mode TEXT NOT NULL DEFAULT 'library',
+      cache_tier TEXT NOT NULL DEFAULT 'off',
       created_at INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT 0
     );
@@ -100,7 +101,14 @@ function buildDb() {
       PRIMARY KEY (level, permission)
     );
     CREATE TABLE song_instances (
-      id TEXT PRIMARY KEY, source_id TEXT NOT NULL, size INTEGER DEFAULT 0, missing INTEGER DEFAULT 0
+      id TEXT PRIMARY KEY, source_id TEXT NOT NULL, size INTEGER DEFAULT 0, missing INTEGER DEFAULT 0,
+      source_type TEXT, parent_instance_id TEXT
+    );
+    -- /sources/list resolves cache tier budgets via feature_strings
+    -- even when nothing's configured yet (resolveTierConfig still queries it).
+    CREATE TABLE feature_strings (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', description TEXT,
+      updated_at INTEGER DEFAULT 0
     );
     INSERT INTO user_permissions (level, permission, enabled, max_rph) VALUES (2, 'manage_sources', 1, 0);
     INSERT INTO user_permissions (level, permission, enabled, max_rph) VALUES (3, 'manage_sources', 1, 0);

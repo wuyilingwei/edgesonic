@@ -22,10 +22,13 @@
 //  getSimilarSongs / getSimilarSongs2
 //  getTopSongs
 //
-// All routes funnel through the last.fm client in worker/src/lib/lastfm.ts.
-// When the api_key feature is empty, the client throws LastfmUnconfigured and
-// we map that to Subsonic error code 30 ("not supported") 鈥?that way clients
-// get a polite "feature off" response instead of a 500.
+// getArtistInfo/2 resolve bio/cover from whichever source (netease/qmusic/
+// last.fm) is enabled and highest-priority per admin config — see
+// utils/artistScrapeFallback.ts. The other three families still go straight
+// through the last.fm client in worker/src/lib/lastfm.ts; when the api_key
+// feature is empty, the client throws LastfmUnconfigured and we map that to
+// Subsonic error code 30 ("not supported") so clients get a polite
+// "feature off" response instead of a 500.
 //
 // Auth: these endpoints are *not* in SESSION_ONLY_PATHS 鈥?they're plain
 // browsing data, identical access surface to getArtist / getAlbum.
@@ -41,12 +44,12 @@ import { mapSong } from "../../types/subsonic";
 import {
   LastfmUnconfigured,
   LastfmFetchError,
-  getArtistInfo as lastfmGetArtistInfo,
   getAlbumInfo as lastfmGetAlbumInfo,
   getSimilarArtists as lastfmGetSimilarArtists,
   getSimilarTracks as lastfmGetSimilarTracks,
   getTopTracks as lastfmGetTopTracks,
 } from "../../lib/lastfm";
+import { resolveArtistInfo, resolveArtistInfoSourceOrder } from "../../utils/artistScrapeFallback";
 import type { Artist, SongMaster } from "../../types/entities";
 
 export const infoRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
@@ -138,15 +141,28 @@ async function artistInfoHandler(
     const count = Math.max(1, Math.min(isNaN(countRaw) ? 20 : countRaw, 100));
     const includeNotPresent = (c.req.query("includeNotPresent") || "").toLowerCase() === "true";
 
-    const [info, similar] = await Promise.all([
-      lastfmGetArtistInfo(c.env, artist.name, (c.get("user") as User | undefined)?.username),
-      lastfmGetSimilarArtists(c.env, artist.name, count, (c.get("user") as User | undefined)?.username).catch((e) => {
-        // similarArtists failing shouldn't kill the whole response; biography
-        // alone is still useful. Bubble up only LastfmUnconfigured.
-        if (e instanceof LastfmUnconfigured) throw e;
-        return [];
-      }),
+    // 260: bio/cover come from whichever source (netease/qmusic/lastfm) is
+    // enabled and highest-priority per admin config — last.fm is no longer
+    // hardcoded first. D1 cache (cron-backfilled) always wins outright since
+    // it costs nothing to read.
+    const cachedBio = (artist as Artist & { biography?: string | null }).biography;
+    const cachedImage = (artist as Artist & { image_url?: string | null }).image_url;
+    const wantBio = !cachedBio;
+    const wantCover = !cachedImage;
+
+    const [resolved, sourceOrder] = await Promise.all([
+      wantBio || wantCover
+        ? resolveArtistInfo(c.env, artist.name, { bio: wantBio, cover: wantCover }).catch(() => null)
+        : Promise.resolve(null),
+      resolveArtistInfoSourceOrder(c.env),
     ]);
+
+    // similarArtist has no CN equivalent — it's last.fm-exclusive. Query it
+    // whenever last.fm is an enabled source at all, independent of whether
+    // bio/cover ended up resolved from a CN source above (or from cache).
+    const similar = sourceOrder.includes("lastfm")
+      ? await lastfmGetSimilarArtists(c.env, artist.name, count).catch(() => [])
+      : [];
 
     // Resolve each similar artist against local artists table.
     const similarRows: Array<{ name: string; id?: string; albumCount?: number }> = [];
@@ -162,14 +178,16 @@ async function artistInfoHandler(
       }
     }
 
+    const bioText = cachedBio || resolved?.biography;
+    const largeImg = cachedImage || resolved?.largeImageUrl;
     const inner: Record<string, unknown> = {
       [tag]: {
-        ...(info?.biography ? { biography: { _text: info.biography } } : {}),
-        ...(info?.mbid ? { musicBrainzId: { _text: info.mbid } } : {}),
-        ...(info?.url ? { lastFmUrl: { _text: info.url } } : {}),
-        ...(info?.images.small ? { smallImageUrl: { _text: info.images.small } } : {}),
-        ...(info?.images.medium ? { mediumImageUrl: { _text: info.images.medium } } : {}),
-        ...(info?.images.large ? { largeImageUrl: { _text: info.images.large } } : {}),
+        ...(bioText ? { biography: { _text: bioText } } : {}),
+        ...(resolved?.mbid ? { musicBrainzId: { _text: resolved.mbid } } : {}),
+        ...(resolved?.lastfmUrl ? { lastFmUrl: { _text: resolved.lastfmUrl } } : {}),
+        ...(resolved?.smallImageUrl ? { smallImageUrl: { _text: resolved.smallImageUrl } } : {}),
+        ...(resolved?.mediumImageUrl ? { mediumImageUrl: { _text: resolved.mediumImageUrl } } : {}),
+        ...(largeImg ? { largeImageUrl: { _text: largeImg } } : {}),
         similarArtist: similarRows.map((r) => attrs(r)),
       },
     };
@@ -205,7 +223,7 @@ async function albumInfoHandler(
       return c.text(subsonicOK({ albumInfo: {} }), 200, XML);
     }
 
-    const info = await lastfmGetAlbumInfo(c.env, artistName, album.name, (c.get("user") as User | undefined)?.username);
+    const info = await lastfmGetAlbumInfo(c.env, artistName, album.name);
     const inner: Record<string, unknown> = {
       albumInfo: {
         ...(info?.notes ? { notes: { _text: info.notes } } : {}),
@@ -247,7 +265,7 @@ async function similarSongsHandler(
     const countRaw = parseInt(c.req.query("count") || "50", 10);
     const count = Math.max(1, Math.min(isNaN(countRaw) ? 50 : countRaw, 200));
 
-    const similar = await lastfmGetSimilarTracks(c.env, artistRow.name, song.title, count, (c.get("user") as User | undefined)?.username);
+    const similar = await lastfmGetSimilarTracks(c.env, artistRow.name, song.title, count);
     const matched: Array<SongMaster & { artist_name?: string; album_name?: string }> = [];
     for (const s of similar) {
       if (!s.artist) continue;
@@ -307,7 +325,7 @@ const getTopSongsHandler = async (c: Context): Promise<Response> => {
   // (transient network blip 鈥?keep whatever we have).
   if (matched.length < count) {
     try {
-      const top = await lastfmGetTopTracks(c.env, artist, count, (c.get("user") as User | undefined)?.username);
+      const top = await lastfmGetTopTracks(c.env, artist, count);
       for (const t of top) {
         if (matched.length >= count) break;
         const row = await findSongByTitleAndArtist(c.env.DB, t.name, t.artist || artist);

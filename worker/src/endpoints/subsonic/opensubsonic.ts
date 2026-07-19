@@ -28,9 +28,13 @@
 //   the account); `u` is optional when apiKey is present, matching spec.
 //   * tokenInfo v1          — this file
 //   * formPost v1           — all mutating Subsonic endpoints accept POST
-//   * songLyrics v1         — 108: getLyricsBySongId emits spec-shaped
+//   * songLyrics v2         — 108: getLyricsBySongId emits spec-shaped
 //   structuredLyrics ({start,value} lines); clients only call it when the
 //   extension is advertised, which is why lyrics never showed in players.
+//   0259: v2 advertises the `enhanced` parameter — when true, the response
+//   carries cueLine/cue (word-level timing), `kind` (main/translation/
+//   pronunciation) and `agents` (vocal attribution), per the songLyrics
+//   v2 spec.
 //   * edgeSonicCloneProxy v1 — EdgeSonic-specific clone/proxy capability plus
 //   automatic exact/fuzzy remote-id → local-id merge support.
 //
@@ -65,7 +69,7 @@ const EXTENSIONS: Array<{ name: string; versions: number[]; attrs?: Record<strin
   { name: "apiKeyAuthentication", versions: [1] },
   { name: "tokenInfo", versions: [1] },
   { name: "formPost", versions: [1] },
-  { name: "songLyrics", versions: [1] },
+  { name: "songLyrics", versions: [1, 2] },
   {
     name: "edgeSonicCloneProxy",
     versions: [1],

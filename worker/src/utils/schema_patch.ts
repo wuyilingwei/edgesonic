@@ -21,6 +21,7 @@
 // Memoized per isolate: at most one ALTER attempt per worker instance.
 
 let ensured = false;
+let artistsEnsured = false;
 
 export async function ensureNicknameColumn(env: { DB: D1Database }): Promise<void> {
   if (ensured) return;
@@ -32,4 +33,64 @@ export async function ensureNicknameColumn(env: { DB: D1Database }): Promise<voi
     // a later request retries rather than silently disabling nicknames.
     if (/duplicate column/i.test(e instanceof Error ? e.message : String(e))) ensured = true;
   }
+}
+
+// 0253 — artist biography / image_url / biography_source columns. Same
+// idempotent pattern as ensureNicknameColumn: Schema.sql declares them in
+// CREATE TABLE for fresh installs; this back-fills existing databases.
+export async function ensureArtistScrapeColumns(env: { DB: D1Database }): Promise<void> {
+  if (artistsEnsured) return;
+  const cols: Array<[string, string]> = [
+    ["image_url", "TEXT"],
+    ["biography", "TEXT"],
+    ["biography_source", "TEXT"],
+  ];
+  let allDone = true;
+  for (const [col, type] of cols) {
+    try {
+      await env.DB.prepare(`ALTER TABLE artists ADD COLUMN ${col} ${type}`).run();
+    } catch (e) {
+      if (!/duplicate column/i.test(e instanceof Error ? e.message : String(e))) {
+        allDone = false;
+      }
+    }
+  }
+  if (allDone) artistsEnsured = true;
+}
+
+// 0259 — song_masters.lyrics_rich column. Stores the JSON-serialized
+// RichLyrics payload (cueLine/cue/agents) produced from TTML/KRC/enhanced
+// LRC sidecars or NetEase klyric. NULL when only line-level LRC is
+// available; the getLyricsBySongId endpoint degrades to lyrics then.
+let richLyricsEnsured = false;
+export async function ensureRichLyricsColumn(env: { DB: D1Database }): Promise<void> {
+  if (richLyricsEnsured) return;
+  try {
+    await env.DB.prepare("ALTER TABLE song_masters ADD COLUMN lyrics_rich TEXT").run();
+    richLyricsEnsured = true;
+  } catch (e) {
+    if (/duplicate column/i.test(e instanceof Error ? e.message : String(e))) richLyricsEnsured = true;
+  }
+}
+
+// storage_sources.cache_tier (per-source hot-cache tier selector) and
+// song_instances.last_accessed_at (LRU key for evictForRoom). Same idempotent
+// self-heal pattern: both columns are declared in Schema.sql's CREATE TABLE
+// for fresh installs; this back-fills databases created before these columns existed.
+let cacheTierColumnsEnsured = false;
+export async function ensureCacheTierColumns(env: { DB: D1Database }): Promise<void> {
+  if (cacheTierColumnsEnsured) return;
+  const alters: string[] = [
+    "ALTER TABLE storage_sources ADD COLUMN cache_tier TEXT NOT NULL DEFAULT 'off' CHECK (cache_tier IN ('off', 'standard', 'extended'))",
+    "ALTER TABLE song_instances ADD COLUMN last_accessed_at INTEGER",
+  ];
+  let allDone = true;
+  for (const sql of alters) {
+    try {
+      await env.DB.prepare(sql).run();
+    } catch (e) {
+      if (!/duplicate column/i.test(e instanceof Error ? e.message : String(e))) allDone = false;
+    }
+  }
+  if (allDone) cacheTierColumnsEnsured = true;
 }

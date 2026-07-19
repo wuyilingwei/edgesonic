@@ -62,30 +62,19 @@ function stableParamString(params: Record<string, string | number | undefined>):
   return JSON.stringify(entries);
 }
 
-// Core fetch primitive. Reads api_key from user_settings (per-user) first,
-// falls back to feature_strings.lastfm_api_key (system-level). Hits D1
-// lastfm_cache first, then reaches out to ws.audioscrobbler.com on a miss.
-export async function lastfmFetch(
+// Shared fetch+cache primitive behind both lastfmFetch and lastfmFetchUser:
+// checks the D1 `lastfm_cache` 24h TTL cache, calls the upstream API on a
+// miss, and writes the result back. Callers resolve the api_key and build
+// the cache_key themselves (system vs per-user resolution differs, and the
+// cache_key needs to include the Last.fm username for per-user calls so two
+// EdgeSonic users with different Last.fm accounts don't cross-pollinate).
+async function lastfmRawFetch(
   env: Env,
   method: string,
   params: Record<string, string | number | undefined>,
-  username?: string,
+  apiKey: string,
+  cacheKey: string,
 ): Promise<Record<string, unknown>> {
-  let apiKey = "";
-  if (username) {
-    const userRow = await env.DB.prepare(
-      "SELECT value FROM user_settings WHERE username = ? AND key = 'lastfm_api_key'"
-    ).bind(username).first<{ value: string }>();
-    if (userRow?.value) apiKey = userRow.value.trim();
-  }
-  if (!apiKey) {
-    apiKey = (await getFeatureString(env, "lastfm_api_key", "")).trim();
-  }
-  if (!apiKey) throw new LastfmUnconfigured();
-
-  // Cache key omits the api_key itself; rotating the key shouldn't invalidate
-  // the dataset because the dataset hasn't changed.
-  const cacheKey = `lastfm:${method}:${stableParamString(params)}`;
   const nowSec = Math.floor(Date.now() / 1000);
   const cacheRow = await env.DB.prepare(
     "SELECT value FROM lastfm_cache WHERE cache_key = ? AND expires_at > ?"
@@ -145,6 +134,59 @@ export async function lastfmFetch(
   return body;
 }
 
+// Core read-only fetch primitive. Uses the SYSTEM-level api_key for the
+// "信息" path (artist/album/similar/topTracks metadata, same dataset for
+// every user).
+//
+// Caching: D1 `lastfm_cache` 24h TTL, keyed by method+params (api_key
+// omitted so key rotation doesn't invalidate the cache).
+export async function lastfmFetch(
+  env: Env,
+  method: string,
+  params: Record<string, string | number | undefined>,
+): Promise<Record<string, unknown>> {
+  const apiKey = (await getFeatureString(env, "lastfm_api_key", "")).trim();
+  if (!apiKey) throw new LastfmUnconfigured();
+
+  // Cache key omits the api_key itself; rotating the key shouldn't invalidate
+  // the dataset because the dataset hasn't changed.
+  const cacheKey = `lastfm:${method}:${stableParamString(params)}`;
+  return lastfmRawFetch(env, method, params, apiKey, cacheKey);
+}
+
+// ---------------------------------------------------------------------------
+// Per-user read fetcher. Identical to lastfmFetch but the cache key includes
+// the Last.fm username so two EdgeSonic users with different Last.fm accounts
+// don't cross-pollinate.
+//
+// 260: fully isolated from the system-level key. Requires the caller's own
+// user_settings.lastfm_api_key — it does NOT fall back to feature_strings.
+// lastfm_api_key. The system key powers the artist/album/similar "info" path
+// (lastfmFetch) only; per-user activity (recentTracks/lovedTracks/userInfo/
+// topTracks) requires the user to bring their own key, full stop. Mixing the
+// two meant every user's personal listening history rode on the admin's
+// shared key/quota, which is exactly the kind of tier-bleed this isolates.
+// ---------------------------------------------------------------------------
+export async function lastfmFetchUser(
+  env: Env,
+  method: string,
+  params: Record<string, string | number | undefined>,
+  lastfmUsername: string,
+  edgesonicUsername?: string,
+): Promise<Record<string, unknown>> {
+  let apiKey = "";
+  if (edgesonicUsername) {
+    const userRow = await env.DB.prepare(
+      "SELECT value FROM user_settings WHERE username = ? AND key = 'lastfm_api_key'"
+    ).bind(edgesonicUsername).first<{ value: string }>();
+    if (userRow?.value) apiKey = userRow.value.trim();
+  }
+  if (!apiKey) throw new LastfmUnconfigured();
+
+  const cacheKey = `lastfm:${method}:${lastfmUsername}:${stableParamString(params)}`;
+  return lastfmRawFetch(env, method, params, apiKey, cacheKey);
+}
+
 // ---------------------------------------------------------------------------
 // Typed wrappers — each returns a flattened, "useful" shape so endpoints
 // don't have to re-implement bio cleanup / image picking.
@@ -189,8 +231,8 @@ export interface LastfmArtistInfo {
   images: LastfmImage;
 }
 
-export async function getArtistInfo(env: Env, name: string, username?: string): Promise<LastfmArtistInfo | null> {
-  const data = await lastfmFetch(env, "artist.getInfo", { artist: name, autocorrect: 1 }, username);
+export async function getArtistInfo(env: Env, name: string): Promise<LastfmArtistInfo | null> {
+  const data = await lastfmFetch(env, "artist.getInfo", { artist: name, autocorrect: 1 });
   const artist = data.artist as Record<string, unknown> | undefined;
   if (!artist) return null;
   const bio = (artist.bio as Record<string, unknown> | undefined) ?? {};
@@ -215,8 +257,8 @@ export interface LastfmAlbumInfo {
   images: LastfmImage;
 }
 
-export async function getAlbumInfo(env: Env, artist: string, album: string, username?: string): Promise<LastfmAlbumInfo | null> {
-  const data = await lastfmFetch(env, "album.getInfo", { artist, album, autocorrect: 1 }, username);
+export async function getAlbumInfo(env: Env, artist: string, album: string): Promise<LastfmAlbumInfo | null> {
+  const data = await lastfmFetch(env, "album.getInfo", { artist, album, autocorrect: 1 });
   const al = data.album as Record<string, unknown> | undefined;
   if (!al) return null;
   const wiki = (al.wiki as Record<string, unknown> | undefined) ?? {};
@@ -243,11 +285,10 @@ export async function getSimilarArtists(
   env: Env,
   name: string,
   limit: number,
-  username?: string,
 ): Promise<LastfmSimilarArtist[]> {
   const data = await lastfmFetch(env, "artist.getSimilar", {
     artist: name, limit, autocorrect: 1,
-  }, username);
+  });
   const wrap = data.similarartists as Record<string, unknown> | undefined;
   const arr = wrap?.artist;
   if (!Array.isArray(arr)) return [];
@@ -275,11 +316,10 @@ export async function getSimilarTracks(
   artist: string,
   track: string,
   limit: number,
-  username?: string,
 ): Promise<LastfmSimilarTrack[]> {
   const data = await lastfmFetch(env, "track.getSimilar", {
     artist, track, limit, autocorrect: 1,
-  }, username);
+  });
   const wrap = data.similartracks as Record<string, unknown> | undefined;
   const arr = wrap?.track;
   if (!Array.isArray(arr)) return [];
@@ -309,11 +349,10 @@ export async function getTopTracks(
   env: Env,
   artist: string,
   limit: number,
-  username?: string,
 ): Promise<LastfmTopTrack[]> {
   const data = await lastfmFetch(env, "artist.getTopTracks", {
     artist, limit, autocorrect: 1,
-  }, username);
+  });
   const wrap = data.toptracks as Record<string, unknown> | undefined;
   const arr = wrap?.track;
   if (!Array.isArray(arr)) return [];
@@ -330,3 +369,152 @@ export async function getTopTracks(
     };
   }).filter((t) => t.name);
 }
+
+// ---------------------------------------------------------------------------
+// Per-user read wrappers (user.getInfo / user.getRecentTracks /
+// user.getLovedTracks / user.getTopTracks). The `user` parameter is the
+// Last.fm username (stored in user_settings.lastfm_username). All use the
+// SYSTEM api_key — the per-user bit is only the `user` method parameter.
+// ---------------------------------------------------------------------------
+
+export interface LastfmUserInfo {
+  name: string;
+  realname?: string;
+  url?: string;
+  country?: string;
+  age?: number;
+  gender?: string;
+  playcount?: number;
+  registered?: number; // unix seconds
+  images: LastfmImage;
+}
+
+export async function getUserInfo(env: Env, lastfmUser: string, edgesonicUsername?: string): Promise<LastfmUserInfo | null> {
+  const data = await lastfmFetchUser(env, "user.getInfo", {}, lastfmUser, edgesonicUsername);
+  const u = data.user as Record<string, unknown> | undefined;
+  if (!u) return null;
+  const reg = u.registered as Record<string, unknown> | undefined;
+  const unix = typeof reg?.unixtime === "string" ? parseInt(reg.unixtime, 10) || undefined : undefined;
+  return {
+    name: typeof u.name === "string" ? u.name : lastfmUser,
+    realname: typeof u.realname === "string" && u.realname ? u.realname : undefined,
+    url: typeof u.url === "string" ? u.url : undefined,
+    country: typeof u.country === "string" && u.country ? u.country : undefined,
+    age: typeof u.age === "string" ? parseInt(u.age, 10) || undefined : undefined,
+    gender: typeof u.gender === "string" && u.gender ? u.gender : undefined,
+    playcount: typeof u.playcount === "string" ? parseInt(u.playcount, 10) || undefined : undefined,
+    registered: unix,
+    images: pickImages(u.image),
+  };
+}
+
+export interface LastfmRecentTrack {
+  name: string;
+  artist: string;
+  album?: string;
+  url?: string;
+  date?: number; // unix seconds
+  nowPlaying?: boolean;
+}
+
+export async function getRecentTracks(
+  env: Env,
+  lastfmUser: string,
+  limit: number,
+  edgesonicUsername?: string,
+): Promise<LastfmRecentTrack[]> {
+  const data = await lastfmFetchUser(env, "user.getRecentTracks", {
+    user: lastfmUser, limit,
+  }, lastfmUser, edgesonicUsername);
+  const wrap = data.recenttracks as Record<string, unknown> | undefined;
+  const arr = wrap?.track;
+  if (!Array.isArray(arr)) return [];
+  return arr.map((t) => {
+    const obj = t as Record<string, unknown>;
+    const artistObj = obj.artist as Record<string, unknown> | undefined;
+    const albumObj = obj.album as Record<string, unknown> | undefined;
+    const dateObj = obj.date as Record<string, unknown> | undefined;
+    return {
+      name: typeof obj.name === "string" ? obj.name : "",
+      artist: typeof artistObj?.["#text"] === "string" ? (artistObj["#text"] as string) : "",
+      album: typeof albumObj?.["#text"] === "string" ? (albumObj["#text"] as string) : undefined,
+      url: typeof obj.url === "string" ? obj.url : undefined,
+      date: typeof dateObj?.uts === "string" ? parseInt(dateObj.uts, 10) || undefined : undefined,
+      nowPlaying: (obj.nowplaying as string | undefined) === "true" ||
+        ((obj["@attr"] as Record<string, unknown> | undefined)?.nowplaying as string | undefined) === "true",
+    };
+  }).filter((t) => t.name);
+}
+
+export interface LastfmLovedTrack {
+  name: string;
+  artist: string;
+  url?: string;
+  date?: number;
+}
+
+export async function getLovedTracks(
+  env: Env,
+  lastfmUser: string,
+  limit: number,
+  edgesonicUsername?: string,
+): Promise<LastfmLovedTrack[]> {
+  const data = await lastfmFetchUser(env, "user.getLovedTracks", {
+    user: lastfmUser, limit,
+  }, lastfmUser, edgesonicUsername);
+  const wrap = data.lovedtracks as Record<string, unknown> | undefined;
+  const arr = wrap?.track;
+  if (!Array.isArray(arr)) return [];
+  return arr.map((t) => {
+    const obj = t as Record<string, unknown>;
+    const artistObj = obj.artist as Record<string, unknown> | undefined;
+    const dateObj = obj.date as Record<string, unknown> | undefined;
+    return {
+      name: typeof obj.name === "string" ? obj.name : "",
+      artist: typeof artistObj?.name === "string" ? artistObj.name as string : "",
+      url: typeof obj.url === "string" ? obj.url : undefined,
+      date: typeof dateObj?.uts === "string" ? parseInt(dateObj.uts, 10) || undefined : undefined,
+    };
+  }).filter((t) => t.name);
+}
+
+export interface LastfmUserTopTrack {
+  name: string;
+  artist: string;
+  url?: string;
+  playcount?: number;
+}
+
+export async function getUserTopTracks(
+  env: Env,
+  lastfmUser: string,
+  limit: number,
+  edgesonicUsername?: string,
+): Promise<LastfmUserTopTrack[]> {
+  const data = await lastfmFetchUser(env, "user.getTopTracks", {
+    user: lastfmUser, limit,
+  }, lastfmUser, edgesonicUsername);
+  const wrap = data.toptracks as Record<string, unknown> | undefined;
+  const arr = wrap?.track;
+  if (!Array.isArray(arr)) return [];
+  return arr.map((t) => {
+    const obj = t as Record<string, unknown>;
+    const artistObj = obj.artist as Record<string, unknown> | undefined;
+    return {
+      name: typeof obj.name === "string" ? obj.name : "",
+      artist: typeof artistObj?.name === "string" ? artistObj.name as string : "",
+      url: typeof obj.url === "string" ? obj.url : undefined,
+      playcount: typeof obj.playcount === "string" ? parseInt(obj.playcount, 10) || undefined : undefined,
+    };
+  }).filter((t) => t.name);
+}
+
+// ---------------------------------------------------------------------------
+// Per-user write wrappers — DISABLED.
+//
+// We deliberately do NOT support Last.fm scrobble / love / unlove: those
+// require a per-user session key (sk) obtained via auth.getMobileSession
+// (username + password). EdgeSonic is a read-only Last.fm consumer; only
+// the read-only user.* endpoints (which need just api_key + username) are
+// wired up. No sk, no shared secret, no write surface.
+// ---------------------------------------------------------------------------

@@ -100,6 +100,13 @@ const STRING_FEATURE_KEYS = new Set([
   "scrape_enabled_sources",
   // getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs proxies.
   "lastfm_api_key",
+  // 260 — full artist bio/cover source priority list: netease/qmusic/lastfm,
+  // tried in array order, first enabled hit wins. A source not present in the
+  // array is disabled. See utils/artistScrapeFallback.ts.
+  "lastfm_fallback_sources",
+  // 253 — cadence (hours) for the cron-driven batch backfill that scans
+  // artists missing biography / cover. 0=disabled.
+  "artist_scrape_interval_hours",
   "scan_interval_hours",
   "scan_etag_check",
   "scan_rescan_strategy",
@@ -127,12 +134,13 @@ const STRING_FEATURE_KEYS = new Set([
     // binding fast path. Per-credential strategy in subsonic_credentials
     // still gates which clients opt in.
     "enable_webdav_presign",
-    // /rest/stream of a webdav:// instance schedules a background copy of the
-    // whole file into R2 (cache/webdav/<masterId>.<suffix>) and registers a
-    // source_type='cached' instance, so subsequent plays stream from R2
-    // (Worker binding fast path / R2 presign 302) instead of the throttled
-    // proxied WebDAV path. Default '0' — it consumes R2 storage.
-    "enable_webdav_hotcache",
+    // replaced the old single global enable_webdav_hotcache boolean.
+    // /rest/stream of a webdav:// instance schedules a background copy into
+    // R2 when the source's storage_sources.cache_tier is 'standard' or
+    // 'extended' (per-source opt-in, not a server-wide switch anymore). These
+    // two JSON-valued flags hold each tier's {budgetMb,maxFileMb,ttlDays}.
+    "cache_tier_standard",
+    "cache_tier_extended",
     // dispatches unsupported-format / lyrics-or-disc-incomplete song_instances
     // to the browser worker pool for a second music-metadata pass. 0=disabled.
     "metadata_recheck_interval_hours",
@@ -184,6 +192,31 @@ function validateFeatureString(key: string, value: string): string | null {
       // 32-char hex but we don't want to encode that format here).
       if (value.length > 128) return "lastfm_api_key is too long";
       return null;
+    case "lastfm_fallback_sources": {
+      // JSON array of artist-info source ids, in priority order. Allowed:
+      // netease, qmusic, lastfm. Empty array disables all three. A source
+      // missing from the array is simply not tried — this is the whole
+      // priority list now, not just a "when last.fm fails" fallback.
+      const allowed = new Set(["netease", "qmusic", "lastfm"]);
+      try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed) || !parsed.every((v) => typeof v === "string")) {
+          return "lastfm_fallback_sources must be a JSON array of strings";
+        }
+        for (const v of parsed) {
+          if (!allowed.has(v)) return `Unknown artist info source: ${v}`;
+        }
+      } catch {
+        return "lastfm_fallback_sources must be valid JSON";
+      }
+      return null;
+    }
+    case "artist_scrape_interval_hours": {
+      if (!/^\d+$/.test(value)) return "artist_scrape_interval_hours must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 0 || n > 168) return "artist_scrape_interval_hours must be between 0 and 168";
+      return null;
+    }
     case "scan_interval_hours": {
       // Stored as a stringified non-negative integer in [0, 168] (one week).
       // 0 disables the cron-driven scan; anything bigger is the cadence in
@@ -217,9 +250,27 @@ function validateFeatureString(key: string, value: string): string | null {
     case "enable_webdav_presign":
       if (value !== "0" && value !== "1") return "enable_webdav_presign must be '0' or '1'";
       return null;
-    case "enable_webdav_hotcache":
-      if (value !== "0" && value !== "1") return "enable_webdav_hotcache must be '0' or '1'";
+    case "cache_tier_standard":
+    case "cache_tier_extended": {
+      // JSON {"budgetMb":N,"maxFileMb":N,"ttlDays":N}, all positive integers.
+      // Upper bounds are generous ceilings, not recommendations — 'extended'
+      // is explicitly the "bigger, admin decides how big" tier.
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(value);
+      } catch {
+        return `${key} must be valid JSON`;
+      }
+      if (typeof parsed !== "object" || parsed === null) return `${key} must be a JSON object`;
+      const obj = parsed as Record<string, unknown>;
+      for (const field of ["budgetMb", "maxFileMb", "ttlDays"] as const) {
+        const n = obj[field];
+        if (typeof n !== "number" || !Number.isInteger(n) || n < 0 || n > 1_000_000) {
+          return `${key}.${field} must be a non-negative integer`;
+        }
+      }
       return null;
+    }
     case "metadata_recheck_interval_hours": {
       if (!/^\d+$/.test(value)) return "metadata_recheck_interval_hours must be a non-negative integer";
       const n = parseInt(value, 10);
@@ -364,46 +415,5 @@ featuresRoutes.post("/features/secrets/set", async (c) => {
     `INSERT INTO external_secrets (key, value, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
   ).bind(key, body.value, now).run();
-  return c.json({ ok: true, key, set: !!body.value });
-});
-
-// Currently used for lastfm_api_key so each user can set their own Last.fm key.
-// Any authenticated user can read/write their own settings; no admin required.
-featuresRoutes.get("/features/userSetting", async (c) => {
-  const user = c.get("user");
-  const key = c.req.query("key") || "lastfm_api_key";
-  const row = await c.env.DB.prepare(
-    "SELECT value FROM user_settings WHERE username = ? AND key = ?"
-  ).bind(user.username, key).first<{ value: string }>();
-  return c.json({
-    ok: true,
-    key,
-    set: !!(row && row.value),
-  });
-});
-
-featuresRoutes.post("/features/userSetting", async (c) => {
-  const user = c.get("user");
-  let body: { key?: string; value?: string };
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json({ ok: false, error: "Invalid JSON body" }, 400);
-  }
-  const key = body.key || "lastfm_api_key";
-  if (typeof body.value !== "string") {
-    return c.json({ ok: false, error: "value must be a string (use empty string to clear)" }, 400);
-  }
-  const now = Math.floor(Date.now() / 1000);
-  if (body.value) {
-    await c.env.DB.prepare(
-      `INSERT INTO user_settings (username, key, value, updated_at) VALUES (?, ?, ?, ?)
-       ON CONFLICT(username, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-    ).bind(user.username, key, body.value, now).run();
-  } else {
-    await c.env.DB.prepare(
-      "DELETE FROM user_settings WHERE username = ? AND key = ?"
-    ).bind(user.username, key).run();
-  }
   return c.json({ ok: true, key, set: !!body.value });
 });

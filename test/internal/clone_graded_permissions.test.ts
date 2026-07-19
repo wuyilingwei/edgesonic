@@ -106,7 +106,7 @@ async function main() {
     assert(row?.starred === 1, "alice's own star written");
   }
 
-  console.log("\nupsertStarred — to another user needs manage_users:");
+  console.log("\nupsertStarred — to another user needs manage_users (and level 1 is hardlocked from it):");
   {
     const db = buildDb();
     const aliceNoPerm = makeApp(db, { username: "alice", level: 1 });
@@ -115,11 +115,21 @@ async function main() {
     const none = db.prepare("SELECT COUNT(*) AS c FROM annotations WHERE user_id='bob'").get() as any;
     assert(none.c === 0, "no star written for bob on the rejected call");
 
+    // Level 1 (user) is hardlocked from manage_users — even an override that
+    // sets it true cannot grant the capability. The new policy: dangerous
+    // management perms are never available to plain users.
     const aliceGranted = makeApp(db, { username: "alice", level: 1 }, grantManageUsers(1));
     const r2 = await aliceGranted.post("/edgesonic/clone/upsertStarred", { userId: "bob", items: [{ id: "s1", type: "song" }] });
-    assert(r2.status === 200, `200 with manage_users (got ${r2.status})`);
+    assert(r2.status === 403, `level 1 hardlocked from manage_users even with override (got ${r2.status})`);
+    const stillNone = db.prepare("SELECT COUNT(*) AS c FROM annotations WHERE user_id='bob'").get() as any;
+    assert(stillNone.c === 0, "bob's star still not written under level 1 override");
+
+    // Level 2 (admin) can receive manage_users via override and use it.
+    const carolGranted = makeApp(db, { username: "carol", level: 2 }, grantManageUsers(2));
+    const r3 = await carolGranted.post("/edgesonic/clone/upsertStarred", { userId: "bob", items: [{ id: "s1", type: "song" }] });
+    assert(r3.status === 200, `level 2 with manage_users override 200 (got ${r3.status})`);
     const bob = db.prepare("SELECT starred FROM annotations WHERE user_id='bob' AND item_id='s1'").get() as any;
-    assert(bob?.starred === 1, "bob's star written once manage_users granted");
+    assert(bob?.starred === 1, "bob's star written once level 2 manage_users granted");
   }
 
   console.log("\nupsertPlaylist — append accumulates, replace clears:");

@@ -9,7 +9,7 @@ import { mapConcurrent } from "../lib/concurrency";
 import { normalizeForMatch } from "../lib/trackMatch";
 
 const { t } = useI18n();
-const { isSuperAdmin, isAdmin, isUser, username: currentUsername, edgesonicPost, edgesonicFetch, rescanSongs, md5, signedParams, restUrl } = useAuth();
+const { isSuperAdmin, isAdmin, isUser, isGuest, hasPerm, username: currentUsername, edgesonicPost, edgesonicFetch, rescanSongs, md5, signedParams, restUrl } = useAuth();
 const workerPool = useWorkerPool();
 
 const nowTick = ref(Date.now());
@@ -204,12 +204,67 @@ function formatOrphanDate(unixSec: number): string {
   return new Date(unixSec * 1000).toLocaleString();
 }
 
+// ---- Peer sync (per-user, non-guest): favourites/playlists ↔ one peer ----
+type SyncPlaylistScope = "own" | "own_public" | "custom";
+const syncEnabled = ref(false);
+const syncUrl = ref("");
+const syncUsername = ref("");
+const syncPassword = ref("");
+const syncPasswordSet = ref(false);
+const syncPlaylistScope = ref<SyncPlaylistScope>("own");
+const syncPlaylistNamesInput = ref("");
+const syncBusy = ref(false);
+async function loadSyncConfig() {
+  if (isGuest.value) return;
+  try {
+    const data = JSON.parse(await edgesonicFetch("sync/config")) as {
+      ok: boolean; enabled?: boolean; url?: string; username?: string; passwordSet?: boolean;
+      playlistScope?: SyncPlaylistScope; playlistNames?: string[];
+    };
+    if (!data.ok) return;
+    syncEnabled.value = !!data.enabled;
+    syncUrl.value = data.url || "";
+    syncUsername.value = data.username || "";
+    syncPasswordSet.value = !!data.passwordSet;
+    syncPlaylistScope.value = data.playlistScope === "own_public" || data.playlistScope === "custom" ? data.playlistScope : "own";
+    syncPlaylistNamesInput.value = Array.isArray(data.playlistNames) ? data.playlistNames.join(", ") : "";
+  } catch { /* leave defaults */ }
+}
+async function saveSyncConfig(nextEnabled?: boolean) {
+  if (syncBusy.value) return;
+  syncBusy.value = true;
+  try {
+    const names = syncPlaylistNamesInput.value
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+    const body: Record<string, unknown> = {
+      url: syncUrl.value.trim(),
+      username: syncUsername.value.trim(),
+      playlistScope: syncPlaylistScope.value,
+      playlistNames: names,
+    };
+    if (syncPassword.value) body.password = syncPassword.value;
+    if (typeof nextEnabled === "boolean") body.enabled = nextEnabled;
+    const data = JSON.parse(await edgesonicPost("sync/config", body)) as { ok: boolean; error?: string };
+    if (!data.ok) throw new Error(data.error || "save failed");
+    if (typeof nextEnabled === "boolean") syncEnabled.value = nextEnabled;
+    if (syncPassword.value) { syncPasswordSet.value = true; syncPassword.value = ""; }
+    showToast(t("settings.common.sync.saved"));
+  } catch (e) {
+    showToast(`${t("settings.common.sync.saveFailed")}: ${e instanceof Error ? e.message : String(e)}`, "error");
+  } finally {
+    syncBusy.value = false;
+  }
+}
+
 let workStatusPollHandle: ReturnType<typeof setInterval> | null = null;
 let nowTickHandle: ReturnType<typeof setInterval> | null = null;
 onMounted(() => {
   void loadWorkStatus();
   void loadStorageStats();
   void loadOrphanSongs();
+  if (!isGuest.value) void loadSyncConfig();
   workStatusPollHandle = window.setInterval(() => { if (!document.hidden) void loadWorkStatus(); }, 10000);
   nowTickHandle = window.setInterval(() => { nowTick.value = Date.now(); }, 1000);
 });
@@ -224,8 +279,8 @@ function showToast(msg: string, type = "success") {
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
-type SectionKey = "migrate" | "workPool" | "storage" | "orphanSongs";
-const open = ref<Record<SectionKey, boolean>>({ migrate: false, workPool: false, storage: false, orphanSongs: false });
+type SectionKey = "migrate" | "peerSync" | "workPool" | "storage" | "orphanSongs";
+const open = ref<Record<SectionKey, boolean>>({ migrate: false, peerSync: false, workPool: false, storage: false, orphanSongs: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
 const migrateMode = ref<"clone" | "push">("clone");
 
@@ -1803,11 +1858,80 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
         </div>
       </section>
 
-      <!-- 176: the migrate tool above is available to any signed-in user; the
-           remaining maintenance sections stay super-admin only. -->
-      <template v-if="isSuperAdmin">
+      <!-- ============ 对端同步（每用户非 guest） ============ -->
+      <section v-if="!isGuest" class="settings-section card" :class="{ open: open.peerSync }">
+        <button class="section-header" @click="toggleSection('peerSync')">
+          <span class="section-title">{{ t("settings.common.sync.title") }}</span>
+          <span class="section-caret">{{ open.peerSync ? "−" : "+" }}</span>
+        </button>
+
+        <div v-show="open.peerSync" class="section-body">
+          <div class="sub-block">
+            <div class="sub-header">
+              <span class="mono-label">{{ t("settings.common.sync.title") }}</span>
+              <span class="status-badge" :class="syncEnabled ? 'success' : 'muted'">
+                {{ syncEnabled ? t("settings.common.sync.on") : t("settings.common.sync.off") }}
+              </span>
+            </div>
+            <p class="feature-desc tc-desc" style="margin-left:0">{{ t("settings.common.sync.desc") }}</p>
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.sync.url") }}</span>
+              <input v-model="syncUrl" type="text" maxlength="512" class="form-input" placeholder="https://peer.example.com" autocomplete="off" :disabled="syncBusy" />
+            </label>
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.sync.username") }}</span>
+              <input v-model="syncUsername" type="text" maxlength="128" class="form-input" autocomplete="off" :disabled="syncBusy" />
+            </label>
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.sync.password") }}</span>
+              <input v-model="syncPassword" type="password" maxlength="256" class="form-input" :placeholder="syncPasswordSet ? t('settings.common.sync.passwordKept') : ''" autocomplete="off" :disabled="syncBusy" />
+            </label>
+            <div class="tc-row" style="flex-direction:column;align-items:stretch;gap:.4rem">
+              <span class="tc-key">{{ t("settings.common.sync.scope.title") }}</span>
+              <div class="sync-scope-options">
+                <label class="sync-scope-opt">
+                  <input type="radio" value="own" v-model="syncPlaylistScope" :disabled="syncBusy" />
+                  <span>{{ t("settings.common.sync.scope.own") }}</span>
+                </label>
+                <label class="sync-scope-opt">
+                  <input type="radio" value="own_public" v-model="syncPlaylistScope" :disabled="syncBusy" />
+                  <span>{{ t("settings.common.sync.scope.ownPublic") }}</span>
+                </label>
+                <label class="sync-scope-opt">
+                  <input type="radio" value="custom" v-model="syncPlaylistScope" :disabled="syncBusy" />
+                  <span>{{ t("settings.common.sync.scope.custom") }}</span>
+                </label>
+              </div>
+              <p class="feature-desc tc-desc" style="margin-left:0">{{ t("settings.common.sync.scope.desc") }}</p>
+              <input
+                v-if="syncPlaylistScope === 'custom'"
+                v-model="syncPlaylistNamesInput"
+                type="text"
+                maxlength="2048"
+                class="form-input"
+                :placeholder="t('settings.common.sync.scope.customPlaceholder')"
+                :disabled="syncBusy"
+                autocomplete="off"
+              />
+            </div>
+            <div class="tc-actions">
+              <label class="toggle" style="margin-right:auto">
+                <input type="checkbox" :checked="syncEnabled" :disabled="syncBusy" @change="saveSyncConfig(($event.target as HTMLInputElement).checked)" />
+                <span class="toggle-slider"></span>
+              </label>
+              <button class="btn-primary" :disabled="syncBusy" @click="saveSyncConfig()">{{ t("common.save") }}</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 176: the migrate tool above is available to any signed-in user.
+           工作池 gates on the participate_work permission itself (level 1
+           "user" has it by default — see App.vue's "admin-only tools inside
+           gate themselves individually" note); the remaining maintenance
+           sections below stay super-admin only. -->
       <!-- ============ 工作池 ============ -->
-      <section class="settings-section card" :class="{ open: open.workPool }">
+      <section v-if="workerPool.eligible" class="settings-section card" :class="{ open: open.workPool }">
         <button class="section-header" @click="toggleSection('workPool')">
           <span class="section-title">WORKER 预解析</span>
           <span class="section-caret">{{ open.workPool ? '−' : '+' }}</span>
@@ -1866,18 +1990,17 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
           </ul>
         </div>
         <div v-if="workCounts.failed > 0 || workCounts.claimed > 0" class="wp-actions">
-          <button v-if="workCounts.failed > 0" class="btn-secondary btn-sm" @click="onResetFailedWork()">重启失败</button>
-          <button v-if="workCounts.claimed > 0" class="btn-secondary btn-sm" @click="onReclaimStaleWork()">回收超时</button>
+          <button v-if="workCounts.failed > 0 && hasPerm('maintenance_reset')" class="btn-secondary btn-sm" @click="onResetFailedWork()">重启失败</button>
+          <button v-if="workCounts.claimed > 0 && hasPerm('maintenance_reclaim')" class="btn-secondary btn-sm" @click="onReclaimStaleWork()">回收超时</button>
         </div>
 
         <!-- 本机设置：参与开关、本机统计、能力、并发度——原先分散在设置页，
              现在集中到这里（同一台浏览器的运行参数）。 -->
         <div class="wp-worker-toggle">
           <label class="wp-toggle-label">
-            <input type="checkbox" :checked="workerPool.enabled" :disabled="!workerPool.eligible" @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)" />
+            <input type="checkbox" :checked="workerPool.enabled" @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)" />
             <span>浏览器 Worker: {{ workerPool.enabled ? '已启用' : '已禁用' }}</span>
           </label>
-          <p v-if="!workerPool.eligible" class="wp-ineligible-hint">当前等级不可参与浏览器预解析（需要等级 ≥ 2）</p>
         </div>
         <div class="wp-local-stats">
           <span class="wp-count-label">本机统计</span>
@@ -1895,10 +2018,9 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
             type="number" min="1" max="8" step="1"
             v-model.number="maxConcurrentInput"
             class="form-input wp-concurrency-input"
-            :disabled="!isSuperAdmin"
           />
-          <button class="btn-secondary btn-sm" :disabled="!isSuperAdmin || maxConcurrentBusy" @click="saveMaxConcurrent">保存</button>
-          <span class="wp-concurrency-hint">1-8（并发上限）——浏览器会按最近任务成功/失败率，在 1 到此上限之间自动升降实际并发数</span>
+          <button class="btn-secondary btn-sm" :disabled="maxConcurrentBusy" @click="saveMaxConcurrent">保存</button>
+          <span class="wp-concurrency-hint">1-8（并发上限，仅本机生效）——浏览器会按最近任务成功/失败率，在 1 到此上限之间自动升降实际并发数</span>
           <span class="wp-count-label" style="margin-left: 0.6rem">当前并发 {{ workerPool.currentConcurrency }} / {{ workerPool.maxConcurrent }}</span>
         </div>
 
@@ -1909,6 +2031,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
         </div>
       </section>
 
+      <template v-if="isSuperAdmin">
       <!-- ============ 存储与 R2 费用 ============ -->
       <section class="settings-section card" :class="{ open: open.storage }">
         <button class="section-header" @click="toggleSection('storage')">
@@ -2101,6 +2224,18 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
 .tc-row .form-input { flex: 1; min-width: 220px; }
 .tc-desc { margin-left: 180px; }
 .tc-actions { margin-top: 0.4rem; display: flex; justify-content: flex-end; }
+
+/* Peer sync scope radio group */
+.sync-scope-options { display: flex; flex-wrap: wrap; gap: 0.8rem 1.4rem; }
+.sync-scope-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.sync-scope-opt input { margin: 0; }
 .scan-toggle {
   display: inline-flex; align-items: center; gap: 0.5rem;
   font-family: var(--font-mono);
@@ -2195,7 +2330,6 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
 .wp-actions { display: flex; gap: 0.6rem; margin-bottom: 0.6rem; }
 .wp-worker-toggle { padding-top: 0.5rem; border-top: 1px solid var(--color-border-subtle); }
 .wp-toggle-label { display: flex; align-items: center; gap: 0.5rem; cursor: pointer; font-size: var(--fs-sm); }
-.wp-ineligible-hint { margin: 0.3rem 0 0; font-size: var(--fs-xs); color: var(--color-accent-primary); }
 .wp-last-error { margin-top: 0.4rem; font-size: var(--fs-xs); color: #e5484d; }
 .wp-current-song {
   display: flex; align-items: center; gap: 0.5rem;

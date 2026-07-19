@@ -15,6 +15,7 @@
 
 import { Hono } from "hono";
 import type { User } from "../../types/entities";
+import { timedFetch, SCRAPE_UA as UA } from "../../utils/scrapeFetch";
 
 // ============================================================================
 //
@@ -39,10 +40,7 @@ export const scrapeRoutes = new Hono<{
   Variables: { user: User };
 }>();
 
-// Outbound timeout — keeps Workers CPU bound. NetEase POSTs sometimes hang
-// when their CDN is upset; failing fast and bubbling up to the UI is better
-// than chewing through the request budget.
-const FETCH_TIMEOUT_MS = 8000;
+// Outbound timeout / UA live in utils/scrapeFetch.ts.
 
 // Per-user history page cap. The UI defaults to 30; admins can override via
 // `?limit=`. We bound it server-side so a malicious caller can't pull the
@@ -280,19 +278,7 @@ async function proxyFetch(
   }
 }
 
-async function timedFetch(url: string, init: RequestInit): Promise<Response> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-  "(KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+// timedFetch / UA come from utils/scrapeFetch.ts (shared with artistScrape).
 
 // ---- NetEase ----
 async function fetchNetEaseSearch(query: string): Promise<unknown> {

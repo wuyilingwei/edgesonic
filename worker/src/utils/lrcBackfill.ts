@@ -36,8 +36,10 @@
 // re-scan or an on-demand getLyrics fetch, and any of those already clear the
 // WHERE condition for us.
 
-import { fetchLrcSidecar } from "./lrcSidecar";
+import { fetchLrcSidecar, fetchSidecarRich } from "./lrcSidecar";
 import { getFeatureString } from "./features";
+import { ensureRichLyricsColumn } from "./schema_patch";
+import { serializeRich } from "./richLyrics";
 
 const LAST_RUN_KEY = "cron:last_lrc_backfill_ts";
 // Kept well under the Workers subrequest ceiling — each candidate costs one
@@ -58,12 +60,19 @@ export interface LrcBackfillResult {
 // Core selection + fill, no cadence gate — shared by the cron tick
 // (maybeRunLrcBackfill, below) and the admin "run now" endpoint
 // (POST /edgesonic/work/backfillLrcNow) so both paths behave identically.
+//
+// 0259 — also back-fills `lyrics_rich` from sibling .ttml/.krc/enhanced .lrc
+// sidecars. Candidates are songs that still lack EITHER the line-level LRC
+// OR the rich payload, so a pre-existing library that pre-dates 0259 gets
+// the new column populated without a forced full re-scan.
 export async function runLrcBackfill(db: D1Database, env: Env): Promise<LrcBackfillResult> {
+  await ensureRichLyricsColumn(env);
   const candidates = (await db.prepare(
     `SELECT sm.id AS master_id, si.storage_uri AS storage_uri
        FROM song_masters sm
        JOIN song_instances si ON si.master_id = sm.id
-      WHERE (sm.lyrics IS NULL OR sm.lyrics = '')
+      WHERE (sm.lyrics IS NULL OR sm.lyrics = ''
+             OR sm.lyrics_rich IS NULL OR sm.lyrics_rich = '')
         AND si.missing = 0
         AND si.source_type = 'original'
         AND (si.storage_uri LIKE 'r2://%' OR si.storage_uri LIKE 'webdav://%')
@@ -75,15 +84,26 @@ export async function runLrcBackfill(db: D1Database, env: Env): Promise<LrcBackf
   for (const cand of candidates) {
     try {
       const lrc = await fetchLrcSidecar(env, cand.storage_uri);
-      if (!lrc) continue;
-      // Conditional UPDATE mirrors importLrcOnScan — avoids racing a
-      // concurrent tag-write/getLyrics fetch that may have already
-      // populated the column between SELECT and here.
-      const result = await db.prepare(
-        `UPDATE song_masters SET lyrics = ?, updated_at = ?
-          WHERE id = ? AND (lyrics IS NULL OR lyrics = '')`,
-      ).bind(lrc, Math.floor(Date.now() / 1000), cand.master_id).run();
-      if (result.meta.changes > 0) filled++;
+      if (lrc) {
+        // Conditional UPDATE mirrors importLrcOnScan — avoids racing a
+        // concurrent tag-write/getLyrics fetch that may have already
+        // populated the column between SELECT and here.
+        const result = await db.prepare(
+          `UPDATE song_masters SET lyrics = ?, updated_at = ?
+            WHERE id = ? AND (lyrics IS NULL OR lyrics = '')`,
+        ).bind(lrc, Math.floor(Date.now() / 1000), cand.master_id).run();
+        if (result.meta.changes > 0) filled++;
+      }
+      // 0259 — also fetch a rich sidecar (.ttml / .krc / enhanced .lrc)
+      // when one is present. Independent of the LRC result above — a
+      // track can have both a .lrc and a .ttml sidecar.
+      const rich = await fetchSidecarRich(env, cand.storage_uri);
+      if (rich) {
+        await db.prepare(
+          `UPDATE song_masters SET lyrics_rich = ?, updated_at = ?
+            WHERE id = ? AND (lyrics_rich IS NULL OR lyrics_rich = '')`,
+        ).bind(serializeRich(rich), Math.floor(Date.now() / 1000), cand.master_id).run();
+      }
     } catch {
       // Best-effort — a transient R2/WebDAV/D1 hiccup on one track must not
       // abort the rest of the batch.

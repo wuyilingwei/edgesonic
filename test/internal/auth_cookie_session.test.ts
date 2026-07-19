@@ -94,6 +94,9 @@ function buildDb(): DatabaseSync {
     CREATE TABLE guest_tokens (token TEXT PRIMARY KEY, expires_at INTEGER);
     INSERT INTO users (username, master_password, level, enabled) VALUES ('alice', 'hash', 2, 1);
     INSERT INTO users (username, master_password, level, enabled) VALUES ('bob', 'hash', 1, 1);
+    INSERT INTO users (username, master_password, level, enabled) VALUES ('anonymous', '', 0, 1);
+    INSERT INTO users (username, master_password, level, enabled) VALUES ('guest', '', 0, 1);
+    INSERT INTO user_permissions (level, permission, enabled) VALUES (0, 'browse', 1);
   `);
   return sqlite;
 }
@@ -136,6 +139,12 @@ function makeApp(sqlite: DatabaseSync): any {
         }),
         env as any,
       );
+    },
+    async getGuest(): Promise<any> {
+      return app.fetch(new Request("http://test/edgesonic/auth/guest"), env as any);
+    },
+    async postGuest(): Promise<any> {
+      return app.fetch(new Request("http://test/edgesonic/auth/guest", { method: "POST" }), env as any);
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async postLogout(cookie?: string): Promise<any> {
@@ -218,6 +227,27 @@ async function main() {
     assert(sc.includes("SameSite=Lax"), `SameSite=Lax flag present (got ${sc})`);
     assert(sc.includes("Max-Age=604800"), `Max-Age=604800 (7d) present (got ${sc})`);
     assert(sc.includes("Path=/"), `Path=/ present (got ${sc})`);
+  }
+
+  console.log("\nguest endpoint only enables guest login when browsing is allowed:");
+  {
+    const sqlite = buildDb();
+    sqlite.prepare("UPDATE users SET master_password = ? WHERE username = 'anonymous'").run(await sha256("pw"));
+    const { getGuest, postGuest, postLogin } = makeApp(sqlite);
+    const regularLogin = await postLogin({ username: "anonymous", password: "pw" });
+    assert(regularLogin.status === 401, `non-guest level-0 password login returns 401 (got ${regularLogin.status})`);
+    const enabled = await getGuest();
+    assert((await enabled.json()).enabled === true, "guest option reports enabled");
+    const login = await postGuest();
+    assert(login.status === 200, `guest login 200 (got ${login.status})`);
+    const body = await login.json() as { username?: string; level?: number };
+    assert(body.username === "guest" && body.level === 0, "guest session identifies the level-0 account");
+    const anonymousSessions = sqlite.prepare("SELECT COUNT(*) AS n FROM sessions WHERE username = 'anonymous'").get() as { n: number };
+    assert(anonymousSessions.n === 0, "guest login does not select another level-0 account");
+    assert((login.headers.get("Set-Cookie") || "").includes("HttpOnly"), "guest login sets an HttpOnly cookie");
+    sqlite.prepare("UPDATE user_permissions SET enabled = 0 WHERE level = 0 AND permission = 'browse'").run();
+    const disabled = await postGuest();
+    assert(disabled.status === 403, `disabled guest login returns 403 (got ${disabled.status})`);
   }
 
   console.log("\nlogout endpoint wipes the cookie & drops the session row:");

@@ -80,7 +80,7 @@ function makeKV() {
 // ---------------------------------------------------------------------------
 // Schema seeded with the bits info.ts actually touches
 // ---------------------------------------------------------------------------
-function buildDb(opts: { lastfmKey: string }) {
+function buildDb(opts: { lastfmKey: string; fallbackSources?: string }) {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(`
     CREATE TABLE feature_strings (
@@ -95,11 +95,15 @@ function buildDb(opts: { lastfmKey: string }) {
       value TEXT NOT NULL,
       expires_at INTEGER NOT NULL
     );
+    -- 253: cron-backfilled artist bio/cover cache, read before hitting last.fm.
     CREATE TABLE artists (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       sort_name TEXT,
       image_r2_key TEXT,
+      biography TEXT,
+      image_url TEXT,
+      biography_source TEXT,
       created_at INTEGER DEFAULT 0,
       updated_at INTEGER DEFAULT 0
     );
@@ -148,8 +152,16 @@ function buildDb(opts: { lastfmKey: string }) {
       starred INTEGER DEFAULT 0, starred_at INTEGER,
       PRIMARY KEY (user_id, item_id, item_type)
     );
+    -- 213: multi-artist song credits — SONG_ROW_COLS / getAlbumsByArtist both
+    -- reference this table now, so queries.ts needs it even for artists that
+    -- only have a plain single-artist credit.
+    CREATE TABLE song_artists (
+      song_id TEXT NOT NULL, artist_id TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (song_id, artist_id)
+    );
 
     INSERT INTO feature_strings (key, value) VALUES ('lastfm_api_key', '${opts.lastfmKey}');
+    INSERT INTO feature_strings (key, value) VALUES ('lastfm_fallback_sources', '${opts.fallbackSources ?? "[]"}');
 
     -- Adele + her album + two songs
     INSERT INTO artists (id, name, sort_name) VALUES ('ar-adele', 'Adele', 'Adele');
@@ -212,17 +224,138 @@ function jsonResponse(body: unknown): Response {
 async function main() {
   installFetchStub();
 
-  console.log("getArtistInfo: missing api_key → Subsonic error code 30:");
+  console.log("getArtistInfo: missing api_key, no cache, no fallback → empty artistInfo, NOT an error (259):");
   {
+    // 259 fix: LastfmUnconfigured used to bubble out of the similarArtists
+    // promise and fail the whole handler (code 30), even though a D1 cache
+    // hit or CN scrape fallback further down could still have produced a
+    // usable biography/cover. With nothing configured at all there's
+    // genuinely nothing to return, but that must degrade to an empty OK
+    // response — not a Subsonic error — same as getAlbumInfo/getTopSongs
+    // already do when last.fm is unconfigured.
     fetchCalls = [];
     const sqlite = buildDb({ lastfmKey: "" });
     const { get } = makeApp(sqlite);
     const r = await get("/rest/getArtistInfo?id=ar-adele");
-    assert(r.status === 200, "200 status (Subsonic encodes errors in body)");
+    assert(r.status === 200, "200 status");
     const text = await r.text();
-    assert(/code="30"/.test(text), `XML contains code="30" (got: ${text.slice(0, 200)})`);
-    assert(/status="failed"/.test(text), "status=failed in XML");
-    assert(fetchCalls.length === 0, "no outbound fetch when key missing");
+    assert(/status="ok"/.test(text), `status=ok, not failed (got: ${text.slice(0, 200)})`);
+    assert(/<artistInfo\s*\/?>\s*<\/artistInfo>|<artistInfo\s*\/>/.test(text),
+      "artistInfo emitted empty (no biography/images available anywhere)");
+    assert(!/code="30"/.test(text), "no Subsonic error code emitted");
+    assert(fetchCalls.length === 0, "no outbound fetch when key missing and fallback disabled");
+  }
+
+  console.log("\ngetArtistInfo: missing api_key but D1 cache has biography/image_url → served from cache (259):");
+  {
+    fetchCalls = [];
+    const sqlite = buildDb({ lastfmKey: "" });
+    sqlite.exec(
+      `UPDATE artists SET biography = 'Cached bio from a prior backfill.', image_url = 'https://cache/adele.png'
+       WHERE id = 'ar-adele';`,
+    );
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getArtistInfo?id=ar-adele");
+    const text = await r.text();
+    assert(/status="ok"/.test(text), "status=ok");
+    assert(/<biography>Cached bio from a prior backfill\.<\/biography>/.test(text), "cached biography served");
+    assert(/<largeImageUrl>https:\/\/cache\/adele\.png<\/largeImageUrl>/.test(text), "cached image_url served");
+    assert(fetchCalls.length === 0, "no outbound fetch — cache alone satisfied the request");
+  }
+
+  console.log("\ngetArtistInfo: missing api_key but CN fallback configured → bio/cover from netease (259):");
+  {
+    fetchCalls = [];
+    fetchHandler = (call) => {
+      if (call.url.includes("search/get/web")) {
+        return jsonResponse({ result: { artists: [{ id: 1, name: "Adele", picUrl: "https://netease/adele.png" }] } });
+      }
+      if (call.url.includes("/api/artist/desc")) {
+        return jsonResponse({ briefDesc: "Adele bio via netease fallback." });
+      }
+      return jsonResponse({});
+    };
+    const sqlite = buildDb({ lastfmKey: "", fallbackSources: '["netease"]' });
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getArtistInfo?id=ar-adele");
+    const text = await r.text();
+    assert(/status="ok"/.test(text), "status=ok");
+    assert(/<biography>Adele bio via netease fallback\.<\/biography>/.test(text), "CN fallback biography served");
+    assert(/<largeImageUrl>https:\/\/netease\/adele\.png<\/largeImageUrl>/.test(text), "CN fallback cover served");
+  }
+
+  console.log("\ngetArtistInfo: default priority (CN before lastfm) — lastfm never called when CN already fills bio+cover (260):");
+  {
+    fetchCalls = [];
+    fetchHandler = (call) => {
+      if (call.url.includes("search/get/web")) {
+        return jsonResponse({ result: { artists: [{ id: 1, name: "Adele", picUrl: "https://netease/adele.png" }] } });
+      }
+      if (call.url.includes("/api/artist/desc")) {
+        return jsonResponse({ briefDesc: "Adele bio via netease." });
+      }
+      // Any lastfm call here would be a bug — 260 says CN is tried first.
+      return jsonResponse({ artist: { name: "Adele", bio: { summary: "SHOULD NOT BE USED" } } });
+    };
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["netease","qmusic","lastfm"]' });
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getArtistInfo?id=ar-adele");
+    const text = await r.text();
+    assert(/<biography>Adele bio via netease\.<\/biography>/.test(text), "biography came from netease, not lastfm");
+    assert(!/SHOULD NOT BE USED/.test(text), "lastfm's artist.getInfo was never consulted for bio/cover");
+    assert(!fetchCalls.some((c) => c.url.includes("method=artist.getInfo")), "no artist.getInfo call at all");
+  }
+
+  console.log("\ngetArtistInfo: reordering lastfm to the front makes it win over CN sources (260):");
+  {
+    fetchCalls = [];
+    fetchHandler = (call) => {
+      if (call.url.includes("method=artist.getInfo")) {
+        return jsonResponse({ artist: { name: "Adele", bio: { summary: "Bio via lastfm (ranked first)." }, image: [{ size: "large", "#text": "https://lastfm/adele.png" }] } });
+      }
+      if (call.url.includes("method=artist.getSimilar")) return jsonResponse({ similarartists: { artist: [] } });
+      // A netease/qmusic call here would mean the configured order was ignored.
+      return jsonResponse({ result: { artists: [] } });
+    };
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["lastfm","netease","qmusic"]' });
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getArtistInfo?id=ar-adele");
+    const text = await r.text();
+    assert(/<biography>Bio via lastfm \(ranked first\)\.<\/biography>/.test(text), "biography came from lastfm (ranked first)");
+    assert(!fetchCalls.some((c) => c.url.includes("search/get/web")), "netease never consulted — lastfm already won");
+  }
+
+  console.log("\ngetArtistInfo: similarArtist queried whenever lastfm is enabled, independent of who filled bio/cover (260):");
+  {
+    fetchCalls = [];
+    fetchHandler = (call) => {
+      if (call.url.includes("search/get/web")) {
+        return jsonResponse({ result: { artists: [{ id: 1, name: "Adele", picUrl: "https://netease/adele.png" }] } });
+      }
+      if (call.url.includes("/api/artist/desc")) return jsonResponse({ briefDesc: "netease bio." });
+      if (call.url.includes("method=artist.getSimilar")) {
+        return jsonResponse({ similarartists: { artist: [{ name: "Sam Smith" }] } });
+      }
+      return jsonResponse({});
+    };
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["netease","qmusic","lastfm"]' });
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getArtistInfo?id=ar-adele");
+    const text = await r.text();
+    assert(/<biography>netease bio\.<\/biography>/.test(text), "bio filled by netease (ranked first)");
+    assert(/name="Sam Smith"/.test(text), "similarArtist still queried via lastfm even though it didn't fill bio/cover");
+  }
+
+  console.log("\ngetArtistInfo: lastfm excluded from the source list entirely → no similarArtist call either (260):");
+  {
+    fetchCalls = [];
+    fetchHandler = () => jsonResponse({ similarartists: { artist: [{ name: "Sam Smith" }] } });
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["netease","qmusic"]' });
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getArtistInfo?id=ar-adele");
+    const text = await r.text();
+    assert(!/name="Sam Smith"/.test(text), "no similarArtist — lastfm not in the enabled source list");
+    assert(!fetchCalls.some((c) => c.url.includes("method=artist.getSimilar")), "artist.getSimilar never called");
   }
 
   console.log("getArtistInfo: happy path forwards bio + images + similarArtist:");
@@ -260,7 +393,10 @@ async function main() {
       }
       return jsonResponse({});
     };
-    const sqlite = buildDb({ lastfmKey: "TESTKEY" });
+    // 260: lastfm is only a member of the priority list now, not hardcoded —
+    // enable it explicitly so this test still exercises the lastfm response
+    // mapping it's actually about.
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["lastfm"]' });
     const { get } = makeApp(sqlite);
     const r = await get("/rest/getArtistInfo?id=ar-adele&count=5");
     assert(r.status === 200, "200 status");
@@ -294,7 +430,7 @@ async function main() {
       }
       return jsonResponse({});
     };
-    const sqlite = buildDb({ lastfmKey: "TESTKEY" });
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["lastfm"]' });
     const { get } = makeApp(sqlite);
     const r = await get("/rest/getArtistInfo?id=ar-adele&includeNotPresent=true");
     const text = await r.text();
@@ -311,7 +447,7 @@ async function main() {
       }
       return jsonResponse({ similarartists: { artist: [] } });
     };
-    const sqlite = buildDb({ lastfmKey: "TESTKEY" });
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["lastfm"]' });
     const { get } = makeApp(sqlite);
     const r = await get("/rest/getArtistInfo2?id=ar-adele");
     const text = await r.text();
@@ -405,7 +541,7 @@ async function main() {
       }
       return jsonResponse({ similarartists: { artist: [] } });
     };
-    const sqlite = buildDb({ lastfmKey: "TESTKEY" });
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["lastfm"]' });
     const { get } = makeApp(sqlite);
     const r1 = await get("/rest/getArtistInfo?id=ar-adele&count=2");
     assert(r1.status === 200, "first call ok");
@@ -425,13 +561,33 @@ async function main() {
     assert(/Cached body/.test(text2), "cached body returned on second call");
   }
 
-  console.log("upstream HTTP failure surfaces as Subsonic error code 0:");
+  console.log("getArtistInfo: transient upstream HTTP failure degrades gracefully, not a Subsonic error:");
   {
+    // Both info and similarArtists swallow any fetch error (not just
+    // LastfmUnconfigured) — a 503 blip must not be worse than last.fm being
+    // unconfigured outright. lastfm is the only enabled source and it 503s
+    // on every call, so the end result is the same empty-but-OK artistInfo
+    // as the unconfigured case above.
+    fetchCalls = [];
+    fetchHandler = () => new Response("upstream is sad", { status: 503 });
+    const sqlite = buildDb({ lastfmKey: "TESTKEY", fallbackSources: '["lastfm"]' });
+    const { get } = makeApp(sqlite);
+    const r = await get("/rest/getArtistInfo?id=ar-adele");
+    const text = await r.text();
+    assert(/status="ok"/.test(text), `status=ok despite upstream 503 (got: ${text.slice(0, 200)})`);
+    assert(!/code="0"/.test(text), "no generic error code surfaced");
+  }
+
+  console.log("\ngetSimilarSongs: upstream failure has no fallback path, still surfaces as an error (unchanged):");
+  {
+    // similarSongs has no CN/cache equivalent, so it keeps the old
+    // hard-fail-on-upstream-error behavior — only getArtistInfo's graceful
+    // degradation changed in 259.
     fetchCalls = [];
     fetchHandler = () => new Response("upstream is sad", { status: 503 });
     const sqlite = buildDb({ lastfmKey: "TESTKEY" });
     const { get } = makeApp(sqlite);
-    const r = await get("/rest/getArtistInfo?id=ar-adele");
+    const r = await get("/rest/getSimilarSongs?id=sg-hello");
     const text = await r.text();
     assert(/status="failed"/.test(text), "status=failed on upstream error");
     assert(/code="0"/.test(text), "code=0 (generic error) for upstream failure");

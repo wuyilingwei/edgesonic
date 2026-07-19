@@ -146,12 +146,15 @@ async function main() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const body = await r.json() as any;
     assert(body.ok === true, "ok:true");
-    assert(body.saved === 2, `saved=2 (got ${body.saved})`);
+    // Level 3 entries are filtered out (super admin is always fully
+    // permissioned server-side), so only the L2 row is saved.
+    assert(body.saved === 1, `saved=1 (got ${body.saved})`);
     assert(body.envPushed === false, "envPushed=false when CF not configured");
 
     const rows = sqlite.prepare("SELECT level, enabled FROM user_permissions WHERE permission='manage_sources' ORDER BY level").all() as Array<{ level: number; enabled: number }>;
     assert(rows.find((r) => r.level === 2)?.enabled === 1, "L2 manage_sources flipped to enabled=1");
-    assert(rows.find((r) => r.level === 3)?.enabled === 0, "L3 manage_sources flipped to enabled=0");
+    // L3 row must NOT have been touched by the batch save.
+    assert(rows.find((r) => r.level === 3)?.enabled === 1, "L3 manage_sources left at enabled=1 (super admin fixed)");
   }
 
   console.log("\nCF configured + secret push succeeds: envPushed=true, PUT body carries the FULL merged matrix:");

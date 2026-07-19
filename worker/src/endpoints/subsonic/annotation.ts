@@ -36,6 +36,7 @@ import { Hono } from "hono";
 import { createQueries } from "../../db/queries";
 import { permissionMiddleware, subsonicError } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
+import { pushStars } from "../../utils/peerSync";
 import { mapArtist, mapAlbum, mapSong, type AnnotationLite } from "../../types/subsonic";
 import type { User, Annotation } from "../../types/entities";
 
@@ -105,6 +106,14 @@ const starHandler = (mode: "star" | "unstar") => async (c: import("hono").Contex
   for (const id of ids) await fn(user.username, id, "song");
   for (const id of albumIds) await fn(user.username, id, "album");
   for (const id of artistIds) await fn(user.username, id, "artist");
+
+  // Real-time outbound to the user's configured sync peer (songs only;
+  // best-effort, never blocks the response). No-op unless sync is enabled.
+  if (ids.length > 0) {
+    c.executionCtx.waitUntil(
+      pushStars((c.env as Env).DB, user.username, ids, mode === "star").catch(() => {}),
+    );
+  }
 
   return c.text(subsonicOK({}), 200, XML);
 };

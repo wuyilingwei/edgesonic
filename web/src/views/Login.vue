@@ -1,19 +1,20 @@
 
 <script setup lang="ts">
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ref } from "vue";
+import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
 
 const { t } = useI18n();
-const { login, isLoggedIn } = useAuth();
+const { login, guestLogin, isLoggedIn } = useAuth();
 const router = useRouter();
 
 const username = ref("");
 const password = ref("");
 const error = ref("");
 const loading = ref(false);
+const guestEnabled = ref(false);
 
 if (isLoggedIn.value) router.push("/");
 
@@ -30,6 +31,30 @@ async function submit() {
     loading.value = false;
   }
 }
+
+async function loginAsGuest() {
+  error.value = "";
+  loading.value = true;
+  try {
+    const result = await guestLogin();
+    if (result.ok) router.push("/");
+    else error.value = result.error || t("login.failed");
+  } catch {
+    error.value = t("login.failed");
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(async () => {
+  try {
+    const response = await fetch("/edgesonic/auth/guest", { credentials: "same-origin" });
+    const data = await response.json();
+    guestEnabled.value = data.ok && data.enabled === true;
+  } catch {
+    guestEnabled.value = false;
+  }
+});
 </script>
 
 <template>
@@ -59,6 +84,9 @@ async function submit() {
 
         <button type="submit" class="btn-primary login-btn" :disabled="loading || !username || !password">
           {{ loading ? t("login.submitting") : t("login.submit") }}
+        </button>
+        <button v-if="guestEnabled" type="button" class="btn-secondary login-btn" :disabled="loading" @click="loginAsGuest">
+          {{ t("login.guest") }}
         </button>
       </form>
 

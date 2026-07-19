@@ -80,6 +80,7 @@ const INT_KEYS = new Set([
   "playCount", "userRating", "visitCount", "position", "currentIndex",
   "offset", "totalHits", "code", "folder", "maxBitRate", "minutes",
   "avatarLastChanged", "start",
+  "end", "byteStart", "byteEnd", "index",
 ]);
 
 const FLOAT_KEYS = new Set(["averageRating"]);
@@ -137,6 +138,7 @@ const ARRAY_PAIRS = new Set([
   "subsonic-response/openSubsonicExtensions",
   "openSubsonicExtensions/versions",
   "lyricsList/structuredLyrics", "structuredLyrics/line",
+  "structuredLyrics/cueLine", "cueLine/cue", "structuredLyrics/agents",
   "tokenInfo/permission",
   "scanResult/source",
 ]);

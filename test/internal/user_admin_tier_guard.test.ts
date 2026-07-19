@@ -73,6 +73,7 @@ function buildDb(): DatabaseSync {
     INSERT INTO users (username, master_password, level) VALUES ('admin2','x', 2);
     INSERT INTO users (username, master_password, level) VALUES ('root',  'x', 3);
     INSERT INTO users (username, master_password, level) VALUES ('root2', 'x', 3);
+    INSERT INTO users (username, master_password, level) VALUES ('guest', 'x', 0);
 
     CREATE TABLE user_permissions (
       level INTEGER NOT NULL, permission TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
@@ -138,12 +139,24 @@ async function main() {
     assert(row.level === 2, "row inserted at level 2");
   }
 
-  console.log("\ncreate: manage_users caller CAN still create an ordinary level-1 user (no regression):");
+  console.log("\ncreate: admin CAN still create an ordinary level-1 user (no regression):");
   {
     const sqlite = buildDb();
-    const { post } = makeApp(sqlite, { username: "carol", level: 1 });
+    const { post } = makeApp(sqlite, { username: "admin", level: 2 });
     const r = await post("/edgesonic/users/create", { username: "newbie", password: "x", level: 1 });
     assert(r.status === 200, `200 (got ${r.status})`);
+  }
+
+  console.log("\nlevel 0 is reserved for the guest account:");
+  {
+    const sqlite = buildDb();
+    const { post } = makeApp(sqlite, { username: "root", level: 3 });
+    const create = await post("/edgesonic/users/create", { username: "anonymous", password: "x", level: 0 });
+    assert(create.status === 400, `non-guest create at level 0 returns 400 (got ${create.status})`);
+    const demote = await post("/edgesonic/users/update", { username: "carol", level: 0 });
+    assert(demote.status === 400, `non-guest update to level 0 returns 400 (got ${demote.status})`);
+    const promoteGuest = await post("/edgesonic/users/update", { username: "guest", level: 1 });
+    assert(promoteGuest.status === 400, `guest update away from level 0 returns 400 (got ${promoteGuest.status})`);
   }
 
   console.log("\nupdate: level-2 admin CANNOT change another admin's password:");

@@ -24,6 +24,11 @@
 // All errors are swallowed: a missing lyric must not break /rest/getLyrics
 // the endpoint returns an empty <lyrics/> element on null. Each upstream
 // timeout / non-2xx → next source → null.
+//
+// 0259: now also fetches the `klyric.klyric` field (NetEase's enhanced LRC
+// with word-level timestamps) and returns it alongside the line-level LRC.
+// Callers that only want line-level LRC ignore `rich`; callers that want
+// cue data pass `rich` through the enhanced-LRC parser in richLyrics.ts.
 
 const FETCH_TIMEOUT_MS = 6000;
 
@@ -45,6 +50,19 @@ async function timedFetch(url: string, init: RequestInit): Promise<Response> {
 
 // Search → first hit → fetch lrc.lyric. Returns the LRC text or null.
 async function fetchNetEaseLyric(artist: string, title: string): Promise<string | null> {
+  const r = await fetchNetEaseLyricRich(artist, title);
+  return r?.lrc ?? null;
+}
+
+// Search → first hit → fetch lrc + klyric. Returns the line-level LRC plus
+// the enhanced-LRC text (NetEase `klyric.klyric`) when available. Both
+// fields are returned so callers can decide which to persist.
+export interface NetEaseLyricResult {
+  lrc: string | null;
+  klyric: string | null;
+}
+
+async function fetchNetEaseLyricRich(artist: string, title: string): Promise<NetEaseLyricResult | null> {
   try {
     // Step 1 — search. The web API returns { result: { songs: [{ id }, ...] } }.
     const query = `${title} ${artist}`.trim();
@@ -76,9 +94,10 @@ async function fetchNetEaseLyric(artist: string, title: string): Promise<string 
       songs.find((s) => s.name && norm(s.name) === norm(title)) ?? songs[0];
     if (!pick?.id) return null;
 
-    // Step 2 — lyric. The API returns { lrc: { lyric: "[00:00.00]..." } }
-    // and may also return klyric / tlyric (karaoke / translation) which we
-    // ignore for v1.
+    // Step 2 — lyric. The API returns { lrc: { lyric }, klyric: { lyric } }.
+    // kv=1 requests the karaoke (word-level) field; tv=-1 disables the
+    // translation track (we don't expose translations via NetEase — private
+    // libraries ship their own TTML sidecars for that).
     const lyricUrl = `https://music.163.com/api/song/lyric?id=${pick.id}&lv=1&kv=1&tv=-1`;
     const lyricResp = await timedFetch(lyricUrl, {
       method: "GET",
@@ -87,11 +106,16 @@ async function fetchNetEaseLyric(artist: string, title: string): Promise<string 
     if (!lyricResp.ok) return null;
     const lyricJson = (await lyricResp.json()) as {
       lrc?: { lyric?: string };
+      klyric?: { lyric?: string };
     };
     const lrc = lyricJson.lrc?.lyric;
-    if (!lrc || typeof lrc !== "string") return null;
-    const trimmed = lrc.trim();
-    return trimmed.length > 0 ? trimmed : null;
+    const klyric = lyricJson.klyric?.lyric;
+    const trim = (s: string | undefined): string | null =>
+      s && typeof s === "string" && s.trim().length > 0 ? s.trim() : null;
+    const l = trim(lrc);
+    const k = trim(klyric);
+    if (!l && !k) return null;
+    return { lrc: l, klyric: k };
   } catch {
     // Network error / abort / JSON parse failure — all swallowed.
     return null;
@@ -108,4 +132,17 @@ export async function fetchExternalLyric(
   if (!t) return null;
   const a = (artist || "").trim();
   return fetchNetEaseLyric(a, t);
+}
+
+// 0259 — rich variant: returns both the line-level LRC and the enhanced-LRC
+// word-level payload (NetEase klyric). Used by getLyricsBySongId to populate
+// both `lyrics` and `lyrics_rich` in one round-trip.
+export async function fetchExternalLyricRich(
+  artist: string | null | undefined,
+  title: string | null | undefined,
+): Promise<NetEaseLyricResult | null> {
+  const t = (title || "").trim();
+  if (!t) return null;
+  const a = (artist || "").trim();
+  return fetchNetEaseLyricRich(a, t);
 }

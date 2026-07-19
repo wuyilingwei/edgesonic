@@ -245,6 +245,35 @@ const ul = conv(unsyncedXml).lyricsList.structuredLyrics[0].line;
 assert(typeof ul[0] === "object" && ul[0].value === "plain line",
   "unsynced line is still a {value} object, not a bare string");
 
+// 0259 — songLyrics v2: cueLine/cue arrays + kind/agents attrs are typed
+const enhancedXml = subsonicOK({
+  lyricsList: {
+    structuredLyrics: {
+      _attributes: { kind: "main", lang: "ko", synced: "true" },
+      line: [{ _attributes: { start: 1000 }, _text: "눈을 뜬 순간" }],
+      cueLine: {
+        _attributes: { index: 0, start: 1000, end: 2000, value: "눈을 뜬 순간" },
+        cue: [
+          { _attributes: { start: 1000, end: 1500, value: "눈", byteStart: 0, byteEnd: 2 } },
+          { _attributes: { start: 1500, end: 2000, value: "을", byteStart: 3, byteEnd: 5 } },
+        ],
+      },
+      agents: { _attributes: { id: "lead", role: "main", name: "Lead" } },
+    },
+  },
+});
+const el = conv(enhancedXml).lyricsList.structuredLyrics[0];
+assert(Array.isArray(el.cueLine), "cueLine is array");
+assert(el.cueLine[0].index === 0, "cueLine.index typed as int");
+assert(el.cueLine[0].start === 1000, "cueLine.start typed as int");
+assert(el.cueLine[0].end === 2000, "cueLine.end typed as int");
+assert(Array.isArray(el.cueLine[0].cue), "cue is array");
+assert(el.cueLine[0].cue[0].byteStart === 0 && el.cueLine[0].cue[0].byteEnd === 2,
+  "cue.byteStart/byteEnd typed as int");
+assert(el.cueLine[0].cue[0].end === 1500, "cue.end typed as int");
+assert(Array.isArray(el.agents), "agents is array");
+assert(el.agents[0].id === "lead" && el.agents[0].role === "main", "agents attrs preserved");
+
 // ---------------------------------------------------------------------------
 section("11. mapSong physical fields + webdav presign default off");
 const physRow = { ...songRow, inst_suffix: "flac", inst_content_type: "audio/flac",

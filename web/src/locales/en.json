@@ -49,6 +49,7 @@
     "username": "Username",
     "password": "Password",
     "submit": "LOGIN",
+    "guest": "CONTINUE AS GUEST",
     "submitting": "LOGIN…",
     "failed": "Login failed"
   },
@@ -491,17 +492,57 @@
         "saveFailed": "Save failed"
       },
       "lastfm": {
-        "title": "Last.fm Proxy",
-        "desc": "Optional. Paste a Last.fm API key to enable getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs. Leave empty and these endpoints return Subsonic error 30 (not supported) — the rest of the API stays available.",
-        "label": "API Key",
-        "placeholder": "32-char Last.fm API key",
-        "setStatus": "SET",
+        "title": "Last.fm",
+        "userDesc": "Connect your Last.fm account to read your play history, loved tracks and top tracks. Requires your own Last.fm API key (below) plus your Last.fm username — this is fully isolated from the system-level key, it is never shared. Read-only — scrobble / love are not supported.",
+        "userApiKeyDesc": "Required for the personal read paths above (recent/loved/top tracks, profile). Isolated from the system-level key — leaving this empty means those paths stay unavailable, they do not fall back to the system key.",
+        "apiKeyLabel": "API key",
+        "apiKeyField": "API key",
+        "apiKeyPlaceholder": "32-char Last.fm API key",
+        "apiKeySaved": "Last.fm API key saved",
+        "apiKeyCleared": "Last.fm API key cleared",
+        "systemTitle": "Last.fm (system)",
+        "systemDesc": "API key shared by all users. Powers the Subsonic getArtistInfo / getAlbumInfo / getSimilarSongs / getTopSongs endpoints only — isolated from the per-user key above, it is never used for a user's personal recent/loved/top tracks. Empty disables Last.fm as an artist-info source and the album/similar/topSongs endpoints (Subsonic returns error 30).",
+        "usernameLabel": "Last.fm username",
+        "usernamePlaceholder": "your Last.fm account name",
+        "usernameSaved": "Last.fm username saved",
+        "usernameCleared": "Last.fm username cleared",
+        "systemKeySaved": "Last.fm API key saved",
+        "systemKeyCleared": "Last.fm API key cleared",
+        "fallbackTitle": "Artist info sources",
+        "fallbackDesc": "Where artist biography/cover come from, tried top to bottom until one hits. Last.fm is not primary by default — CN sources (NetEase/QQ Music) usually have far better coverage for CN artists, so they're ranked first; last.fm is available but ranked last unless you reorder it. Toggle each source and drag its priority with the arrows. CN matches are high-confidence only (search result name must match the queried artist).",
+        "fallbackSaved": "Artist info source priority saved",
+        "scrapeIntervalTitle": "Auto backfill cadence",
+        "scrapeIntervalDesc": "A cron job periodically scans artists missing biography / cover and fills them from the enabled CN sources, so getArtistInfo stays fast on hot path (no live scrape).",
+        "scrapeIntervalField": "Interval (hours)",
+        "scrapeIntervalHint": "0 = disabled; 1 = every cron tick; N>1 = every N hours. Default 24.",
+        "scrapeIntervalSaved": "Backfill cadence saved",
+        "fullStatus": "READY",
+        "partialStatus": "PARTIAL",
         "unsetStatus": "UNSET",
-        "save": "Save key",
+        "setStatus": "SET",
+        "save": "Save",
         "clear": "Clear",
-        "saved": "Last.fm key saved",
-        "cleared": "Last.fm key cleared",
         "saveFailed": "Save failed"
+      },
+      "sync": {
+        "title": "Peer Sync",
+        "desc": "Mirror your stars and playlists to one other Subsonic-compatible server. Outbound changes push immediately; inbound changes pull hourly. Songs are matched by title + artist, so IDs need not match.",
+        "url": "Peer URL",
+        "username": "Username",
+        "password": "Password",
+        "passwordKept": "kept — type to replace",
+        "on": "ON",
+        "off": "OFF",
+        "saved": "Saved",
+        "saveFailed": "Save failed",
+        "scope": {
+          "title": "Playlists to sync",
+          "desc": "Which playlists mirror to the peer. Both sides must pick the same scope for a clean two-way mirror; otherwise each side filters independently.",
+          "own": "Only my own",
+          "ownPublic": "Mine + public",
+          "custom": "Custom by name",
+          "customPlaceholder": "playlist names, comma-separated"
+        }
       },
       "scan": {
         "title": "Scan Settings",
@@ -758,7 +799,12 @@
       "title": "User"
     },
     "system": {
-      "title": "System"
+      "title": "System",
+      "subMedia": "Media processing & scanning",
+      "subIntegrations": "System integration",
+      "subLastfm": "Last.fm",
+      "subWorkers": "Browser work pool",
+      "subFeatureFlags": "Feature flags"
     },
     "audioCache": {
       "title": "Audio Cache",
@@ -808,6 +854,7 @@
         "edit_tags": "Edit Tags",
         "manage_files": "Manage Files",
         "manage_sources": "Manage Sources",
+        "manage_credentials": "Issue Credentials",
         "manage_users": "Manage Users",
         "manage_settings": "System Settings",
         "maintenance_cleanup": "Maintenance",
@@ -910,6 +957,14 @@
       "library": "Library (index on scan)",
       "syncOnly": "SYNC ONLY",
       "hint": "Sync-only sources are not indexed into the library; use as cross-source copy targets."
+    },
+    "cacheTier": {
+      "label": "Cache tier",
+      "off": "Off",
+      "standard": "Standard",
+      "extended": "Extended",
+      "usage": "Cached",
+      "hint": "Copies files to R2 on first play for faster replays. Standard = small budget, kept longer. Extended = larger budget and per-file cap, but a short TTL — not for long-term storage. Old cached files are evicted automatically to make room for new ones."
     },
     "scanStatus": {
       "idle": "Scan",

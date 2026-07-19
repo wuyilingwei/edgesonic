@@ -17,6 +17,7 @@ import { Hono } from "hono";
 import { permissionMiddleware, subsonicError } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
 import { callCfApi } from "./cf";
+import { isPermissionHardlocked } from "../../utils/permissions";
 import type { User } from "../../types/entities";
 
 export const permissionsRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
@@ -50,6 +51,10 @@ permissionsRoutes.get("/permissions/list", permissionMiddleware("manage_permissi
             level,
             name: p.permission,
             enabled: String(p.enabled),
+            // Hardlocked cells are surfaced to the UI so it can render them
+            // as permanently off and disabled. The server still enforces the
+            // lock at read and write time; this flag is purely cosmetic.
+            locked: isPermissionHardlocked(Number(level), p.permission) ? "1" : "0",
           },
         })),
       })),
@@ -68,6 +73,20 @@ permissionsRoutes.post("/permissions/update", permissionMiddleware("manage_permi
   }
   if (body.level < 0 || body.level > 3) {
     return c.text(subsonicError(0, "Invalid level (0-3)"), 400, XML);
+  }
+  if (body.level === 3) {
+    // Super admin is always fully permissioned server-side; the matrix UI
+    // hides its card. Reject any write to level 3 so a future caller can't
+    // persist a misleading row that the read path would ignore anyway.
+    return c.text(subsonicError(0, "Super admin permissions are fixed"), 400, XML);
+  }
+  if (isPermissionHardlocked(body.level, body.permission)) {
+    // Hardlocked cells (guest non-{stream,browse,search}; user management /
+    // maintenance surface) cannot be flipped on via the API. This is the
+    // write-time guard that pairs with the read-time enforcement in
+    // utils/permissions.ts; rejecting here keeps the D1 row honest instead
+    // of relying solely on the read path to mask a stale write.
+    return c.text(subsonicError(0, "Permission is hardlocked for this level"), 400, XML);
   }
   if (body.enabled === undefined) {
     return c.text(subsonicError(0, "Missing enabled"), 400, XML);
@@ -109,7 +128,20 @@ permissionsRoutes.post("/permissions/save", permissionMiddleware("manage_permiss
   // would claim it's grantable to a lower level, even from a super-admin's
   // batch save (a stray checkbox from some future UI regression shouldn't
   // be able to write a misleading row).
-  const entries = body.permissions.filter((p) => p.name !== "manage_permissions");
+  // Also drop any level 3 entries: super admin is always fully permissioned
+  // server-side and the matrix UI hides its card, so writing to level 3 is
+  // both meaningless and a potential footgun.
+  // Hardlocked cells (guest non-{stream,browse,search}; user management /
+  // maintenance surface) are filtered out here too — the UI renders them as
+  // permanently off and disabled, so a save payload should never carry
+  // them; filtering (rather than 400-ing) keeps the batch save resilient to
+  // a future client that re-sends the whole matrix including the locked
+  // cells. The read-time guard in utils/permissions.ts is the backstop.
+  const entries = body.permissions.filter((p) =>
+    p.name !== "manage_permissions"
+    && p.level !== 3
+    && !isPermissionHardlocked(p.level, p.name)
+  );
 
   const db = c.env.DB;
   const stmts = entries.map((p) =>

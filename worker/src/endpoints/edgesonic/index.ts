@@ -32,6 +32,9 @@ import { versionRoutes } from "./version";
 import { r2presignRoutes } from "./r2presign";
 import { cloneRoutes } from "./clone";
 import { statsRoutes } from "./stats";
+import { syncRoutes } from "./sync";
+import { lastfmRoutes } from "./lastfm";
+import { artistScrapeRoutes } from "./artistScrape";
 
 export const edgesonicRoutes = new Hono();
 
@@ -48,3 +51,6 @@ edgesonicRoutes.route("/", versionRoutes);
 edgesonicRoutes.route("/", r2presignRoutes);
 edgesonicRoutes.route("/", cloneRoutes);
 edgesonicRoutes.route("/", statsRoutes);
+edgesonicRoutes.route("/", syncRoutes);
+edgesonicRoutes.route("/", lastfmRoutes);
+edgesonicRoutes.route("/", artistScrapeRoutes);

@@ -35,6 +35,7 @@ EDGESONIC_VERSION = "dev"
 # Static Assets (Vue frontend) — 需先 `npm run build:web` 生成 web/dist
 [assets]
 directory = "../web/dist"
+binding = "ASSETS"
 
 # D1 Database
 [[d1_databases]]

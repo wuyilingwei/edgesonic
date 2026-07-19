@@ -24,6 +24,10 @@ import { maybeRunScheduledScan } from "./utils/scheduledScan";
 import { reclaimStaleWork } from "./utils/workReclaim";
 import { maybeRunMetadataRecheck } from "./utils/metadataRecheck";
 import { maybeRunLrcBackfill } from "./utils/lrcBackfill";
+import { maybeRunArtistScrapeBackfill } from "./utils/artistScrapeBackfill";
+import { maybeRunPeerSync } from "./utils/peerSync";
+import { reapExpiredGuestTokens } from "./utils/guestTokenReaper";
+import { maybeRunCacheEviction } from "./utils/cacheEviction";
 import { webLoginRoutes } from "./endpoints/edgesonic/auth";
 import { sharePublicRoutes } from "./endpoints/share_public";
 
@@ -145,6 +149,36 @@ export default {
     ctx.waitUntil(
       maybeRunLrcBackfill(env, ctx).catch((e) => {
         console.error("scheduled maybeRunLrcBackfill failed:", e);
+      }),
+    );
+    // 253 — batch backfill artists missing biography / image_url from
+    // netease/qmusic. Independent cadence (artist_scrape_interval_hours).
+    ctx.waitUntil(
+      maybeRunArtistScrapeBackfill(env, ctx).catch((e) => {
+        console.error("scheduled maybeRunArtistScrapeBackfill failed:", e);
+      }),
+    );
+    // Per-user one-peer favourite/playlist reconciliation. Self-gates to at
+    // most once per hour via cron:last_peer_sync_ts (independent of the scan's
+    // own gate), so it pulls hourly regardless of how often the cron ticks.
+    ctx.waitUntil(
+      maybeRunPeerSync(env).catch((e) => {
+        console.error("scheduled maybeRunPeerSync failed:", e);
+      }),
+    );
+    // Reap expired guest tokens. Cheap single DELETE; runs every tick so the
+    // table doesn't accumulate dead rows between scans.
+    ctx.waitUntil(
+      reapExpiredGuestTokens(env).catch((e) => {
+        console.error("scheduled reapExpiredGuestTokens failed:", e);
+      }),
+    );
+    // proactively clear past-TTL cached rows for every source with a
+    // cache_tier, so budget-under sources still get reclaimed instead of
+    // only evicting reactively at the next cache write.
+    ctx.waitUntil(
+      maybeRunCacheEviction(env, ctx).catch((e) => {
+        console.error("scheduled maybeRunCacheEviction failed:", e);
       }),
     );
   },

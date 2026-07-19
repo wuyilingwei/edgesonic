@@ -7,10 +7,12 @@ import { useAuth, parseXmlAttrs } from "../api";
 import { useWorkerPool } from "../stores/workerPool";
 
 const { t } = useI18n();
-const { isLoggedIn, username, isAdmin, isSuperAdmin, level, storageFetch, edgesonicFetch, edgesonicPost, handleAuthError } = useAuth();
+const { isLoggedIn, username, isSuperAdmin, level, hasPerm, storageFetch, edgesonicFetch, edgesonicPost, handleAuthError } = useAuth();
 const workerPool = useWorkerPool();
 const loading = ref(true);
 const stats = ref({ artists: 0, albums: 0, songs: 0, sources: 0, users: 0 });
+const canManageSources = computed(() => hasPerm("manage_sources"));
+const canManageUsers = computed(() => hasPerm("manage_users"));
 
 interface StorageRow { source_type: string; count: number; bytes: number }
 interface StorageStats {
@@ -299,8 +301,8 @@ onMounted(async () => {
   try {
     const [libraryJson, sourceXml, userXml] = await Promise.all([
       edgesonicFetch("stats/library"),
-      isAdmin.value ? storageFetch("sources/list") : Promise.resolve(""),
-      isAdmin.value ? edgesonicFetch("users/list") : Promise.resolve(""),
+      canManageSources.value ? storageFetch("sources/list") : Promise.resolve(""),
+      canManageUsers.value ? edgesonicFetch("users/list") : Promise.resolve(""),
     ]);
 
     // A single real COUNT(*) endpoint for the library stats — exact
@@ -446,7 +448,7 @@ onUnmounted(() => {
         <div class="mono-label">{{ t("dashboard.songs") }}</div>
         <div class="corner corner-tr"></div><div class="corner corner-bl"></div>
       </div>
-      <div v-if="isAdmin" class="stat-card card hoverable">
+      <div v-if="canManageSources" class="stat-card card hoverable">
         <div class="stat-num">
           <span v-if="loading" class="skeleton-text" style="width:3rem">　</span>
           <span v-else>{{ stats.sources }}</span>
@@ -474,8 +476,8 @@ onUnmounted(() => {
         <div class="info-row"><span class="info-key">{{ t("dashboard.infoPlatform") }}</span><span class="info-val">Cloudflare Workers</span></div>
         </div>
         <div class="info-col">
-          <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoUsers") }}</span><span class="info-val">{{ stats.users }}</span></div>
-          <div v-if="isAdmin" class="info-row"><span class="info-key">{{ t("dashboard.infoSources") }}</span><span class="info-val">{{ stats.sources }}</span></div>
+          <div v-if="canManageUsers" class="info-row"><span class="info-key">{{ t("dashboard.infoUsers") }}</span><span class="info-val">{{ stats.users }}</span></div>
+          <div v-if="canManageSources" class="info-row"><span class="info-key">{{ t("dashboard.infoSources") }}</span><span class="info-val">{{ stats.sources }}</span></div>
           <div class="info-row">
             <span class="info-key">GitHub Latest</span>
             <span class="info-val">

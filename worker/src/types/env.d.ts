@@ -16,6 +16,7 @@
 interface Env {
   DB: D1Database;
   MUSIC_BUCKET: R2Bucket;
+  ASSETS: Fetcher;
   INSTANCE_ID: string;
   MAX_PROXY_DEPTH?: string;
   // (pushed dynamically via /edgesonic/cf/setToken using the CF API itself,

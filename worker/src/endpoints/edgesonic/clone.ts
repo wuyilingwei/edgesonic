@@ -38,7 +38,7 @@
 
 import { Hono } from "hono";
 import { md5 } from "../../utils/md5";
-import { permissionMiddleware, sha256 } from "../../auth";
+import { GUEST_USERNAME, permissionMiddleware, sha256 } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
 import type { User } from "../../types/entities";
 import type { Context } from "hono";
@@ -945,6 +945,9 @@ cloneRoutes.post("/clone/upsertUser", permissionMiddleware("manage_users"), asyn
   }
 
   const level = typeof user.level === "number" ? Math.max(0, Math.min(3, user.level)) : 1;
+  if ((level === 0) !== (user.username === GUEST_USERNAME)) {
+    return c.json({ ok: false, error: "Level 0 is reserved for the guest account" }, 400);
+  }
   const enabledNum = typeof user.enabled === "number"
     ? (user.enabled ? 1 : 0)
     : (user.enabled === false ? 0 : 1);

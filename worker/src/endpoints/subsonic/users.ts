@@ -30,7 +30,7 @@
 
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { permissionMiddleware, sha256, subsonicError } from "../../auth";
+import { GUEST_USERNAME, permissionMiddleware, sha256, subsonicError } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
 import { subsonicOK } from "../../utils/xml";
 import type { User } from "../../types/entities";
@@ -176,6 +176,9 @@ const createUserHandler = async (c: C): Promise<Response> => {
   if (level < 0 || level > 3) {
     return c.text(subsonicError(10, "Invalid level (0-3)"), 400, XML);
   }
+  if ((level === 0) !== (username === GUEST_USERNAME)) {
+    return c.text(subsonicError(10, "Level 0 is reserved for the guest account"), 400, XML);
+  }
 
   // Permission gate (the permissionMiddleware for manage_users is NOT applied
   // here because Subsonic CUD endpoints use token auth, not sessions; we gate
@@ -246,6 +249,9 @@ const updateUserHandler = async (c: C): Promise<Response> => {
   if (levelParam !== null) {
     if (levelParam < 0 || levelParam > 3) {
       return c.text(subsonicError(10, "Invalid level (0-3)"), 400, XML);
+    }
+    if ((levelParam === 0) !== (username === GUEST_USERNAME)) {
+      return c.text(subsonicError(10, "Level 0 is reserved for the guest account"), 400, XML);
     }
     // Constraint A 鈥?keep at least one superadmin.
     if (levelParam < 3 && existingTarget?.level === 3) {

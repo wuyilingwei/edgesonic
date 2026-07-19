@@ -262,6 +262,21 @@ const streamHandler = async (c: Context) => {
     }
   }
 
+  // bump the LRU clock on cache hits so evictForRoom's "least recently
+  // used" ordering reflects real play activity, not just cache-write time.
+  // Fire-and-forget: no ExecutionContext (tests) just skips the refresh.
+  if (selected.source_type === "cached") {
+    try {
+      const execCtx = c.executionCtx as unknown as ExecutionContext<unknown>;
+      execCtx.waitUntil(
+        env.DB.prepare("UPDATE song_instances SET last_accessed_at = ? WHERE id = ?")
+          .bind(Math.floor(Date.now() / 1000), selected.id).run().then(() => {}),
+      );
+    } catch {
+      // no ExecutionContext — LRU freshness degrades gracefully, not fatal
+    }
+  }
+
   const parsed = parseStorageUri(selected.storage_uri);
   const range = c.req.header("Range") || undefined;
   let result: StreamResult;
@@ -291,14 +306,15 @@ const streamHandler = async (c: Context) => {
     // rollback live in utils/hotcache.ts. Runs before the presign 302 so the
     // copy also happens for clients that get redirected.
     if (parsed.scheme === "webdav") {
-      const hotcacheOn = await getFeatureString(env, "enable_webdav_hotcache", "0");
-      if (hotcacheOn === "1") {
-        try {
-          const { hotCacheWebdav } = await import("../../utils/hotcache");
-          hotCacheWebdav(env, selected, c.executionCtx as unknown as ExecutionContext<unknown>);
-        } catch {
-          // no ExecutionContext (tests) / import failure → play proceeds uncached
-        }
+      // no flag check here anymore: hotCacheWebdav internally resolves
+      // the source's cache_tier and no-ops (after one D1 lookup, inside the
+      // waitUntil) when it's 'off'. Moving the decision there means one
+      // source can opt in without a server-wide switch.
+      try {
+        const { hotCacheWebdav } = await import("../../utils/hotcache");
+        hotCacheWebdav(env, selected, c.executionCtx as unknown as ExecutionContext<unknown>);
+      } catch {
+        // no ExecutionContext (tests) / import failure → play proceeds uncached
       }
     }
 
@@ -455,7 +471,13 @@ const streamHandler = async (c: Context) => {
   applyPrivateCache(headers, AUDIO_MAX_AGE_SEC, etag);
   // Only a full response may 304 here; a range request needs its own bytes.
   if (result.statusCode === 200 && etagMatches(c, etag)) {
-    return new Response(null, { status: 304, headers });
+    // 304 must not carry body-descriptor headers (Content-Length / Content-
+    // Range / Content-Type). See download.ts for the same rationale.
+    const notModified = new Headers();
+    notModified.set("Cache-Control", headers.get("Cache-Control") || `private, max-age=${AUDIO_MAX_AGE_SEC}`);
+    notModified.set("ETag", etag);
+    notModified.set("Accept-Ranges", "bytes");
+    return new Response(null, { status: 304, headers: notModified });
   }
 
   return new Response(result.body, { status: result.statusCode, headers });
@@ -654,7 +676,12 @@ const getCoverArtHandler = async (c: Context) => {
     headers.set("X-EdgeSonic-Cover-Size", String(size));
     headers.set("X-EdgeSonic-Cover-Cache", "hit");
     applyPrivateCache(headers, COVER_MAX_AGE_SEC, sized.httpEtag);
-    if (etagMatches(c, sized.httpEtag)) return new Response(null, { status: 304, headers });
+    if (etagMatches(c, sized.httpEtag)) {
+      const nm = new Headers();
+      nm.set("Cache-Control", headers.get("Cache-Control") || `private, max-age=${COVER_MAX_AGE_SEC}`);
+      nm.set("ETag", sized.httpEtag);
+      return new Response(null, { status: 304, headers: nm });
+    }
     return new Response(sized.body, { headers });
   }
 
@@ -665,7 +692,12 @@ const getCoverArtHandler = async (c: Context) => {
   const headers = new Headers();
   object.writeHttpMetadata(headers);
   applyPrivateCache(headers, COVER_MAX_AGE_SEC, object.httpEtag);
-  if (etagMatches(c, object.httpEtag)) return new Response(null, { status: 304, headers });
+  if (etagMatches(c, object.httpEtag)) {
+    const nm = new Headers();
+    nm.set("Cache-Control", headers.get("Cache-Control") || `private, max-age=${COVER_MAX_AGE_SEC}`);
+    nm.set("ETag", object.httpEtag);
+    return new Response(null, { status: 304, headers: nm });
+  }
   return new Response(object.body, { headers });
 };
 

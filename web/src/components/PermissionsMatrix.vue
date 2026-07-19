@@ -7,14 +7,14 @@ import { useAuth } from "../api";
 
 const { t } = useI18n();
 const { isSuperAdmin, edgesonicFetch, edgesonicPost } = useAuth();
-const permissions = ref<Array<{ level: number; name: string; enabled: boolean }>>([]);
+const permissions = ref<Array<{ level: number; name: string; enabled: boolean; locked?: boolean }>>([]);
 const dirty = ref(false);
 const saving = ref(false);
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
 const levelKeys: Record<number, string> = { 0: "guest", 1: "user", 2: "admin", 3: "super" };
-const permKeys = ["browse", "search", "stream", "download", "upload", "delete", "edit_tags", "manage_files", "manage_sources", "manage_users", "maintenance_cleanup", "manage_settings"];
+const permKeys = ["browse", "search", "stream", "download", "upload", "delete", "edit_tags", "manage_files", "manage_sources", "manage_credentials", "manage_users", "maintenance_cleanup", "manage_settings"];
 
 async function load() {
   try {
@@ -27,6 +27,7 @@ async function load() {
         level: parseInt(m[1].match(/level="(\d)"/)?.[1] || "0"),
         name: m[1].match(/name="([^"]+)"/)?.[1] || "",
         enabled: (m[1].match(/enabled="([^"]+)"/)?.[1] || "0") === "1",
+        locked: (m[1].match(/locked="([^"]+)"/)?.[1] || "0") === "1",
       });
     }
     permissions.value = items;
@@ -40,9 +41,14 @@ function setPerm(level: number, name: string, checked: boolean) {
   else permissions.value.push({ level, name, enabled: checked });
 }
 function toggle(level: number, name: string, checked: boolean) {
+  const row = permissions.value.find((p) => p.level === level && p.name === name);
+  if (row?.locked) return;
   setPerm(level, name, checked);
   if (checked) {
-    for (let higher = level + 1; higher <= 3; higher++) setPerm(higher, name, true);
+    // Cascade upward to admin (level 2). Super admin (level 3) is always
+    // fully permissioned server-side, so the UI never renders its card and
+    // we never write to level 3 here.
+    for (let higher = level + 1; higher <= 2; higher++) setPerm(higher, name, true);
   }
   dirty.value = true;
 }
@@ -83,18 +89,19 @@ onMounted(load);
       </div>
 
       <div class="perm-grid">
-        <div v-for="level in [3, 2, 1, 0]" :key="level" class="card perm-card">
+        <div v-for="level in [2, 1, 0]" :key="level" class="card perm-card">
           <div class="card-header">
             <span class="card-title">{{ t(`settings.permissions.levels.${levelKeys[level]}`) }}</span>
-            <span :class="['status-badge', level === 3 ? 'warning' : level === 2 ? 'info' : level === 1 ? 'success' : 'muted']">{{ t("settings.permissions.level", { n: level }) }}</span>
+            <span :class="['status-badge', level === 2 ? 'info' : level === 1 ? 'success' : 'muted']">{{ t("settings.permissions.level", { n: level }) }}</span>
           </div>
           <div class="perm-list">
-            <div v-for="key in permKeys" :key="key" class="perm-row">
+            <div v-for="key in permKeys" :key="key" class="perm-row" :class="{ 'perm-row-locked': permissions.find(p => p.level === level && p.name === key)?.locked }">
               <span class="perm-name">{{ t(`settings.permissions.perms.${key}`) }}</span>
               <label class="toggle">
                 <input
                   type="checkbox"
                   :checked="permissions.find(p => p.level === level && p.name === key)?.enabled"
+                  :disabled="permissions.find(p => p.level === level && p.name === key)?.locked"
                   @change="toggle(level, key, ($event.target as HTMLInputElement).checked)"
                 />
                 <span class="toggle-slider"></span>
@@ -130,4 +137,7 @@ onMounted(load);
 }
 .perm-row:last-child { border-bottom: none; }
 .perm-name { font-size: var(--fs-sm); color: var(--color-text-primary); }
+.perm-row-locked .perm-name { color: var(--color-text-muted, var(--color-text-secondary)); opacity: 0.7; }
+.perm-row-locked .toggle { opacity: 0.5; cursor: not-allowed; }
+.perm-row-locked .toggle input:disabled + .toggle-slider { cursor: not-allowed; }
 </style>

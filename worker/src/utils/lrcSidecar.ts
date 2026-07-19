@@ -31,33 +31,39 @@
 //   accumulate bytes from the stream and abort on overflow.
 //  - All failures are swallowed: a missing .lrc is the common case, not an
 //   error. The caller treats null as "no lyrics available".
+//  - 0259: the sidecar reader now also recognizes `.ttml` and `.krc`. The
+//   scan-time importer prefers the rich-format file when present and stores
+//   its parsed payload in song_masters.lyrics_rich; the plain `.lrc` (if
+//   also present) still fills `lyrics` for v1 clients.
 
 import { parseStorageUri, type StreamResult } from "../adapters";
 import { createR2Adapter } from "../adapters/r2";
 import { createWebDAVAdapter } from "../adapters/webdav";
+import {
+  parseSidecarToRich,
+  serializeRich,
+  type RichLyrics,
+} from "./richLyrics";
 
 const LRC_MAX_BYTES = 100 * 1024; // 100 KB hard cap
 
-// Replace the file extension of a storage_uri's path component with `lrc`.
-// `webdav://src/Artist/Album/01 Track.flac` → `webdav://src/Artist/Album/01 Track.lrc`
-// Files without an extension simply get `.lrc` appended (rare; harmless).
-//
-// 113 — the scheme group was `[a-z]+`, which never matches "r2" or "s3"
-// (they contain a digit), so this silently fell through to the `${storageUri}.lrc`
-// fallback (producing "...track.flac.lrc" instead of "...track.lrc") for
-// every r2:// and s3:// instance since 094 shipped — sidecar lookups only
-// ever worked for webdav://. `[a-z][a-z0-9]*` follows normal URI scheme
-// syntax (letter, then letters/digits) and covers both.
-function toLrcUri(storageUri: string): string {
+// Sibling sidecar candidates, in priority order: rich formats first (so a
+// .ttml wins over a stale .lrc), then the plain LRC fallback. Each entry
+// is the target URI with the audio extension replaced by the sidecar ext.
+const SIDECAR_EXTS = [".ttml", ".krc", ".lrc"];
+
+// Replace the file extension of a storage_uri's path component with the
+// given sidecar extension.
+function toSidecarUri(storageUri: string, ext: string): string {
   const m = storageUri.match(/^([a-z][a-z0-9]*:\/\/.*?)(\.[^\/.]+)$/i);
-  if (m) return `${m[1]}.lrc`;
-  return `${storageUri}.lrc`;
+  if (m) return `${m[1]}${ext}`;
+  return `${storageUri}${ext}`;
 }
 
-async function streamToCappedText(
+async function streamToCappedBytes(
   result: StreamResult,
   maxBytes: number,
-): Promise<string | null> {
+): Promise<Uint8Array | null> {
   if (!result.body) return null;
   const reader = result.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -84,14 +90,10 @@ async function streamToCappedText(
     try { reader.releaseLock(); } catch { /* already released */ }
   }
   if (total === 0) return null;
-  const blob = new Blob(chunks);
-  try {
-    const text = await blob.text();
-    const trimmed = text.trim();
-    return trimmed.length > 0 ? trimmed : null;
-  } catch {
-    return null;
-  }
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const c of chunks) { out.set(c, pos); pos += c.byteLength; }
+  return out;
 }
 
 // Read a sibling .lrc file for the given audio instance URI.
@@ -100,20 +102,52 @@ export async function fetchLrcSidecar(
   env: Env,
   storageUri: string,
 ): Promise<string | null> {
+  const text = await fetchSidecarBytes(env, storageUri, ".lrc");
+  if (!text) return null;
+  try {
+    const s = new TextDecoder().decode(text).trim();
+    return s.length > 0 ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+// Read a sibling rich-format sidecar (.ttml / .krc / enhanced .lrc) and
+// return the parsed RichLyrics payload, or null when no rich sidecar is
+// present or parsing fails. The plain .lrc fallback (parseLrcToRich) is
+// NOT applied here — callers want the rich payload only when a real
+// word-level source exists, so the plain-LRC path stays in the
+// getLyricsBySongId handler.
+export async function fetchSidecarRich(
+  env: Env,
+  storageUri: string,
+): Promise<RichLyrics | null> {
+  for (const ext of SIDECAR_EXTS) {
+    const bytes = await fetchSidecarBytes(env, storageUri, ext);
+    if (!bytes) continue;
+    const name = storageUri.split("/").pop() || `track${ext}`;
+    const rich = await parseSidecarToRich(name + ext, bytes);
+    if (rich) return rich;
+  }
+  return null;
+}
+
+async function fetchSidecarBytes(
+  env: Env,
+  storageUri: string,
+  ext: string,
+): Promise<Uint8Array | null> {
   const parsed = parseStorageUri(storageUri);
   if (parsed.scheme !== "r2" && parsed.scheme !== "webdav") return null;
 
-  const lrcUri = toLrcUri(storageUri);
+  const sidecarUri = toSidecarUri(storageUri, ext);
 
-  // Pre-check size when the adapter exposes it cheaply. For R2 we can HEAD via
-  // the bucket API; for WebDAV we'd need a PROPFIND which isn't worth a second
-  // round-trip, so we just rely on the read-side cap.
   let result: StreamResult;
   try {
     if (parsed.scheme === "r2") {
-      result = await createR2Adapter(env.MUSIC_BUCKET).stream(lrcUri);
+      result = await createR2Adapter(env.MUSIC_BUCKET).stream(sidecarUri);
     } else {
-      result = await createWebDAVAdapter(env.DB, env).stream(lrcUri);
+      result = await createWebDAVAdapter(env.DB, env).stream(sidecarUri);
     }
   } catch {
     return null;
@@ -122,19 +156,19 @@ export async function fetchLrcSidecar(
   if (result.statusCode === 404 || result.body === null) return null;
   if (result.statusCode >= 400) return null;
 
-  // Trust contentLength when present to short-circuit oversized files before
-  // touching the body; otherwise the read loop enforces the cap.
   if (result.contentLength !== null && result.contentLength > LRC_MAX_BYTES) {
     try { result.body?.cancel(); } catch { /* ignore */ }
     return null;
   }
 
-  return streamToCappedText(result, LRC_MAX_BYTES);
+  return streamToCappedBytes(result, LRC_MAX_BYTES);
 }
 
 // Scan-time importer: pull the sibling .lrc and, on hit, write it back to
 // song_masters.lyrics. Only writes when the column is currently empty so we
-// never overwrite a tag-written or externally-fetched value. Never throws.
+// never overwrite a tag-written or externally-fetched value. Also pulls a
+// rich sidecar (.ttml / .krc / enhanced .lrc) and writes its JSON payload to
+// song_masters.lyrics_rich when empty. Never throws.
 export async function importLrcOnScan(
   db: D1Database,
   env: Env,
@@ -143,17 +177,31 @@ export async function importLrcOnScan(
 ): Promise<void> {
   try {
     const lrc = await fetchLrcSidecar(env, storageUri);
-    if (!lrc) return;
-    // Conditional UPDATE — lyrics IS NULL OR TRIM(lyrics) = ''. Avoids racing
-    // a concurrent tag-write that may have populated the column between the
-    // scan INSERT and this call.
-    await db.prepare(
-      `UPDATE song_masters
-          SET lyrics = ?, updated_at = ?
-        WHERE id = ? AND (lyrics IS NULL OR lyrics = '')`,
-    ).bind(lrc, Math.floor(Date.now() / 1000), masterId).run();
+    if (lrc) {
+      // Conditional UPDATE — lyrics IS NULL OR TRIM(lyrics) = ''. Avoids racing
+      // a concurrent tag-write that may have populated the column between the
+      // scan INSERT and this call.
+      await db.prepare(
+        `UPDATE song_masters
+            SET lyrics = ?, updated_at = ?
+          WHERE id = ? AND (lyrics IS NULL OR lyrics = '')`,
+      ).bind(lrc, Math.floor(Date.now() / 1000), masterId).run();
+    }
   } catch {
     // Swallow: sidecar import is best-effort. A transient D1 / R2 / WebDAV
     // hiccup must not flip the scan_job to failed.
+  }
+  try {
+    const rich = await fetchSidecarRich(env, storageUri);
+    if (rich) {
+      const json = serializeRich(rich);
+      await db.prepare(
+        `UPDATE song_masters
+            SET lyrics_rich = ?, updated_at = ?
+          WHERE id = ? AND (lyrics_rich IS NULL OR lyrics_rich = '')`,
+      ).bind(json, Math.floor(Date.now() / 1000), masterId).run();
+    }
+  } catch {
+    // Swallow: rich sidecar import is best-effort.
   }
 }

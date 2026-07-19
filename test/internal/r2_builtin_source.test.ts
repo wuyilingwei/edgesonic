@@ -78,6 +78,7 @@ function buildDb(): DatabaseSync {
       presign_username TEXT, presign_password TEXT,
       root_path TEXT NOT NULL DEFAULT '', region TEXT NOT NULL DEFAULT 'us-east-1',
       last_sync INTEGER, enabled INTEGER DEFAULT 1, mode TEXT NOT NULL DEFAULT 'library',
+      cache_tier TEXT NOT NULL DEFAULT 'off',
       created_at INTEGER DEFAULT 0, updated_at INTEGER DEFAULT 0
     );
     CREATE TABLE user_permissions (
@@ -85,17 +86,27 @@ function buildDb(): DatabaseSync {
       PRIMARY KEY (level, permission)
     );
     CREATE TABLE song_instances (
-      id TEXT PRIMARY KEY, source_id TEXT NOT NULL, size INTEGER DEFAULT 0, missing INTEGER DEFAULT 0
+      id TEXT PRIMARY KEY, source_id TEXT NOT NULL, size INTEGER DEFAULT 0, missing INTEGER DEFAULT 0,
+      source_type TEXT, parent_instance_id TEXT
     );
-    INSERT INTO user_permissions (level, permission, enabled) VALUES (3, 'manage_sources', 1);
+    -- /sources/list resolves cache_tier_standard/extended budgets via
+    -- resolveTierConfig, which reads feature_strings even when no cached row
+    -- exists yet (falls back to hardcoded defaults, but still queries).
+    CREATE TABLE feature_strings (
+      key TEXT PRIMARY KEY, value TEXT NOT NULL DEFAULT '', description TEXT,
+      updated_at INTEGER DEFAULT 0
+    );
+    INSERT INTO user_permissions (level, permission, enabled) VALUES
+      (3, 'manage_sources', 1),
+      (2, 'manage_files', 1);
   `);
   return sqlite;
 }
 
-function makeApp(sqlite: DatabaseSync) {
+function makeApp(sqlite: DatabaseSync, user = { username: "root", level: 3, enabled: 1, password: "x" }) {
   const app = new Hono<{ Bindings: unknown; Variables: unknown }>();
   app.use("*", async (c, next) => {
-    c.set("user", { username: "root", level: 3, enabled: 1, password: "x" });
+    c.set("user", user);
     return next();
   });
   app.route("/storage", sourcesRoutes);
@@ -128,6 +139,20 @@ function xmlAttrs(text: string, tag: string): Array<Record<string, string>> {
 }
 
 async function main() {
+  console.log("manage_files permission can list external sources:");
+  {
+    const sqlite = buildDb();
+    sqlite.prepare(
+      `INSERT INTO storage_sources (id, type, name, base_url, created_at, updated_at)
+       VALUES ('wd-1', 'webdav', 'My WebDAV', 'https://dav.example', 1, 1)`,
+    ).run();
+    const app = makeApp(sqlite, { username: "editor", level: 2, enabled: 1, password: "x" });
+    const r = await app.get("/storage/sources/list");
+    const sources = xmlAttrs(await r.text(), "source");
+    assert(r.status === 200, `manage_files list returns 200 (got ${r.status})`);
+    assert(sources.some((s) => s.id === "wd-1"), "external source is returned to manage_files user");
+  }
+
   console.log("no real r2 row → /sources/list synthesises one:");
   {
     const sqlite = buildDb();

@@ -15,13 +15,11 @@
 
 //
 // Coverage:
-//  1. GET /edgesonic/version → 200 + ok:true + version=WORKER_VERSION value
-//  2. buildTime / startedAt are ISO-8601 strings (parseable Date)
-//  3. WORKER_VERSION unset → version falls back to "0"
-//  4. WORKER_VERSION present → echoed verbatim
-//  5. Two requests within the same isolate share startedAt (module-scope const)
-//  6. NO_AUTH_PATHS contains '/edgesonic/version' so unauthenticated callers
-//    reach the handler (sanity-check the auth allowlist wiring)
+//  1. Explicit EDGESONIC_VERSION / EDGESONIC_BUILD_TIME override the asset.
+//  2. When env vars are absent, the deployed build-info.json asset is used.
+//  3. An unavailable asset falls back safely to dev/null.
+//  4. NO_AUTH_PATHS contains '/edgesonic/version' so unauthenticated callers
+//    reach the handler (sanity-check the auth allowlist wiring).
 //
 // We mount versionRoutes directly under the same `/edgesonic` prefix the
 // production router uses (worker/src/endpoints/edgesonic/index.ts), no other
@@ -49,17 +47,27 @@ function assert(cond: unknown, msg: string) {
 interface VersionResponse {
   ok?: boolean;
   version?: string;
-  buildTime?: string;
-  startedAt?: string;
+  buildTime?: string | null;
 }
 
-function makeApp(env: { WORKER_VERSION?: string }) {
+function makeApp(env: {
+  EDGESONIC_VERSION?: string;
+  EDGESONIC_BUILD_TIME?: string;
+  asset?: { version: string; buildTime: string | null } | null;
+}) {
   const app = new Hono();
   // Mirror production: edgesonicRoutes is mounted at /edgesonic in router.ts,
   // and versionRoutes is registered at "/version" inside that scope.
   app.use("*", async (c, next) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (c as any).env = env;
+    (c as any).env = {
+      ...env,
+      ASSETS: {
+        fetch: async () => env.asset
+          ? new Response(JSON.stringify(env.asset), { headers: { "Content-Type": "application/json" } })
+          : new Response("Not found", { status: 404 }),
+      },
+    };
     await next();
   });
   app.route("/edgesonic", versionRoutes);
@@ -68,45 +76,46 @@ function makeApp(env: { WORKER_VERSION?: string }) {
 
 async function run() {
   // -------------------------------------------------------------------------
-  // 1. Basic shape with WORKER_VERSION set
+  // 1. Explicit environment override
   // -------------------------------------------------------------------------
-  console.log("WORKER_VERSION=42:");
+  console.log("explicit environment override:");
   {
-    const app = makeApp({ WORKER_VERSION: "42" });
+    const app = makeApp({
+      EDGESONIC_VERSION: "42",
+      EDGESONIC_BUILD_TIME: "2026-07-18T18:00:00.000Z",
+      asset: { version: "asset", buildTime: "2026-07-18T17:00:00.000Z" },
+    });
     const r = await app.request("/edgesonic/version");
     assert(r.status === 200, "200 OK");
     const j = (await r.json()) as VersionResponse;
     assert(j.ok === true, "ok=true");
-    assert(j.version === "42", "version echoes env.WORKER_VERSION");
-    assert(typeof j.buildTime === "string" && !Number.isNaN(Date.parse(j.buildTime)),
-      "buildTime is ISO-8601");
-    assert(typeof j.startedAt === "string" && !Number.isNaN(Date.parse(j.startedAt)),
-      "startedAt is ISO-8601");
+    assert(j.version === "42", "version uses env override");
+    assert(j.buildTime === "2026-07-18T18:00:00.000Z", "buildTime uses env override");
   }
 
   // -------------------------------------------------------------------------
-  // 2. WORKER_VERSION unset → fallback to "0"
+  // 2. Asset fallback when deployment vars are absent
   // -------------------------------------------------------------------------
-  console.log("\nWORKER_VERSION unset:");
+  console.log("\nbuild-info.json asset fallback:");
   {
-    const app = makeApp({});
+    const app = makeApp({ asset: { version: "asset-build", buildTime: "2026-07-18T18:01:00.000Z" } });
     const r = await app.request("/edgesonic/version");
     assert(r.status === 200, "200 OK");
     const j = (await r.json()) as VersionResponse;
     assert(j.ok === true, "ok=true");
-    assert(j.version === "0", 'version falls back to "0"');
+    assert(j.version === "asset-build", "version uses bundled build-info.json");
+    assert(j.buildTime === "2026-07-18T18:01:00.000Z", "buildTime uses bundled build-info.json");
   }
 
   // -------------------------------------------------------------------------
-  // 3. startedAt is stable across calls within the same isolate
+  // 3. Missing asset is safe
   // -------------------------------------------------------------------------
-  console.log("\nstartedAt is module-scope:");
+  console.log("\nasset unavailable:");
   {
-    const app = makeApp({ WORKER_VERSION: "1" });
-    const a = (await (await app.request("/edgesonic/version")).json()) as VersionResponse;
-    const b = (await (await app.request("/edgesonic/version")).json()) as VersionResponse;
-    assert(a.startedAt === b.startedAt,
-      "two calls in the same process share startedAt (captured at module load)");
+    const app = makeApp({ asset: null });
+    const j = (await (await app.request("/edgesonic/version")).json()) as VersionResponse;
+    assert(j.version === "dev", 'version falls back to "dev"');
+    assert(j.buildTime === null, "buildTime falls back to null");
   }
 
   // -------------------------------------------------------------------------
@@ -135,7 +144,7 @@ async function run() {
   // -------------------------------------------------------------------------
   console.log("\ncontent-type:");
   {
-    const app = makeApp({ WORKER_VERSION: "1" });
+    const app = makeApp({ asset: { version: "asset-build", buildTime: null } });
     const r = await app.request("/edgesonic/version");
     const ct = r.headers.get("content-type") || "";
     assert(ct.includes("application/json"), "Content-Type is application/json");

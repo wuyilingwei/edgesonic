@@ -39,6 +39,10 @@ interface Source {
   mode: "library" | "sync_only";
   region: string;
   presignUsername: string;
+  // R2 hot-cache tier for this source's remote files (webdav only, today)
+  cacheTier: "off" | "standard" | "extended";
+  cachedBytes: number;
+  cacheBudgetBytes: number;
   // Per-source storage footprint, from /sources/list's song_instances aggregate
   fileCount: number;
   sizeBytes: number;
@@ -59,7 +63,7 @@ interface Source {
 const sources = ref<Source[]>([]);
 const loading = ref(false);
 const showForm = ref(false);
-const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "", mode: "library", region: "us-east-1", presign_username: "", presign_password: "" });
+const form = ref({ type: "webdav", name: "", base_url: "", username: "", password: "", root_path: "", mode: "library", region: "us-east-1", presign_username: "", presign_password: "", cache_tier: "off" });
 const toast = ref({ show: false, msg: "", type: "success" });
 function showToast(msg: string, type = "success") { toast.value = { show: true, msg, type }; setTimeout(() => { toast.value.show = false; }, 3000); }
 
@@ -173,11 +177,11 @@ function handleVisibilityChange() {
 }
 
 const editing = ref<Source | null>(null);
-const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only", region: "us-east-1", presignUsername: "", presignPassword: "" });
+const editForm = ref({ name: "", base_url: "", username: "", password: "", root_path: "", enabled: true, mode: "library" as "library" | "sync_only", region: "us-east-1", presignUsername: "", presignPassword: "", cacheTier: "off" as "off" | "standard" | "extended" });
 
 function openEdit(s: Source) {
   editing.value = s;
-  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled, mode: s.mode, region: s.region || "us-east-1", presignUsername: s.presignUsername || "", presignPassword: "" };
+  editForm.value = { name: s.name, base_url: s.base_url, username: s.username, password: "", root_path: s.rootPath, enabled: s.enabled, mode: s.mode, region: s.region || "us-east-1", presignUsername: s.presignUsername || "", presignPassword: "", cacheTier: s.cacheTier };
 }
 function closeEdit() { editing.value = null; }
 
@@ -192,6 +196,7 @@ async function saveEdit() {
   if (editForm.value.root_path !== s.rootPath) body.root_path = editForm.value.root_path;
   if (editForm.value.enabled !== s.enabled) body.enabled = editForm.value.enabled ? 1 : 0;
   if (editForm.value.mode !== s.mode) body.mode = editForm.value.mode;
+  if (editForm.value.cacheTier !== s.cacheTier) body.cache_tier = editForm.value.cacheTier;
   if (editForm.value.region !== s.region) body.region = editForm.value.region;
   //      send presign_password only when non-empty (like main password)
   if (s.type === "webdav") {
@@ -229,6 +234,10 @@ async function load() {
         mode: (s.mode === "sync_only" ? "sync_only" : "library") as "library" | "sync_only",
         region: s.region || "us-east-1",
         presignUsername: s.presignUsername || "",
+        // defaults to "off" when attribute is absent (older cached list response)
+        cacheTier: (s.cacheTier === "standard" || s.cacheTier === "extended" ? s.cacheTier : "off") as "off" | "standard" | "extended",
+        cachedBytes: parseInt(s.cachedBytes || "0", 10) || 0,
+        cacheBudgetBytes: parseInt(s.cacheBudgetBytes || "0", 10) || 0,
         fileCount: parseInt(s.fileCount || "0", 10) || 0,
         sizeBytes: parseInt(s.sizeBytes || "0", 10) || 0,
         accountId: s.accountId || "",
@@ -561,6 +570,16 @@ onUnmounted(() => {
           <input v-model="form.presign_password" type="password" maxlength="256" class="form-input" style="margin-top:0.4rem" :placeholder="t('sources.presignPassword')" autocomplete="new-password" />
           <span class="field-hint">{{ t("sources.presignCredsHint") }}</span>
         </div>
+        <!-- cache tier selector (webdav only — the only scheme hotcache.ts caches today) -->
+        <div v-if="form.type === 'webdav'" class="form-group span-all">
+          <label class="form-label">{{ t("sources.cacheTier.label") }}</label>
+          <select v-model="form.cache_tier" class="form-select">
+            <option value="off">{{ t("sources.cacheTier.off") }}</option>
+            <option value="standard">{{ t("sources.cacheTier.standard") }}</option>
+            <option value="extended">{{ t("sources.cacheTier.extended") }}</option>
+          </select>
+          <span class="field-hint">{{ t("sources.cacheTier.hint") }}</span>
+        </div>
         <button class="btn-primary span-all" @click="addSource">{{ t("sources.save") }}</button>
       </div>
       <div class="corner corner-tl"></div>
@@ -580,6 +599,7 @@ onUnmounted(() => {
             <span :class="['status-badge', s.enabled ? 'success' : 'error']">{{ s.enabled ? t("sources.active") : t("sources.disabled") }}</span>
             <span v-if="s.mode === 'sync_only'" class="status-badge mode-sync" :title="t('sources.mode.hint')">{{ t("sources.mode.syncOnly") }}</span>
             <span v-if="s.type === 'webdav' && s.presignUsername" class="status-badge presign-set" :title="t('sources.presignStatusSet')">⊙ {{ t("sources.presignCreds") }}</span>
+            <span v-if="s.cacheTier !== 'off'" class="status-badge cache-tier-set" :title="t('sources.cacheTier.hint')">{{ t(`sources.cacheTier.${s.cacheTier}`) }}</span>
           </div>
         </div>
         <!-- Info section -->
@@ -599,6 +619,7 @@ onUnmounted(() => {
             <span v-if="s.type === 's3'">{{ t("sources.s3Region") }}: {{ s.region }}</span>
           </template>
           <span>{{ t("sources.size") }}: {{ formatBytes(s.sizeBytes) }} ({{ s.fileCount }})</span>
+          <span v-if="s.cacheTier !== 'off'">{{ t("sources.cacheTier.usage") }}: {{ formatBytes(s.cachedBytes) }} / {{ formatBytes(s.cacheBudgetBytes) }}</span>
           <template v-if="isAdmin && s.scanStatus === 'running'">
             <span class="scan-pill scan-pill-running">
               <span class="scan-spinner" aria-hidden="true"></span>
@@ -739,6 +760,16 @@ onUnmounted(() => {
               <option value="sync_only">{{ t("sources.mode.syncOnly") }}</option>
             </select>
             <span class="field-hint">{{ t("sources.mode.hint") }}</span>
+          </div>
+          <!-- cache tier selector in edit modal (webdav only) -->
+          <div v-if="editing?.type === 'webdav'" class="form-group span-all">
+            <label class="form-label">{{ t("sources.cacheTier.label") }}</label>
+            <select v-model="editForm.cacheTier" class="form-select">
+              <option value="off">{{ t("sources.cacheTier.off") }}</option>
+              <option value="standard">{{ t("sources.cacheTier.standard") }}</option>
+              <option value="extended">{{ t("sources.cacheTier.extended") }}</option>
+            </select>
+            <span class="field-hint">{{ t("sources.cacheTier.hint") }}</span>
           </div>
           <!-- 096: region field in edit modal (shown for all types; only meaningful for s3) -->
           <div v-if="editing?.type === 's3'" class="form-group span-all">
@@ -1127,6 +1158,13 @@ onUnmounted(() => {
   background: rgba(6, 182, 212, 0.12);
   color: #22d3ee;
   border-color: rgba(6, 182, 212, 0.35);
+}
+
+/* cache tier badge (amber variant, distinct from mode/presign) */
+.status-badge.cache-tier-set {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.35);
 }
 
 /* presign section inside edit modal (always visible) */

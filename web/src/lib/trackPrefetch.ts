@@ -25,6 +25,12 @@ export interface PrefetchTrack {
 export interface TrackLyricsPayload {
   structured?: string;
   lrc?: string;
+  // 0259 — raw structuredLyrics XML payload as returned by the songLyrics v2
+  // endpoint with `enhanced=true`. Includes cueLine/cue/agents/kind. The
+  // frontend parser (NowPlaying.vue) splits this into tracks the same way it
+  // splits the v1 `structured` payload, then falls back to `structured` when
+  // no cueLine is present.
+  structuredEnhanced?: string;
 }
 
 export interface TrackPrefetchAuth {
@@ -151,8 +157,28 @@ export function getTrackLyrics(track: PrefetchTrack, auth: Pick<TrackPrefetchAut
   }
   cacheStats.lyricsMisses++;
   return remember(lyricsCache, key, async () => {
-    const xml = await auth.authFetch("getLyricsBySongId", { id: track.id });
-    const structured = extractXmlInner(xml, "structuredLyrics");
+    // 0259 — prefer the enhanced endpoint so karaoke rendering has cue data
+    // when the server has it. We request once; the response carries both
+    // the v2 cueLine shape and the v1 line array. On failure / empty
+    // lyricsList we fall back to v1 (no enhanced) and finally to getLyrics.
+    let xml = "";
+    try {
+      xml = await auth.authFetch("getLyricsBySongId", { id: track.id, enhanced: "true" });
+    } catch {
+      xml = "";
+    }
+    const enhancedInner = extractXmlInner(xml, "structuredLyrics");
+    if (enhancedInner) {
+      // Verify there's at least one cueLine; otherwise treat as v1.
+      const hasCue = /<cueLine\b/.test(xml);
+      if (hasCue) return { structuredEnhanced: enhancedInner };
+      return { structured: enhancedInner };
+    }
+
+    // Fall back to v1 (no enhanced) — the server may have rejected the
+    // parameter or the v2 path may have produced an empty lyricsList.
+    const v1Xml = await auth.authFetch("getLyricsBySongId", { id: track.id });
+    const structured = extractXmlInner(v1Xml, "structuredLyrics");
     if (structured) return { structured };
 
     const fallback = await auth.authFetch("getLyrics", { artist: track.artist, title: track.title });

@@ -19,7 +19,11 @@
 import { Hono } from "hono";
 import { permissionMiddleware, subsonicError } from "../../auth";
 import { subsonicOK } from "../../utils/xml";
+import { hasPermission } from "../../utils/permissions";
+import { ensureCacheTierColumns } from "../../utils/schema_patch";
 import type { User } from "../../types/entities";
+
+const CACHE_TIERS = new Set(["off", "standard", "extended"]);
 
 export const sourcesRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
@@ -39,22 +43,29 @@ export function synthesizeR2Row() {
   return {
     id: R2_BUILTIN_ID, type: "r2", name: "R2", base_url: "",
     username: null, presign_username: null, root_path: "", region: "auto",
-    last_sync: null, enabled: 1, mode: "library",
+    // R2 is the permanent library itself, not something cached from a
+    // remote — it has no meaningful cache_tier.
+    last_sync: null, enabled: 1, mode: "library", cache_tier: "off",
   };
 }
 
-sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async (c) => {
+sourcesRoutes.get("/sources/list", async (c) => {
+  const user = c.get("user");
+  if (!(await hasPermission(c.env, user, "manage_sources")) && !(await hasPermission(c.env, user, "manage_files"))) {
+    return c.text(subsonicError(0, "Storage source access requires manage_sources or manage_files permission"), 403, XML);
+  }
+  await ensureCacheTierColumns(c.env);
   const db = c.env.DB;
   const result = await db.prepare(
     `SELECT id, type, name, base_url, username,
             presign_username,
-            root_path, region, last_sync, enabled, mode
+            root_path, region, last_sync, enabled, mode, cache_tier
      FROM storage_sources ORDER BY created_at ASC`
   ).all<{
     id: string; type: string; name: string; base_url: string; username: string | null;
     presign_username: string | null;
     root_path: string | null; region: string | null; last_sync: number | null; enabled: number;
-    mode: string;
+    mode: string; cache_tier: string;
   }>();
   const rows = result.results;
   if (!rows.some((r) => r.type === "r2")) {
@@ -73,8 +84,28 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
   ).all<{ source_id: string; n: number; bytes: number }>();
   const sizeBySource = new Map(sizeRows.results.map((r) => [r.source_id, r]));
 
+  // cached bytes per ORIGIN source (not the r2-local row they
+  // physically live under): join through parent_instance_id back to the
+  // instance that was actually cached FROM, so a WebDAV source's cache
+  // usage/budget is attributed to that source, not to R2.
+  const cachedRows = await db.prepare(
+    `SELECT parent.source_id AS source_id, COALESCE(SUM(c.size), 0) AS bytes
+     FROM song_instances c
+     JOIN song_instances parent ON parent.id = c.parent_instance_id
+     WHERE c.source_type = 'cached' AND c.missing = 0
+     GROUP BY parent.source_id`
+  ).all<{ source_id: string; bytes: number }>();
+  const cachedBySource = new Map(cachedRows.results.map((r) => [r.source_id, r.bytes]));
+
+  const { resolveTierConfig } = await import("../../utils/cacheTiers");
+  const tierBudgets: Record<string, number> = {
+    standard: (await resolveTierConfig(c.env, "standard"))?.budgetBytes ?? 0,
+    extended: (await resolveTierConfig(c.env, "extended"))?.budgetBytes ?? 0,
+  };
+
   const sources = rows.map((s) => {
     const sz = sizeBySource.get(s.id);
+    const cacheTier = s.cache_tier ?? "off";
     return {
       _attributes: {
         id: s.id, type: s.type, name: s.name ?? "",
@@ -88,6 +119,11 @@ sourcesRoutes.get("/sources/list", permissionMiddleware("manage_sources"), async
         presignUsername: s.presign_username ?? "",
         fileCount: String(sz?.n ?? 0),
         sizeBytes: String(sz?.bytes ?? 0),
+        // 'off' | 'standard' | 'extended'; cachedBytes/cacheBudgetBytes
+        // are 0 for 'off' and for R2 itself (not applicable).
+        cacheTier,
+        cachedBytes: String(cachedBySource.get(s.id) ?? 0),
+        cacheBudgetBytes: String(tierBudgets[cacheTier] ?? 0),
         // R2 has no base_url/username — account id + bucket name are its
         // equivalent "where does this actually point to" detail fields.
         ...(s.type === "r2" ? {
@@ -108,7 +144,7 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
   const body = await c.req.json<{
     type: string; base_url: string; name?: string; username?: string;
     password?: string; root_path?: string; mode?: string; region?: string;
-    presign_username?: string; presign_password?: string;
+    presign_username?: string; presign_password?: string; cache_tier?: string;
   }>();
   if (!body.type || !body.base_url) {
     return c.text(subsonicError(0, "Missing type or base_url"), 400, XML);
@@ -118,18 +154,24 @@ sourcesRoutes.post("/sources/add", permissionMiddleware("manage_sources"), async
   if (mode !== "library" && mode !== "sync_only") {
     return c.text(subsonicError(0, "Invalid mode: must be 'library' or 'sync_only'"), 400, XML);
   }
+  // validate cache_tier
+  const cacheTier = body.cache_tier ?? "off";
+  if (!CACHE_TIERS.has(cacheTier)) {
+    return c.text(subsonicError(0, "Invalid cache_tier: must be 'off', 'standard', or 'extended'"), 400, XML);
+  }
   const region = body.region || "us-east-1";
+  await ensureCacheTierColumns(c.env);
   const db = c.env.DB;
   const id = crypto.randomUUID().substring(0, 8);
   const now = Math.floor(Date.now() / 1000);
   const password = body.password ?? "";
   await db.prepare(
     `INSERT INTO storage_sources
-       (id, type, name, base_url, username, password, root_path, region, mode, presign_username, presign_password, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       (id, type, name, base_url, username, password, root_path, region, mode, cache_tier, presign_username, presign_password, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     id, body.type, body.name || "", body.base_url, body.username || null,
-    password, body.root_path || "", region, mode,
+    password, body.root_path || "", region, mode, cacheTier,
     body.presign_username || null, body.presign_password || null,
     now, now,
   ).run();
@@ -144,7 +186,7 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   const body = await c.req.json<{
     id: string; name?: string; base_url?: string; username?: string; password?: string;
     root_path?: string; enabled?: number; mode?: string; region?: string;
-    presign_username?: string; presign_password?: string;
+    presign_username?: string; presign_password?: string; cache_tier?: string;
   }>();
   if (!body.id) {
     return c.text(subsonicError(0, "Missing id"), 400, XML);
@@ -153,6 +195,11 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   if (body.mode !== undefined && body.mode !== "library" && body.mode !== "sync_only") {
     return c.text(subsonicError(0, "Invalid mode: must be 'library' or 'sync_only'"), 400, XML);
   }
+  // validate cache_tier if provided
+  if (body.cache_tier !== undefined && !CACHE_TIERS.has(body.cache_tier)) {
+    return c.text(subsonicError(0, "Invalid cache_tier: must be 'off', 'standard', or 'extended'"), 400, XML);
+  }
+  await ensureCacheTierColumns(c.env);
   const db = c.env.DB;
   const sets: string[] = [];
   const binds: unknown[] = [];
@@ -167,6 +214,8 @@ sourcesRoutes.post("/sources/update", permissionMiddleware("manage_sources"), as
   if (body.enabled !== undefined) { sets.push("enabled = ?"); binds.push(body.enabled ? 1 : 0); }
   // 089 S2 — update mode
   if (body.mode !== undefined) { sets.push("mode = ?"); binds.push(body.mode); }
+  // update cache_tier
+  if (body.cache_tier !== undefined) { sets.push("cache_tier = ?"); binds.push(body.cache_tier); }
   if (body.region !== undefined && body.region !== "") { sets.push("region = ?"); binds.push(body.region); }
   if (body.presign_username !== undefined) { sets.push("presign_username = ?"); binds.push(body.presign_username || null); }
   if (body.presign_password !== undefined) { sets.push("presign_password = ?"); binds.push(body.presign_password || null); }
@@ -218,4 +267,3 @@ sourcesRoutes.post("/sources/delete", permissionMiddleware("manage_sources"), as
   await db.prepare("DELETE FROM storage_sources WHERE id = ?").bind(body.id).run();
   return c.text(subsonicOK({}), 200, XML);
 });
-

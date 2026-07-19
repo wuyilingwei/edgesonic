@@ -26,7 +26,7 @@
 // Errors: `{ ok: false, error }` with the appropriate HTTP status (400 / 403 /
 // 404), matching setAvatar's convention from 064.
 import { Hono } from "hono";
-import { permissionMiddleware, sha256 } from "../../auth";
+import { GUEST_USERNAME, permissionMiddleware, sha256 } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
 import { ensureNicknameColumn } from "../../utils/schema_patch";
 import type { User } from "../../types/entities";
@@ -90,6 +90,9 @@ usersRoutes.post("/users/create", permissionMiddleware("manage_users"), async (c
   const level = body.level ?? 1;
   if (level < 0 || level > 3) {
     return c.json({ ok: false, error: "Invalid level (0-3)" }, 400);
+  }
+  if ((level === 0) !== (body.username === GUEST_USERNAME)) {
+    return c.json({ ok: false, error: "Level 0 is reserved for the guest account" }, 400);
   }
   if (level >= ADMIN_TIER_LEVEL && caller.level < 3) {
     return c.json({ ok: false, error: "Only a super-admin can create admin/super-admin accounts" }, 403);
@@ -165,6 +168,9 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
   if (body.level !== undefined) {
     if (body.level < 0 || body.level > 3) {
       return c.json({ ok: false, error: "Invalid level (0-3)" }, 400);
+    }
+    if ((body.level === 0) !== (body.username === GUEST_USERNAME)) {
+      return c.json({ ok: false, error: "Level 0 is reserved for the guest account" }, 400);
     }
     // Constraint A — must keep at least one active superadmin when demoting.
     if (body.level < 3 && existingTarget?.level === 3) {
@@ -268,8 +274,15 @@ usersRoutes.post("/users/setAvatar", async (c) => {
   // ---- Auth: self or manage_users -----------------------------------------
   // update/delete endpoints in this file). Pre-087 used a hardcoded
   // `caller.level < 2` which violated the permission-model rule.
+  // Guests (level 0) are blocked from self-profile edits entirely — they
+  // cannot set their own avatar, nickname, or password (see changePassword
+  // in subsonic/account.ts for the matching guard). A signed-in guest can
+  // only stream/browse; any personal configuration is admin-managed.
   const caller = c.get("user");
   const isSelf = caller.username === targetUsername;
+  if (isSelf && caller.level < 1) {
+    return c.json({ ok: false, error: "Guests cannot edit their profile" }, 403);
+  }
   if (!isSelf) {
     const canManage = await hasPermission(c.env, caller, "manage_users");
     if (!canManage) {

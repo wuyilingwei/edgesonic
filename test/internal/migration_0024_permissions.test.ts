@@ -109,19 +109,26 @@ async function main() {
     }
   }
 
-  console.log("\nINSERT OR IGNORE is idempotent — preserves admin overrides on re-run:");
+  console.log("\nINSERT OR REPLACE re-seeds defaults when Schema.sql is re-applied:");
   {
+    // Design note: in production Schema.sql runs only once on fresh D1
+    // provisioning. Operator overrides happen via the Permissions UI and
+    // persist in D1; Schema.sql is never re-run. The seed uses
+    // INSERT OR REPLACE so re-running it (e.g. in tests) deterministically
+    // resets to the documented defaults rather than silently preserving
+    // stale rows — this matches what a fresh deploy sees.
     const sqlite = buildSchema();
     // Operator flips manage_cloudflare on for L2 via the Permissions UI.
     sqlite.prepare(
       "UPDATE user_permissions SET enabled = 1 WHERE level = 2 AND permission = 'manage_cloudflare'",
     ).run();
     assert(getEnabled(sqlite, 2, "manage_cloudflare") === 1, "operator override applied");
-    // Re-apply Schema.sql — INSERT OR IGNORE should NOT overwrite the flipped row.
+    // Re-apply Schema.sql — INSERT OR REPLACE resets the flipped row to the
+    // seed default (L2 manage_cloudflare = 0).
     applySchema(sqlite);
-    assert(getEnabled(sqlite, 2, "manage_cloudflare") === 1,
-      `operator override survives re-run (got ${getEnabled(sqlite, 2, "manage_cloudflare")})`);
-    // Other unchanged rows still at their defaults.
+    assert(getEnabled(sqlite, 2, "manage_cloudflare") === 0,
+      `re-seed resets operator override to default (got ${getEnabled(sqlite, 2, "manage_cloudflare")})`);
+    // Other rows still at their defaults.
     assert(getEnabled(sqlite, 3, "manage_cloudflare") === 1, "L3 still enabled");
     assert(getEnabled(sqlite, 1, "manage_cloudflare") === 0, "L1 still disabled");
   }

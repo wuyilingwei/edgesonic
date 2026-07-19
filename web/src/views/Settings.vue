@@ -17,7 +17,7 @@ const router = useRouter();
 const { t, locale } = useI18n();
 const {
   isSuperAdmin, isGuest, hasPerm, edgesonicFetch, edgesonicPost, logout,
-  username, nickname, restUrl, updateNickname, changeOwnPassword, updateOwnAvatar, handleAuthError,
+  username, nickname, avatarKey, restUrl, updateNickname, changeOwnPassword, updateOwnAvatar, handleAuthError,
 } = useAuth();
 const workerPool = useWorkerPool();
 
@@ -35,8 +35,9 @@ const avatarBust = ref(0);
 const avatarPreview = ref("");
 const avatarBase64 = ref("");
 const avatarMime = ref("image/jpeg");
-const selfAvatarSrc = computed(() =>
-  restUrl("getAvatar", { username: username.value, ...(avatarBust.value ? { _ts: String(avatarBust.value) } : {}) }));
+const selfAvatarSrc = computed(() => avatarKey.value
+  ? restUrl("getAvatar", { username: username.value, ...(avatarBust.value ? { _ts: String(avatarBust.value) } : {}) })
+  : "");
 
 async function compressAvatar(file: File): Promise<{ dataUrl: string; base64: string; mime: string }> {
   const blobUrl = URL.createObjectURL(file);
@@ -119,12 +120,14 @@ async function saveSelfPassword() {
   finally { profileBusy.value = false; }
 }
 
+// ---- Peer sync moved to Tools.vue (252 Phase 8) ----
+
 type SectionKey = "user" | "audioCache" | "system" | "sessions" | "clients" | "permissions";
 const open = ref<Record<SectionKey, boolean>>({ user: true, audioCache: false, system: false, sessions: false, clients: false, permissions: false });
 function toggleSection(key: SectionKey) { open.value[key] = !open.value[key]; }
 
-type SubSectionKey = "media" | "integrations" | "workers" | "featureFlags";
-const subOpen = ref<Record<SubSectionKey, boolean>>({ media: false, integrations: false, workers: false, featureFlags: false });
+type SubSectionKey = "media" | "integrations" | "lastfm" | "workers" | "featureFlags";
+const subOpen = ref<Record<SubSectionKey, boolean>>({ media: false, integrations: false, lastfm: false, workers: false, featureFlags: false });
 function toggleSubSection(key: SubSectionKey) { subOpen.value[key] = !subOpen.value[key]; }
 
 const toast = ref({ show: false, msg: "", type: "success" });
@@ -287,6 +290,9 @@ async function loadFeatures() {
     hydrateScrapeFromFeatures();
     // 043: hydrate Last.fm key presence indicator.
     void hydrateLastfmFromUserSetting();
+    if (canManageSettings.value) {
+      void hydrateLastfmSystem();
+    }
     // 051: hydrate WebDAV scan cadence + BROWSER READ controls.
     hydrateScanFromFeatures();
     // 065: hydrate cross-origin isolation toggle.
@@ -412,34 +418,228 @@ async function saveScrape() {
   scrapeBusy.value = false;
 }
 
-const lastfmKeyInput = ref("");
-const lastfmKeySet = ref(false);
+// ---- Last.fm (per-user: username + per-user API key) ----
+const lastfmUsernameInput = ref("");
+const lastfmUsernameSet = ref(false);
+const lastfmApiKeyInput = ref("");
+const lastfmApiKeySet = ref(false);
 const lastfmBusy = ref(false);
 
 async function hydrateLastfmFromUserSetting() {
   try {
-    const data = JSON.parse(await edgesonicFetch("features/userSetting", { key: "lastfm_api_key" }));
-    if (data.ok) lastfmKeySet.value = !!data.set;
-  } catch { /* stay false */ }
-  lastfmKeyInput.value = "";
+    const data = JSON.parse(await edgesonicFetch("lastfm/status"));
+    if (data.ok) {
+      lastfmUsernameSet.value = !!data.usernameSet;
+      lastfmApiKeySet.value = !!data.apiKeySet;
+      lastfmUsernameInput.value = data.username || "";
+    }
+  } catch { /* stay unset */ }
 }
 
-async function saveLastfm() {
+async function saveLastfmUsername() {
   lastfmBusy.value = true;
   try {
-    const data = JSON.parse(await edgesonicPost("features/userSetting", {
-      key: "lastfm_api_key",
-      value: lastfmKeyInput.value,
+    const data = JSON.parse(await edgesonicPost("lastfm/username", {
+      username: lastfmUsernameInput.value,
     }));
-    if (!data.ok) throw new Error(data.error || "lastfm_api_key");
-    lastfmKeySet.value = !!lastfmKeyInput.value;
-    lastfmKeyInput.value = "";
-    showToast(t("settings.common.lastfm.saved"));
+    if (!data.ok) throw new Error(data.error || "username");
+    lastfmUsernameSet.value = !!lastfmUsernameInput.value;
+    showToast(t("settings.common.lastfm.usernameSaved"));
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
   }
   lastfmBusy.value = false;
+}
+
+async function clearLastfmUsername() {
+  lastfmBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("lastfm/username", { username: "" }));
+    if (!data.ok) throw new Error(data.error || "username");
+    lastfmUsernameSet.value = false;
+    lastfmUsernameInput.value = "";
+    showToast(t("settings.common.lastfm.usernameCleared"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  lastfmBusy.value = false;
+}
+
+async function saveLastfmApiKey() {
+  lastfmBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("lastfm/apiKey", {
+      apiKey: lastfmApiKeyInput.value,
+    }));
+    if (!data.ok) throw new Error(data.error || "apiKey");
+    lastfmApiKeySet.value = !!lastfmApiKeyInput.value;
+    lastfmApiKeyInput.value = "";
+    showToast(t("settings.common.lastfm.apiKeySaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  lastfmBusy.value = false;
+}
+
+async function clearLastfmApiKey() {
+  lastfmBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("lastfm/apiKey", { apiKey: "" }));
+    if (!data.ok) throw new Error(data.error || "apiKey");
+    lastfmApiKeySet.value = false;
+    lastfmApiKeyInput.value = "";
+    showToast(t("settings.common.lastfm.apiKeyCleared"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  lastfmBusy.value = false;
+}
+
+// ---- Last.fm (system-level: api_key + artist info source order + cron cadence) ----
+// 260: last.fm is no longer hardcoded as the first artist bio/cover source —
+// it's just another member of the same priority list as the CN sources,
+// reorderable the same way scrape_enabled_sources is (see ScrapeSourceKey
+// above). Defaults to CN sources ahead of last.fm.
+type ArtistInfoSourceKey = "netease" | "qmusic" | "lastfm";
+const ARTIST_INFO_ALL_SOURCES: { id: ArtistInfoSourceKey; label: string }[] = [
+  { id: "netease", label: "NetEase" },
+  { id: "qmusic", label: "QQ Music" },
+  { id: "lastfm", label: "Last.fm" },
+];
+const artistInfoOrder = ref<ArtistInfoSourceKey[]>([]);
+const artistInfoEnabledSet = ref<Set<ArtistInfoSourceKey>>(new Set());
+const artistInfoBusy = ref(false);
+
+const lastfmSystemKeyInput = ref("");
+const lastfmSystemKeySet = ref(false);
+const lastfmSystemBusy = ref(false);
+const scrapeIntervalHours = ref(24);
+const scrapeIntervalBusy = ref(false);
+
+function hydrateArtistInfoSources(raw: string) {
+  try {
+    const parsed = JSON.parse(raw) as string[];
+    const knownIds = new Set(ARTIST_INFO_ALL_SOURCES.map((s) => s.id));
+    const validEnabled: ArtistInfoSourceKey[] = [];
+    for (const s of parsed) {
+      if (knownIds.has(s as ArtistInfoSourceKey)) validEnabled.push(s as ArtistInfoSourceKey);
+    }
+    artistInfoEnabledSet.value = new Set(validEnabled);
+    const orderTail = ARTIST_INFO_ALL_SOURCES
+      .map((s) => s.id)
+      .filter((id) => !validEnabled.includes(id));
+    artistInfoOrder.value = [...validEnabled, ...orderTail];
+  } catch {
+    artistInfoOrder.value = ARTIST_INFO_ALL_SOURCES.map((s) => s.id);
+    artistInfoEnabledSet.value = new Set(["netease", "qmusic", "lastfm"]);
+  }
+}
+
+function toggleArtistInfoSource(id: ArtistInfoSourceKey, checked: boolean) {
+  const next = new Set(artistInfoEnabledSet.value);
+  if (checked) next.add(id); else next.delete(id);
+  artistInfoEnabledSet.value = next;
+}
+
+function moveArtistInfoSource(id: ArtistInfoSourceKey, delta: -1 | 1) {
+  const arr = [...artistInfoOrder.value];
+  const i = arr.indexOf(id);
+  if (i < 0) return;
+  const j = i + delta;
+  if (j < 0 || j >= arr.length) return;
+  [arr[i], arr[j]] = [arr[j], arr[i]];
+  artistInfoOrder.value = arr;
+}
+
+async function saveArtistInfoSources() {
+  artistInfoBusy.value = true;
+  try {
+    const enabledInOrder = artistInfoOrder.value.filter((id) => artistInfoEnabledSet.value.has(id));
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "lastfm_fallback_sources",
+      value: JSON.stringify(enabledInOrder),
+    }));
+    if (!data.ok) throw new Error(data.error || "lastfm_fallback_sources");
+    showToast(t("settings.common.lastfm.fallbackSaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  artistInfoBusy.value = false;
+}
+
+async function hydrateLastfmSystem() {
+  try {
+    const keyRow = JSON.parse(await edgesonicFetch("features/list"));
+    if (keyRow?.ok) {
+      const item = (keyRow.featureStrings as Array<{ key: string; value: string }>)
+        .find((s) => s.key === "lastfm_api_key");
+      lastfmSystemKeySet.value = !!(item && item.value && item.value.length);
+      const fb = (keyRow.featureStrings as Array<{ key: string; value: string }>)
+        .find((s) => s.key === "lastfm_fallback_sources");
+      hydrateArtistInfoSources(fb?.value || '["netease","qmusic","lastfm"]');
+      const iv = (keyRow.featureStrings as Array<{ key: string; value: string }>)
+        .find((s) => s.key === "artist_scrape_interval_hours");
+      scrapeIntervalHours.value = iv ? Math.max(0, parseInt(iv.value, 10) || 0) : 0;
+    }
+  } catch { /* ignore */ }
+  lastfmSystemKeyInput.value = "";
+}
+
+async function saveLastfmSystemKey() {
+  lastfmSystemBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "lastfm_api_key",
+      value: lastfmSystemKeyInput.value,
+    }));
+    if (!data.ok) throw new Error(data.error || "lastfm_api_key");
+    lastfmSystemKeySet.value = !!lastfmSystemKeyInput.value;
+    lastfmSystemKeyInput.value = "";
+    showToast(t("settings.common.lastfm.systemKeySaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  lastfmSystemBusy.value = false;
+}
+
+async function clearLastfmSystemKey() {
+  lastfmSystemBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "lastfm_api_key",
+      value: "",
+    }));
+    if (!data.ok) throw new Error(data.error || "lastfm_api_key");
+    lastfmSystemKeySet.value = false;
+    lastfmSystemKeyInput.value = "";
+    showToast(t("settings.common.lastfm.systemKeyCleared"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  lastfmSystemBusy.value = false;
+}
+
+async function saveScrapeInterval() {
+  scrapeIntervalBusy.value = true;
+  try {
+    const data = JSON.parse(await edgesonicPost("features/updateString", {
+      key: "artist_scrape_interval_hours",
+      value: String(scrapeIntervalHours.value),
+    }));
+    if (!data.ok) throw new Error(data.error || "artist_scrape_interval_hours");
+    showToast(t("settings.common.lastfm.scrapeIntervalSaved"));
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
+  }
+  scrapeIntervalBusy.value = false;
 }
 
 const scanIntervalHours = ref<number>(1);
@@ -926,26 +1126,8 @@ async function onResetFailedWork() {
     resetFailedToast.value = t("settings.common.maintenance.resetFailedFailed", {
       error: e instanceof Error ? e.message : String(e),
     });
-  }
-  resetFailedBusy.value = false;
-}
-
-async function clearLastfm() {
-  lastfmBusy.value = true;
-  try {
-    const data = JSON.parse(await edgesonicPost("features/userSetting", {
-      key: "lastfm_api_key",
-      value: "",
-    }));
-    if (!data.ok) throw new Error(data.error || "lastfm_api_key");
-    lastfmKeySet.value = false;
-    lastfmKeyInput.value = "";
-    showToast(t("settings.common.lastfm.cleared"));
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    showToast(`${t("settings.common.lastfm.saveFailed")}: ${msg}`, "error");
-  }
-  lastfmBusy.value = false;
+   }
+   resetFailedBusy.value = false;
 }
 
 async function toggleFeature(f: Feature, checked: boolean) {
@@ -1274,43 +1456,83 @@ onMounted(() => {
         <div class="sub-block">
           <div class="sub-header">
             <span class="mono-label">{{ t("settings.common.lastfm.title") }}</span>
-            <span class="status-badge" :class="lastfmKeySet ? 'success' : 'muted'">
-              {{ lastfmKeySet ? t("settings.common.lastfm.setStatus") : t("settings.common.lastfm.unsetStatus") }}
+            <span class="status-badge" :class="(lastfmUsernameSet && lastfmApiKeySet) ? 'success' : (lastfmUsernameSet ? 'warning' : 'muted')">
+              {{ (lastfmUsernameSet && lastfmApiKeySet)
+                ? t("settings.common.lastfm.fullStatus")
+                : (lastfmUsernameSet ? t("settings.common.lastfm.partialStatus") : t("settings.common.lastfm.unsetStatus")) }}
             </span>
           </div>
           <p class="feature-desc tc-desc" style="margin-left:0">
-            {{ t("settings.common.lastfm.desc") }}
+            {{ t("settings.common.lastfm.userDesc") }}
           </p>
+
           <label class="tc-row">
-            <span class="tc-key">{{ t("settings.common.lastfm.label") }}</span>
+            <span class="tc-key">{{ t("settings.common.lastfm.usernameLabel") }}</span>
             <input
-              v-model="lastfmKeyInput"
-              type="password"
-              maxlength="256"
+              v-model="lastfmUsernameInput"
+              type="text"
+              maxlength="64"
               class="form-input"
-              :placeholder="t('settings.common.lastfm.placeholder')"
+              :placeholder="t('settings.common.lastfm.usernamePlaceholder')"
               autocomplete="off"
             />
           </label>
           <div class="tc-actions">
             <button
-              v-if="lastfmKeySet"
+              v-if="lastfmUsernameSet"
               class="btn-secondary"
               :disabled="lastfmBusy"
-              @click="clearLastfm"
+              @click="clearLastfmUsername"
               style="margin-right: 0.6rem"
             >
-             {{ t("settings.common.lastfm.clear") }}
+              {{ t("settings.common.lastfm.clear") }}
             </button>
             <button
               class="btn-primary"
-              :disabled="lastfmBusy || !lastfmKeyInput"
-              @click="saveLastfm"
+              :disabled="lastfmBusy || !lastfmUsernameInput"
+              @click="saveLastfmUsername"
             >
-             {{ t("settings.common.lastfm.save") }}
+              {{ t("settings.common.lastfm.save") }}
+            </button>
+          </div>
+
+          <div class="sub-header" style="margin-top:0.8rem">
+            <span class="mono-label">{{ t("settings.common.lastfm.apiKeyLabel") }}</span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.lastfm.userApiKeyDesc") }}
+          </p>
+          <label class="tc-row">
+            <span class="tc-key">{{ t("settings.common.lastfm.apiKeyField") }}</span>
+            <input
+              v-model="lastfmApiKeyInput"
+              type="password"
+              maxlength="128"
+              class="form-input"
+              :placeholder="t('settings.common.lastfm.apiKeyPlaceholder')"
+              autocomplete="off"
+            />
+          </label>
+          <div class="tc-actions">
+            <button
+              v-if="lastfmApiKeySet"
+              class="btn-secondary"
+              :disabled="lastfmBusy"
+              @click="clearLastfmApiKey"
+              style="margin-right: 0.6rem"
+            >
+              {{ t("settings.common.lastfm.clear") }}
+            </button>
+            <button
+              class="btn-primary"
+              :disabled="lastfmBusy || !lastfmApiKeyInput"
+              @click="saveLastfmApiKey"
+            >
+              {{ t("settings.common.lastfm.save") }}
             </button>
           </div>
         </div>
+
       </div>
 
       <div class="corner corner-tl"></div>
@@ -1381,7 +1603,7 @@ onMounted(() => {
 
         <div class="sub-section" :class="{ open: subOpen.media }">
           <button class="sub-section-header" @click="toggleSubSection('media')">
-            <span class="sub-section-title">媒体处理与扫描</span>
+            <span class="sub-section-title">{{ t("settings.system.subMedia") }}</span>
             <span class="sub-section-caret">{{ subOpen.media ? '−' : '+' }}</span>
           </button>
           <div v-show="subOpen.media" class="sub-section-body">
@@ -1584,7 +1806,7 @@ onMounted(() => {
 
         <div class="sub-section" :class="{ open: subOpen.integrations }">
           <button class="sub-section-header" @click="toggleSubSection('integrations')">
-            <span class="sub-section-title">系统集成</span>
+            <span class="sub-section-title">{{ t("settings.system.subIntegrations") }}</span>
             <span class="sub-section-caret">{{ subOpen.integrations ? '−' : '+' }}</span>
           </button>
           <div v-show="subOpen.integrations" class="sub-section-body">
@@ -1819,15 +2041,148 @@ onMounted(() => {
               >
                {{ t("settings.common.presign.save") }}
               </button>
+             </div>
+           </div>
+         </div>
+           </div>
+         </div>
+
+        <div class="sub-section" :class="{ open: subOpen.lastfm }">
+          <button class="sub-section-header" @click="toggleSubSection('lastfm')">
+            <span class="sub-section-title">{{ t("settings.system.subLastfm") }}</span>
+            <span class="sub-section-caret">{{ subOpen.lastfm ? '−' : '+' }}</span>
+          </button>
+          <div v-show="subOpen.lastfm" class="sub-section-body">
+
+        <div v-if="canManageSettings" class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.lastfm.apiKeyLabel") }}</span>
+            <span class="status-badge" :class="lastfmSystemKeySet ? 'success' : 'muted'">
+              {{ lastfmSystemKeySet ? t("settings.common.lastfm.setStatus") : t("settings.common.lastfm.unsetStatus") }}
+            </span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.lastfm.systemDesc") }}
+          </p>
+
+          <label class="tc-row">
+            <span class="tc-key">{{ t("settings.common.lastfm.apiKeyField") }}</span>
+            <input
+              v-model="lastfmSystemKeyInput"
+              type="password"
+              maxlength="128"
+              class="form-input"
+              :placeholder="t('settings.common.lastfm.apiKeyPlaceholder')"
+              autocomplete="off"
+            />
+          </label>
+          <div class="tc-actions">
+            <button
+              v-if="lastfmSystemKeySet"
+              class="btn-secondary"
+              :disabled="lastfmSystemBusy"
+              @click="clearLastfmSystemKey"
+              style="margin-right: 0.6rem"
+            >
+              {{ t("settings.common.lastfm.clear") }}
+            </button>
+            <button
+              class="btn-primary"
+              :disabled="lastfmSystemBusy || !lastfmSystemKeyInput"
+              @click="saveLastfmSystemKey"
+            >
+              {{ t("settings.common.lastfm.save") }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="canManageSettings" class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.lastfm.fallbackTitle") }}</span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.lastfm.fallbackDesc") }}
+          </p>
+          <div class="scrape-source-list">
+            <div v-for="(id, idx) in artistInfoOrder" :key="id" class="scrape-source-row">
+              <label class="scrape-source-toggle">
+                <input
+                  type="checkbox"
+                  :checked="artistInfoEnabledSet.has(id)"
+                  :disabled="!canManageSettings"
+                  @change="toggleArtistInfoSource(id, ($event.target as HTMLInputElement).checked)"
+                />
+                <span class="scrape-source-label">
+                  {{ ARTIST_INFO_ALL_SOURCES.find((s) => s.id === id)?.label || id }}
+                </span>
+              </label>
+              <div class="scrape-source-rank">
+                <span class="rank-num">{{ idx + 1 }}</span>
+                <button
+                  class="rank-btn"
+                  :disabled="!canManageSettings || idx === 0"
+                  :title="t('settings.common.scrape.moveUp')"
+                  @click="moveArtistInfoSource(id, -1)"
+                >▲</button>
+                <button
+                  class="rank-btn"
+                  :disabled="!canManageSettings || idx === artistInfoOrder.length - 1"
+                  :title="t('settings.common.scrape.moveDown')"
+                  @click="moveArtistInfoSource(id, 1)"
+                >▼</button>
+              </div>
+            </div>
+          </div>
+          <div class="tc-actions">
+            <button
+              class="btn-primary"
+              :disabled="!canManageSettings || artistInfoBusy"
+              @click="saveArtistInfoSources"
+            >
+              {{ t("settings.common.lastfm.save") }}
+            </button>
+          </div>
+        </div>
+
+        <div v-if="canManageSettings" class="sub-block">
+          <div class="sub-header">
+            <span class="mono-label">{{ t("settings.common.lastfm.scrapeIntervalTitle") }}</span>
+          </div>
+          <p class="feature-desc tc-desc" style="margin-left:0">
+            {{ t("settings.common.lastfm.scrapeIntervalDesc") }}
+          </p>
+          <div class="transcode-grid">
+            <label class="tc-row">
+              <span class="tc-key">{{ t("settings.common.lastfm.scrapeIntervalField") }}</span>
+              <input
+                v-model.number="scrapeIntervalHours"
+                type="number"
+                min="0"
+                max="168"
+                step="1"
+                class="form-input"
+                :disabled="!canManageSettings"
+              />
+            </label>
+            <p class="feature-desc tc-desc">{{ t("settings.common.lastfm.scrapeIntervalHint") }}</p>
+            <div class="tc-actions">
+              <button
+                class="btn-primary"
+                :disabled="!canManageSettings || scrapeIntervalBusy"
+                @click="saveScrapeInterval"
+              >
+                {{ t("settings.common.lastfm.save") }}
+              </button>
             </div>
           </div>
         </div>
+
           </div>
         </div>
 
         <div class="sub-section" :class="{ open: subOpen.workers }">
-          <button class="sub-section-header" @click="toggleSubSection('workers')">
-            <span class="sub-section-title">浏览器工作池</span>
+           <button class="sub-section-header" @click="toggleSubSection('workers')">
+            <span class="sub-section-title">{{ t("settings.system.subWorkers") }}</span>
             <span class="sub-section-caret">{{ subOpen.workers ? '−' : '+' }}</span>
           </button>
           <div v-show="subOpen.workers" class="sub-section-body">
@@ -1970,7 +2325,7 @@ onMounted(() => {
              maintenance_* permissions on each action. -->
         <div v-if="canManageSettings" class="sub-block">
           <div class="sub-header">
-            <span class="mono-label">🔧 {{ t("settings.common.maintenance.title") }}</span>
+            <span class="mono-label">{{ t("settings.common.maintenance.title") }}</span>
           </div>
           <p class="feature-desc" style="margin: 0 0 0.6rem 0">
             {{ t("settings.common.maintenance.desc") }}
@@ -2045,7 +2400,7 @@ onMounted(() => {
 
         <div class="sub-section" :class="{ open: subOpen.featureFlags }">
           <button class="sub-section-header" @click="toggleSubSection('featureFlags')">
-            <span class="sub-section-title">功能开关</span>
+            <span class="sub-section-title">{{ t("settings.system.subFeatureFlags") }}</span>
             <span class="sub-section-caret">{{ subOpen.featureFlags ? '−' : '+' }}</span>
           </button>
           <div v-show="subOpen.featureFlags" class="sub-section-body">
