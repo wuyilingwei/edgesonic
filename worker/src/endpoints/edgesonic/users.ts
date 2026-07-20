@@ -33,9 +33,9 @@ import { isDemoMode } from "../../utils/demoMode";
 import type { User } from "../../types/entities";
 
 // Demo mode blocks superadmin-level user mutations (create/update/delete)
-// so a visitor holding the demo superadmin password can't lock other
-// visitors out or change the showcase account list. Read endpoints
-// (list/get) and self-service edits (updateSelf) stay open.
+// AND self-service profile edits (updateSelf/setAvatar) so a visitor
+// holding the demo superadmin password can't personalize the showcase
+// account. Read endpoints (list/get) stay open.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function demoBlockUserMutation(c: any): Response | null {
   if (!isDemoMode(c.env)) return null;
@@ -49,6 +49,8 @@ export const usersRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }
 // already have self-service paths; this covers the nickname. An empty value
 // clears it, falling back to the username at read time.
 usersRoutes.post("/users/updateSelf", async (c) => {
+  const blocked = demoBlockUserMutation(c);
+  if (blocked) return blocked;
   const caller = c.get("user");
   if (caller.level < 1) {
     return c.json({ ok: false, error: "Guests cannot edit their profile" }, 403);
@@ -281,6 +283,8 @@ usersRoutes.post("/users/delete", permissionMiddleware("manage_users"), async (c
 // is consistent and easier for the Vue UI to consume.
 // ============================================================================
 usersRoutes.post("/users/setAvatar", async (c) => {
+  const blocked = demoBlockUserMutation(c);
+  if (blocked) return blocked;
   const body = await c.req.json<{
     username?: string;
     imageBase64?: string;
