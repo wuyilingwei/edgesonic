@@ -272,13 +272,35 @@ jobs:
             exit 0
           fi
 
-          # Nuke the entire bucket (force=true lets R2 delete a non-empty
-          # bucket in one call) and recreate it. This wipes every visitor
-          # upload and modification without iterating keys. Simpler than
-          # per-key list+delete and handles avatars/, cache/, music/, etc.
-          # in one shot.
-          echo "Deleting $R2_NAME (force)..."
-          DEL=$(curl -s -X DELETE "$API/$R2_NAME?force=true" -H "$AUTH")
+          # Nuke the entire bucket so every visitor upload / modification
+          # is gone. R2 REST API doesn't support force-delete of a non-empty
+          # bucket, so we list every object and delete them one by one,
+          # then delete the empty bucket, then recreate it. The Cloudflare
+          # REST API returns up to 1000 keys per page; paginate until done.
+          echo "Emptying $R2_NAME..."
+          CURSOR=""
+          while :; do
+            LIST_URL="$API/$R2_NAME/objects?per_page=1000"
+            if [ -n "$CURSOR" ]; then LIST_URL="${LIST_URL}&cursor=${CURSOR}"; fi
+            LIST_RESP=$(curl -s -H "$AUTH" "$LIST_URL")
+            if ! echo "$LIST_RESP" | jq -e '.success == true' >/dev/null; then
+              echo "::error::R2 list failed: $LIST_RESP"
+              exit 1
+            fi
+            KEYS=$(echo "$LIST_RESP" | jq -r '.result[].key // empty')
+            if [ -z "$KEYS" ]; then break; fi
+            while IFS= read -r KEY; do
+              ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$KEY")
+              curl -s -X DELETE "$API/$R2_NAME/objects/$ENC" -H "$AUTH" >/dev/null 2>&1 || true
+            done <<< "$KEYS"
+            TRUNC=$(echo "$LIST_RESP" | jq -r '.result_info.has_more // false')
+            if [ "$TRUNC" != "true" ]; then break; fi
+            CURSOR=$(echo "$LIST_RESP" | jq -r '.result_info.cursor // empty')
+            if [ -z "$CURSOR" ]; then break; fi
+          done
+
+          echo "Deleting empty bucket $R2_NAME..."
+          DEL=$(curl -s -X DELETE "$API/$R2_NAME" -H "$AUTH")
           if ! echo "$DEL" | jq -e '.success == true or (.errors[0].code == 10006)' >/dev/null; then
             echo "::error::Bucket delete failed: $DEL"
             exit 1
