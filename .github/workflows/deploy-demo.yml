@@ -158,12 +158,11 @@ jobs:
           # below, so we don't create it here. The reupload step handles
           # both deletion and creation atomically.
 
-          # INSTANCE_ID for the demo Worker — deterministic per repo so re-runs
-          # don't drift. Derive from the repo full name + "demo" so it's stable
-          # but distinct from the production instance. Use python3 uuid5
-          # (SHA-1 namespace) for cross-platform determinism; `uuidgen
-          # --namespace @dns` syntax varies between Linux distros.
-          INST=$(python3 -c 'import uuid,sys; print(str(uuid.uuid5(uuid.NAMESPACE_DNS, sys.argv[1] + "-demo")))' "${{ github.repository }}")
+          # INSTANCE_ID for the demo Worker — random per run so re-deploys
+          # rotate the anti-loop marker. uuid4 (pure random) is fine here:
+          # the demo Worker doesn't chain S2S so a fresh UUID each deploy is
+          # harmless and avoids leaking any stable identifier.
+          INST=$(python3 -c 'import uuid; print(str(uuid.uuid4()))')
           echo "inst=$INST" >> "$GITHUB_OUTPUT"
 
       - name: Generate demo wrangler.toml
