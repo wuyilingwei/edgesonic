@@ -157,17 +157,22 @@ jobs:
           DB_NAME="edgesonic-demo-db"
           R2_NAME="edgesonic-demo-music"
 
-          # D1: get or create
+          # D1: replace the whole demo database on every run. Schema.sql uses
+          # INSERT OR IGNORE, so merely reapplying it doesn't undo visitors'
+          # storage sources, users, feature settings, or library metadata.
+          # Recreating D1 gives the demo a real clean baseline each deploy.
           DB_LIST=$(wrangler d1 list --json 2>/dev/null || echo "[]")
           DB_ID=$(echo "$DB_LIST" | jq -r --arg n "$DB_NAME" \
             '.[] | select(.name==$n) | (.uuid // .database_id // "") | select(length>0)' \
             2>/dev/null || echo "")
-          if [ -z "$DB_ID" ]; then
-            echo "Creating D1 database '$DB_NAME'..."
-            wrangler d1 create "$DB_NAME" >/dev/null
-            DB_ID=$(wrangler d1 list --json | jq -r --arg n "$DB_NAME" \
-              '.[] | select(.name==$n) | (.uuid // .database_id)')
+          if [ -n "$DB_ID" ]; then
+            echo "Deleting prior demo D1 database '$DB_NAME'..."
+            wrangler d1 delete "$DB_NAME" --skip-confirmation >/dev/null
           fi
+          echo "Creating clean D1 database '$DB_NAME'..."
+          wrangler d1 create "$DB_NAME" >/dev/null
+          DB_ID=$(wrangler d1 list --json | jq -r --arg n "$DB_NAME" \
+            '.[] | select(.name==$n) | (.uuid // .database_id)')
           echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
 
           # R2 bucket is force-deleted and recreated in the reupload step
@@ -217,15 +222,15 @@ jobs:
             --file edgesonic-release/worker/migrations/Schema.sql
 
           # Seed the demo superadmin only if the users table is empty. The
-          # password hash is sha256("demoadmin") — same convention as the
+          # password hash is sha256("demo") — same convention as the
           # README's first-login bootstrap.
           USER_COUNT=$(wrangler d1 execute "$DB_NAME" --remote \
             --config edgesonic-release/worker/wrangler.toml \
             --command 'SELECT COUNT(*) AS c FROM users' --json \
             | jq -r '.[0].results[0].c')
           if [ "$USER_COUNT" = "0" ]; then
-            echo "Seeding demo superadmin (admin / demoadmin)..."
-            PASS_HASH=$(node -e 'const c=require("crypto");console.log(c.createHash("sha256").update("demoadmin").digest("hex"))')
+            echo "Seeding demo superadmin (admin / demo)..."
+            PASS_HASH=$(node -e 'const c=require("crypto");console.log(c.createHash("sha256").update("demo").digest("hex"))')
             wrangler d1 execute "$DB_NAME" --remote \
               --config edgesonic-release/worker/wrangler.toml \
               --command "INSERT INTO users (username, master_password, level, enabled, created_at, updated_at) VALUES ('admin', '$PASS_HASH', 3, 1, strftime('%s','now'), strftime('%s','now'))" \
@@ -395,5 +400,5 @@ jobs:
       - name: Post-deploy reminder
         run: |
           echo "::notice::Demo Worker deployed at https://edgesonic-demo.${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.workers.dev"
-          echo "::notice::Login: admin / demoadmin"
+          echo "::notice::Login: admin / demo"
           echo "::notice::After first deploy, sign in and open Settings → Cloudflare → 'Ensure default cron' so cron-driven tasks (podcast refresh, scan, guest token reap) run."

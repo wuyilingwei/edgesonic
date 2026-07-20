@@ -2,13 +2,14 @@
 <script setup lang="ts">
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { onMounted, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
 
 const { t } = useI18n();
 const { login, guestLogin, isLoggedIn } = useAuth();
 const router = useRouter();
+const route = useRoute();
 
 const username = ref("");
 const password = ref("");
@@ -47,6 +48,13 @@ async function loginAsGuest() {
 }
 
 onMounted(async () => {
+  // Demo/share links may prefill credentials with either short (`u` / `p`)
+  // or descriptive (`username` / `password`) query keys. This only fills the
+  // form; login still requires the visitor to press the submit button.
+  const queryUsername = route.query.u ?? route.query.username;
+  const queryPassword = route.query.p ?? route.query.password;
+  if (typeof queryUsername === "string") username.value = queryUsername;
+  if (typeof queryPassword === "string") password.value = queryPassword;
   try {
     const response = await fetch("/edgesonic/auth/guest", { credentials: "same-origin" });
     const data = await response.json();

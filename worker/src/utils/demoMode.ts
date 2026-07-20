@@ -44,7 +44,7 @@ export const DEMO_LOCKED_FEATURE_KEYS = new Set<string>([
   // lift the cap from the Settings UI.
   "r2_max_storage_bytes",
   // Default UI theme — locked in demo so the operator's chosen showcase
-  // theme (e.g. sp-sky) can't be overridden from the Settings UI.
+  // theme (e.g. sp-gold) can't be overridden from the Settings UI.
   "default_theme",
   // File-type gate — locked in demo so a visitor can't switch to
   // "allow all" and upload arbitrary payloads.

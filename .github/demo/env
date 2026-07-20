@@ -10,8 +10,8 @@ DEMO_MAX_UPLOAD_BYTES=52428800
 R2_MAX_LIMIT=104857600
 
 # Default UI theme applied on first visit (before the user picks their
-# own). "sp-sky" is the 星空 theme.
-DEFAULT_THEME=sp-sky
+# own). "sp-gold" is the Stardust/星空 SP theme.
+DEFAULT_THEME=sp-gold
 
 # Whether /files/upload accepts any file type. "0" = audio only.
 # Demo locks this so visitors can't upload arbitrary payloads.
