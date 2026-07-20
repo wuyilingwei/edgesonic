@@ -150,31 +150,9 @@ jobs:
           fi
           echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
 
-          # R2: create bucket if missing
-          R2_LIST=$(wrangler r2 bucket list --json 2>/dev/null || echo "[]")
-          R2_EXISTS=$(echo "$R2_LIST" | jq -r --arg n "$R2_NAME" \
-            '.[] | select(.name==$n) | .name' 2>/dev/null || echo "")
-          if [ -z "$R2_EXISTS" ]; then
-            echo "Creating R2 bucket '$R2_NAME'..."
-            wrangler r2 bucket create "$R2_NAME" >/dev/null
-          fi
-
-          # R2: enable bucket versioning. The demo Worker rolls back
-          # demo-library/ to a captured versionId on each 6h reset; versioning
-          # must be on for the Worker to read historical versions.
-          # `wrangler r2 bucket versioning enable` is idempotent — re-runs
-          # are safe. Older wrangler versions may not support the subcommand;
-          # fall back to the REST API if so.
-          if ! wrangler r2 bucket versioning enable "$R2_NAME" >/dev/null 2>&1; then
-            echo "wrangler r2 bucket versioning enable unavailable — trying REST API..."
-            curl -s -X POST \
-              "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/r2/buckets/${R2_NAME}/versioning" \
-              -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d '{"enabled":true}' \
-              | jq -e '.success || .errors[0].code == 0' >/dev/null
-          fi
-          echo "R2 bucket versioning enabled on $R2_NAME"
+          # R2 bucket is force-deleted and recreated in the reupload step
+          # below, so we don't create it here. The reupload step handles
+          # both deletion and creation atomically.
 
           # INSTANCE_ID for the demo Worker — deterministic per repo so re-runs
           # don't drift. Derive from the repo full name + "demo" so it's stable
@@ -244,47 +222,38 @@ jobs:
           R2_NAME="edgesonic-demo-music"
           ACCOUNT="$CLOUDFLARE_ACCOUNT_ID"
           AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          API="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/r2/buckets"
 
-          # Wipe the demo-library/ prefix so any visitor modification is gone.
-          # wrangler has no `r2 object list`, so use the Cloudflare REST API
-          # (GET /r2/buckets/<bucket>/objects) to enumerate keys, then DELETE
-          # each one via wrangler. Paginate until exhausted.
-          echo "Clearing $R2_NAME/demo-library/..."
-          CURSOR=""
-          while :; do
-            URL="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/r2/buckets/$R2_NAME/objects?per_page=1000&prefix=demo-library%2F"
-            if [ -n "$CURSOR" ]; then URL="$URL&cursor=$CURSOR"; fi
-            RESP=$(curl -s -H "$AUTH" "$URL")
-            if ! echo "$RESP" | jq -e '.success == true' >/dev/null; then
-              echo "::error::R2 list failed: $RESP"
-              exit 1
-            fi
-            KEYS=$(echo "$RESP" | jq -r '.result[].key // empty')
-            if [ -z "$KEYS" ]; then
-              break
-            fi
-            while IFS= read -r KEY; do
-              # Delete via R2 S3-compatible path is not available through
-              # wrangler with a key-only delete; use the REST API.
-              curl -s -X DELETE \
-                "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/r2/buckets/$R2_NAME/objects/$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$KEY")" \
-                -H "$AUTH" >/dev/null 2>&1 || true
-            done <<< "$KEYS"
-            RESULT_INFO=$(echo "$RESP" | jq -r '.result_info | "cursor=\(.cursor // "") truncated=\(.has_more // false)"')
-            eval "$RESULT_INFO"
-            if [ "$truncated" != "true" ] || [ -z "$cursor" ]; then
-              break
-            fi
-            CURSOR="$cursor"
-          done
-
-          # Re-upload every file under demo-library/ from the repo checkout.
-          # Files in the repo at demo-library/<artist>/<album>/<track>.mp3
-          # become R2 keys demo-library/<artist>/<album>/<track>.mp3.
+          # Skip entirely when the repo has no demo-library/ directory.
           if [ ! -d demo-library ] || [ -z "$(find demo-library -type f -print -quit)" ]; then
             echo "::notice::No demo-library/ directory in the repo — skipping reupload. Demo will start with an empty library."
             exit 0
           fi
+
+          # Nuke the entire bucket (force=true lets R2 delete a non-empty
+          # bucket in one call) and recreate it. This wipes every visitor
+          # upload and modification without iterating keys. Simpler than
+          # per-key list+delete and handles avatars/, cache/, music/, etc.
+          # in one shot.
+          echo "Deleting $R2_NAME (force)..."
+          DEL=$(curl -s -X DELETE "$API/$R2_NAME?force=true" -H "$AUTH")
+          if ! echo "$DEL" | jq -e '.success == true or (.errors[0].code == 10006)' >/dev/null; then
+            echo "::error::Bucket delete failed: $DEL"
+            exit 1
+          fi
+          echo "Creating $R2_NAME..."
+          CREATE=$(curl -s -X POST "$API" -H "$AUTH" -H "Content-Type: application/json" \
+            -d "{\"name\":\"$R2_NAME\",\"locationHint\":\"apac\"}")
+          if ! echo "$CREATE" | jq -e '.success == true or (.errors[0].code == 10004)' >/dev/null; then
+            echo "::error::Bucket create failed: $CREATE"
+            exit 1
+          fi
+          # Give R2 a beat to settle before we start PUTting objects.
+          sleep 2
+
+          # Upload every file under demo-library/ from the repo checkout.
+          # Repo path demo-library/<artist>/<album>/<track>.mp3 →
+          # R2 key demo-library/<artist>/<album>/<track>.mp3.
           COUNT=0
           while IFS= read -r -d '' FILE; do
             KEY="${FILE#demo-library/}"
