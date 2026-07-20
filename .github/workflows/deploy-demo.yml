@@ -397,6 +397,59 @@ jobs:
             --containers-rollout=none \
             "${VAR_FLAGS[@]}"
 
+      - name: Scan restored R2 demo library
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          # Resolve the account's workers.dev subdomain rather than assuming
+          # the account id is the hostname. Login with the freshly seeded
+          # demo account, then trigger the native R2 scan so the recreated
+          # D1 database gets storage_sources / song_instances rows for the
+          # files just uploaded to demo-library/.
+          SUBDOMAIN=$(curl -s \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            | jq -r '.result.subdomain // empty')
+          if [ -z "$SUBDOMAIN" ]; then
+            echo "::error::Could not resolve workers.dev subdomain."
+            exit 1
+          fi
+          BASE="https://edgesonic-demo.${SUBDOMAIN}.workers.dev"
+          COOKIE_JAR=$(mktemp)
+          trap 'rm -f "$COOKIE_JAR"' EXIT
+          LOGIN=$(curl -s -o /tmp/demo-login.json -w '%{http_code}' \
+            -c "$COOKIE_JAR" \
+            -H "Content-Type: application/json" \
+            -X POST "$BASE/edgesonic/auth/login" \
+            --data '{"username":"admin","password":"demo"}')
+          if [ "$LOGIN" != "200" ]; then
+            echo "::error::Demo login failed (HTTP $LOGIN): $(cat /tmp/demo-login.json)"
+            exit 1
+          fi
+          START=$(curl -s -o /tmp/demo-scan.xml -w '%{http_code}' \
+            -b "$COOKIE_JAR" \
+            "$BASE/storage/scan/start?id=r2-local")
+          if [ "$START" != "200" ]; then
+            echo "::error::R2 scan start failed (HTTP $START): $(cat /tmp/demo-scan.xml)"
+            exit 1
+          fi
+          echo "Triggered native R2 scan."
+          # Four demo tracks should finish quickly. Poll for at most 90s;
+          # deployment itself succeeds even when metadata parsing continues
+          # in the browser work queue after the source scan completes.
+          for _ in $(seq 1 30); do
+            STATUS=$(curl -s -b "$COOKIE_JAR" "$BASE/storage/scan/status")
+            if ! echo "$STATUS" | grep -q 'status="running"'; then
+              echo "R2 scan finished: $STATUS"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::R2 scan did not finish within 90 seconds."
+          exit 1
+
       - name: Post-deploy reminder
         run: |
           echo "::notice::Demo Worker deployed at https://edgesonic-demo.${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.workers.dev"
