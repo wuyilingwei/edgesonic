@@ -32,6 +32,16 @@ import { ensureNicknameColumn } from "../../utils/schema_patch";
 import { isDemoMode } from "../../utils/demoMode";
 import type { User } from "../../types/entities";
 
+// Demo mode blocks superadmin-level user mutations (create/update/delete)
+// so a visitor holding the demo superadmin password can't lock other
+// visitors out or change the showcase account list. Read endpoints
+// (list/get) and self-service edits (updateSelf) stay open.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function demoBlockUserMutation(c: any): Response | null {
+  if (!isDemoMode(c.env)) return null;
+  return c.json({ ok: false, error: "User mutations are locked in demo mode" }, 403);
+}
+
 export const usersRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
 
 // Self-service profile edit — any signed-in non-guest may set their own
@@ -80,6 +90,8 @@ usersRoutes.get("/users/list", permissionMiddleware("manage_users"), async (c) =
 const ADMIN_TIER_LEVEL = 2;
 
 usersRoutes.post("/users/create", permissionMiddleware("manage_users"), async (c) => {
+  const blocked = demoBlockUserMutation(c);
+  if (blocked) return blocked;
   const caller = c.get("user");
   if (caller.level < 2) {
     return c.json({ ok: false, error: "User creation requires admin privileges (level 2+)" }, 403);
@@ -129,6 +141,8 @@ usersRoutes.get("/users/get", async (c) => {
 });
 
 usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c) => {
+  const blocked = demoBlockUserMutation(c);
+  if (blocked) return blocked;
   const caller = c.get("user");
   if (caller.level < 2) {
     return c.json({ ok: false, error: "User update requires admin privileges (level 2+)" }, 403);
@@ -211,6 +225,8 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
 });
 
 usersRoutes.post("/users/delete", permissionMiddleware("manage_users"), async (c) => {
+  const blocked = demoBlockUserMutation(c);
+  if (blocked) return blocked;
   const caller = c.get("user");
   if (caller.level < 2) {
     return c.json({ ok: false, error: "User deletion requires admin privileges (level 2+)" }, 403);
