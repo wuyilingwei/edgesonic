@@ -905,6 +905,26 @@ CREATE TABLE IF NOT EXISTS user_settings (
 -- ============================================================================
 
 -- ============================================================================
+-- KTV Mode (per-user settings + per-song PV binding)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS ktv_settings (
+  user_id           TEXT PRIMARY KEY,
+  enabled           INTEGER NOT NULL DEFAULT 0,
+  default_audio_mode TEXT NOT NULL DEFAULT 'mute',
+  default_pv_volume INTEGER NOT NULL DEFAULT 20,
+  updated_at        INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ktv_pv_bindings (
+  song_id        TEXT PRIMARY KEY,
+  provider        TEXT NOT NULL,
+  external_ref    TEXT NOT NULL,
+  align_offset_ms INTEGER NOT NULL DEFAULT 0,
+  updated_at      INTEGER NOT NULL
+);
+-- ============================================================================
+
+-- ============================================================================
 -- 0253 — artist biography / image_url columns for CN scrape fallback.
 -- Idempotent ALTERs; SQLite rejects ADD COLUMN if the column already exists,
 -- so we guard with a PRAGMA-based check via the application's schema_patch

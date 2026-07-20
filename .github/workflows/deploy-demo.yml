@@ -2,8 +2,17 @@ name: Deploy EdgeSonic Demo
 
 # Deploys a fully isolated demo Worker (edgesonic-demo) that runs with
 # DEMO_MODE=1 so all demo guards engage (locked superadmin password,
-# disabled dangerous perms, capped upload size, 6-hour periodic reset of D1
-# settings + R2 non-whitelisted keys).
+# disabled dangerous perms, capped upload size).
+#
+# ALL demo reset responsibility lives in this workflow — the demo Worker
+# itself does NOT perform any periodic reset. Each time this workflow
+# runs (after every release publish, or manually) it:
+#   1. Force-deletes + recreates the demo R2 bucket (wipes every visitor
+#      upload / modification / cache entry in one shot).
+#   2. Re-uploads the canonical demo library from the repo's
+#      demo-library/ directory.
+#   3. Re-applies the D1 schema + seeds the demo superadmin.
+#   4. Redeploys the Worker.
 #
 # Resources are auto-provisioned on first run:
 #   - Worker script: edgesonic-demo
@@ -43,11 +52,6 @@ on:
         description: 'Per-upload byte cap (default 52428800 = 50 MiB).'
         required: false
         default: '52428800'
-        type: string
-      demo_reset_seconds:
-        description: 'Reset cadence in seconds (default 21600 = 6h).'
-        required: false
-        default: '21600'
         type: string
 
 jobs:
@@ -268,7 +272,6 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MAXUP: ${{ github.event.inputs.demo_max_upload_bytes || '52428800' }}
-          RESET: ${{ github.event.inputs.demo_reset_seconds || '21600' }}
         run: |
           set -euo pipefail
           BUILD_INFO=$(cat edgesonic-release/web/dist/build-info.json)
@@ -283,11 +286,10 @@ jobs:
             --var EDGESONIC_VERSION:"${VERSION}" \
             --var EDGESONIC_BUILD_TIME:"${BUILD_TIME}" \
             --var DEMO_MODE:"1" \
-            --var DEMO_MAX_UPLOAD_BYTES:"${MAXUP}" \
-            --var DEMO_RESET_CRON:"${RESET}"
+            --var DEMO_MAX_UPLOAD_BYTES:"${MAXUP}"
 
       - name: Post-deploy reminder
         run: |
           echo "::notice::Demo Worker deployed at https://edgesonic-demo.${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.workers.dev"
           echo "::notice::Login: admin / demoadmin"
-          echo "::notice::After first deploy, sign in and open Settings → Cloudflare → 'Ensure default cron' so the periodic demo reset runs."
+          echo "::notice::After first deploy, sign in and open Settings → Cloudflare → 'Ensure default cron' so cron-driven tasks (podcast refresh, scan, guest token reap) run."
