@@ -419,19 +419,30 @@ jobs:
           BASE="https://edgesonic-demo.${SUBDOMAIN}.workers.dev"
           COOKIE_JAR=$(mktemp)
           trap 'rm -f "$COOKIE_JAR"' EXIT
-          LOGIN=$(curl -s -o /tmp/demo-login.json -w '%{http_code}' \
-            -c "$COOKIE_JAR" \
-            -H "Content-Type: application/json" \
-            -X POST "$BASE/edgesonic/auth/login" \
-            --data '{"username":"admin","password":"demo"}')
-          if [ "$LOGIN" != "200" ]; then
-            echo "::error::Demo login failed (HTTP $LOGIN): $(cat /tmp/demo-login.json)"
-            exit 1
-          fi
           # A D1 binding change can briefly reach an edge running the prior
           # Worker version, whose database was deliberately deleted above.
-          # Retry only that expected transient failure rather than masking
-          # authentication or scan errors.
+          # Login needs the new binding too, so retry that expected transient
+          # error before obtaining the session used for the scan request.
+          for _ in $(seq 1 30); do
+            LOGIN=$(curl -s -o /tmp/demo-login.json -w '%{http_code}' \
+              -c "$COOKIE_JAR" \
+              -H "Content-Type: application/json" \
+              -X POST "$BASE/edgesonic/auth/login" \
+              --data '{"username":"admin","password":"demo"}')
+            if [ "$LOGIN" = "200" ]; then break; fi
+            if [ "$LOGIN" != "500" ] || ! grep -q 'has been deleted' /tmp/demo-login.json; then
+              echo "::error::Demo login failed (HTTP $LOGIN): $(cat /tmp/demo-login.json)"
+              exit 1
+            fi
+            echo "Waiting for the new D1 binding to reach this edge..."
+            sleep 3
+          done
+          if [ "$LOGIN" != "200" ]; then
+            echo "::error::Demo login could not reach the new D1 binding: $(cat /tmp/demo-login.json)"
+            exit 1
+          fi
+          # Retry only the same expected binding propagation failure instead
+          # of masking authentication or scan errors.
           for _ in $(seq 1 20); do
             START=$(curl -s -o /tmp/demo-scan.xml -w '%{http_code}' \
               -b "$COOKIE_JAR" \
