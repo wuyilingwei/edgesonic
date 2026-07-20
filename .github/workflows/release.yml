@@ -83,19 +83,6 @@ jobs:
 
           cp docs/DEPLOY_BY_AGENT.md "$STAGE/" 2>/dev/null || true
 
-          # Optional demo-library snapshot. The operator populates
-          # demo-library/ at the repo root with the sample songs that should
-          # ship to the public demo instance. When present, it's archived as
-          # demo-library-snapshot.tar.gz and uploaded as a release asset; the
-          # deploy-demo workflow restores it into R2 demo-library/ on each
-          # demo deploy. Absent → no snapshot asset, demo starts empty.
-          if [ -d demo-library ] && [ -n "$(find demo-library -type f -print -quit)" ]; then
-            echo "Bundling demo-library/ snapshot into release..."
-            tar czf demo-library-snapshot.tar.gz -C . demo-library
-          else
-            echo "demo-library/ absent or empty — skipping snapshot asset."
-          fi
-
           # Install the Worker's own runtime deps into the staged dir — not
           # `npm ci` at the repo root, which would also drag in web's build-time
           # deps the deployed Worker never uses.
@@ -156,19 +143,15 @@ jobs:
               --repo "${{ github.repository }}" \
               --title "EdgeSonic $TAG" \
               --notes-file release-notes.md
-            # Upload all assets that exist in this build, --clobber replaces
-            # any previous versions on a re-run.
-            UPLOAD_ARGS=(--clobber)
-            [ -f edgesonic-release.tar.gz ] && UPLOAD_ARGS+=(edgesonic-release.tar.gz)
-            [ -f edgesonic-release.tar.gz.sha256 ] && UPLOAD_ARGS+=(edgesonic-release.tar.gz.sha256)
-            [ -f demo-library-snapshot.tar.gz ] && UPLOAD_ARGS+=(demo-library-snapshot.tar.gz)
-            gh release upload "$TAG" "${UPLOAD_ARGS[@]}" \
-              --repo "${{ github.repository }}"
+            gh release upload "$TAG" \
+              edgesonic-release.tar.gz \
+              edgesonic-release.tar.gz.sha256 \
+              --repo "${{ github.repository }}" \
+              --clobber
           else
-            ASSET_ARGS=(edgesonic-release.tar.gz edgesonic-release.tar.gz.sha256)
-            [ -f demo-library-snapshot.tar.gz ] && ASSET_ARGS+=(demo-library-snapshot.tar.gz)
             gh release create "$TAG" \
-              "${ASSET_ARGS[@]}" \
+              edgesonic-release.tar.gz \
+              edgesonic-release.tar.gz.sha256 \
               --repo "${{ github.repository }}" \
               --title "EdgeSonic $TAG" \
               --notes-file release-notes.md

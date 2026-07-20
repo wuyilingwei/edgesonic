@@ -6,9 +6,11 @@
 //      bundled worker/demo-template.json (or DEMO_TEMPLATE_OVERRIDE).
 //   2. Clears the R2 bucket of any key outside the keep-prefix whitelist
 //      (demo-library/, avatars/). Visitor uploads under music/, cache/,
-//      _uploads/ etc. are wiped; the canonical demo library under
-//      demo-library/ is restored separately by the deploy-demo GitHub
-//      workflow from a release asset, NOT by this Worker.
+//      _uploads/ etc. are wiped.
+//   3. Restores every key under demo-library/ to the versionId captured by
+//      the last superadmin-triggered snapshot (see
+//      utils/demoR2Snapshot.ts). This rolls back any visitor modification
+//      to the demo library without re-uploading bytes via CI.
 //
 // Self-gated via a D1 kv_store row so it survives the 15-minute Worker
 // isolate lifetime. The first tick after DEMO_MODE is enabled always runs
@@ -16,6 +18,7 @@
 
 import type { DemoTemplate } from "./demoTemplate";
 import { isDemoKeptR2Key } from "./demoMode";
+import { restoreDemoLibrarySnapshot } from "./demoR2Snapshot";
 
 const GATE_KEY = "demo:last_reset_ts";
 const DEFAULT_INTERVAL_SEC = 6 * 60 * 60;
@@ -127,6 +130,16 @@ export async function maybeRunDemoReset(env: Env): Promise<void> {
   await resetFeatures(env, tpl);
   await resetPermissions(env, tpl);
   await resetR2(env);
+  // Roll back demo-library/ to the last superadmin-recorded snapshot. No-op
+  // if no snapshot exists yet (e.g. brand-new demo instance — visitors see
+  // an empty library until the operator runs /edgesonic/demo/snapshot).
+  const restoreResult = await restoreDemoLibrarySnapshot(env).catch((e) => {
+    console.error("[demoReset] restoreDemoLibrarySnapshot failed:", e);
+    return null;
+  });
+  if (restoreResult && restoreResult.ok) {
+    console.log(`[demoReset] restored ${restoreResult.restored} demo-library keys (${restoreResult.skipped} skipped)`);
+  }
   await markGate(env);
   console.log("[demoReset] reset complete");
 }
