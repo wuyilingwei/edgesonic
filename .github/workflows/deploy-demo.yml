@@ -235,6 +235,66 @@ jobs:
             echo "users table already has $USER_COUNT row(s) — skipping seed."
           fi
 
+      - name: Reupload demo-library/ from repo
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          R2_NAME="edgesonic-demo-music"
+          ACCOUNT="$CLOUDFLARE_ACCOUNT_ID"
+          AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+
+          # Wipe the demo-library/ prefix so any visitor modification is gone.
+          # wrangler has no `r2 object list`, so use the Cloudflare REST API
+          # (GET /r2/buckets/<bucket>/objects) to enumerate keys, then DELETE
+          # each one via wrangler. Paginate until exhausted.
+          echo "Clearing $R2_NAME/demo-library/..."
+          CURSOR=""
+          while :; do
+            URL="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/r2/buckets/$R2_NAME/objects?per_page=1000&prefix=demo-library%2F"
+            if [ -n "$CURSOR" ]; then URL="$URL&cursor=$CURSOR"; fi
+            RESP=$(curl -s -H "$AUTH" "$URL")
+            if ! echo "$RESP" | jq -e '.success == true' >/dev/null; then
+              echo "::error::R2 list failed: $RESP"
+              exit 1
+            fi
+            KEYS=$(echo "$RESP" | jq -r '.result[].key // empty')
+            if [ -z "$KEYS" ]; then
+              break
+            fi
+            while IFS= read -r KEY; do
+              # Delete via R2 S3-compatible path is not available through
+              # wrangler with a key-only delete; use the REST API.
+              curl -s -X DELETE \
+                "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/r2/buckets/$R2_NAME/objects/$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$KEY")" \
+                -H "$AUTH" >/dev/null 2>&1 || true
+            done <<< "$KEYS"
+            RESULT_INFO=$(echo "$RESP" | jq -r '.result_info | "cursor=\(.cursor // "") truncated=\(.has_more // false)"')
+            eval "$RESULT_INFO"
+            if [ "$truncated" != "true" ] || [ -z "$cursor" ]; then
+              break
+            fi
+            CURSOR="$cursor"
+          done
+
+          # Re-upload every file under demo-library/ from the repo checkout.
+          # Files in the repo at demo-library/<artist>/<album>/<track>.mp3
+          # become R2 keys demo-library/<artist>/<album>/<track>.mp3.
+          if [ ! -d demo-library ] || [ -z "$(find demo-library -type f -print -quit)" ]; then
+            echo "::notice::No demo-library/ directory in the repo — skipping reupload. Demo will start with an empty library."
+            exit 0
+          fi
+          COUNT=0
+          while IFS= read -r -d '' FILE; do
+            KEY="${FILE#demo-library/}"
+            CONTENT_TYPE="$(file --mime-type -b "$FILE")"
+            echo "  → $R2_NAME/demo-library/$KEY"
+            wrangler r2 object put "$R2_NAME/demo-library/$KEY" --file "$FILE" --content-type "$CONTENT_TYPE" >/dev/null
+            COUNT=$((COUNT + 1))
+          done < <(find demo-library -type f -print0)
+          echo "::notice::Uploaded $COUNT files into $R2_NAME/demo-library/"
+
       - name: Deploy demo Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

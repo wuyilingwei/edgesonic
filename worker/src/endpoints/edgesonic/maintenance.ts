@@ -38,7 +38,6 @@ import type { User } from "../../types/entities";
 import { getFeatureString } from "../../utils/features";
 import { permissionMiddleware } from "../../auth";
 import { getSourceCredentials } from "../../adapters/index";
-import { recordDemoLibrarySnapshot } from "../../utils/demoR2Snapshot";
 
 export const maintenanceRoutes = new Hono<{
   Bindings: Env;
@@ -461,29 +460,4 @@ maintenanceRoutes.post("/maintenance/orphanSongs/delete",
 
   const deleted = items.filter((i) => i.ok).length;
   return c.json({ ok: true, deleted, failed: items.length - deleted, items });
-});
-
-// ---------------------------------------------------------------------------
-// POST /edgesonic/maintenance/demoSnapshot
-// ---------------------------------------------------------------------------
-// Records the current R2 versionId of every key under demo-library/ as the
-// "clean baseline" the periodic demo reset will roll back to. Only meaningful
-// when DEMO_MODE="1" — on a non-demo instance it 400s. Caller must hold the
-// maintenance_reset permission (default super-admin only) so a delegated
-// admin can't capture a poisoned state as the baseline.
-//
-// Flow: superadmin uploads the canonical demo library once (via /files/upload
-// or any R2 client) → calls this endpoint → from then on every 6h the demo
-// reset wipes visitor uploads AND rolls back any modification to those files.
-maintenanceRoutes.post("/maintenance/demoSnapshot",
-  permissionMiddleware("maintenance_reset"),
-  async (c) => {
-  if ((c.env.DEMO_MODE || "").trim() !== "1") {
-    return c.json({ ok: false, error: "Not in demo mode" }, 400);
-  }
-  const result = await recordDemoLibrarySnapshot(c.env);
-  if (!result.ok) {
-    return c.json({ ok: false, error: result.error || "Snapshot failed" }, 500);
-  }
-  return c.json({ ok: true, recorded: result.recorded });
 });
