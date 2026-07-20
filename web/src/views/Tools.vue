@@ -1704,17 +1704,17 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                    available to any user; they land on the target chosen below. -->
               <label class="tc-row">
                 <span class="tc-key">{{ t("settings.common.clone.starredToggle") }}</span>
-                <span class="scan-toggle">
+                <label class="toggle">
                   <input type="checkbox" v-model="cloneStarredEnabled" :disabled="cloneRunning" />
-                  <span>{{ cloneStarredEnabled ? t("common.on") : t("common.off") }}</span>
-                </span>
+                  <span class="toggle-slider"></span>
+                </label>
               </label>
               <label class="tc-row">
                 <span class="tc-key">{{ t("settings.common.clone.playlistsToggle") }}</span>
-                <span class="scan-toggle">
+                <label class="toggle">
                   <input type="checkbox" v-model="clonePlaylistsEnabled" :disabled="cloneRunning" />
-                  <span>{{ clonePlaylistsEnabled ? t("common.on") : t("common.off") }}</span>
-                </span>
+                  <span class="toggle-slider"></span>
+                </label>
               </label>
 
               <label class="tc-row">
@@ -1748,19 +1748,19 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
               <template v-if="isAdmin">
                 <label class="tc-row">
                   <span class="tc-key">{{ t("settings.common.clone.metadataToggle") }}</span>
-                  <span class="scan-toggle">
+                  <label class="toggle">
                     <input type="checkbox" v-model="cloneMetadataEnabled" :disabled="cloneRunning" />
-                    <span>{{ cloneMetadataEnabled ? t("common.on") : t("common.off") }}</span>
-                  </span>
+                    <span class="toggle-slider"></span>
+                  </label>
                 </label>
                 <p class="feature-desc tc-desc">{{ t("settings.common.clone.metadataToggleDesc") }}</p>
 
                 <label class="tc-row">
                   <span class="tc-key">{{ t("settings.common.clone.audioToggle") }}</span>
-                  <span class="scan-toggle">
+                  <label class="toggle">
                     <input type="checkbox" v-model="cloneAudioEnabled" :disabled="cloneRunning" />
-                    <span>{{ cloneAudioEnabled ? t("common.on") : t("common.off") }}</span>
-                  </span>
+                    <span class="toggle-slider"></span>
+                  </label>
                 </label>
                 <p class="feature-desc tc-desc">{{ t("settings.common.clone.audioToggleDesc") }}</p>
 
@@ -1782,11 +1782,17 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                 <!-- 176: filters only appear once metadata or audio is enabled. -->
                 <div v-if="cloneMetadataEnabled || cloneAudioEnabled" class="clone-options">
                   <label class="tc-row">
-                    <input type="checkbox" v-model="clonePlaylistOnly" />
+                    <label class="toggle">
+                      <input type="checkbox" v-model="clonePlaylistOnly" />
+                      <span class="toggle-slider"></span>
+                    </label>
                     <span class="tc-key">{{ t("settings.common.clone.filterPlaylistOnly") }}</span>
                   </label>
                   <label class="tc-row">
-                    <input type="checkbox" v-model="cloneStarredOnly" />
+                    <label class="toggle">
+                      <input type="checkbox" v-model="cloneStarredOnly" />
+                      <span class="toggle-slider"></span>
+                    </label>
                     <span class="tc-key">{{ t("settings.common.clone.filterStarredOnly") }}</span>
                   </label>
                   <p class="feature-desc tc-desc" style="margin-left:0">{{ t("settings.common.clone.filterDesc") }}</p>
@@ -1998,7 +2004,10 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
              现在集中到这里（同一台浏览器的运行参数）。 -->
         <div class="wp-worker-toggle">
           <label class="wp-toggle-label">
-            <input type="checkbox" :checked="workerPool.enabled" @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)" />
+            <label class="toggle">
+              <input type="checkbox" :checked="workerPool.enabled" @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)" />
+              <span class="toggle-slider"></span>
+            </label>
             <span>浏览器 Worker: {{ workerPool.enabled ? '已启用' : '已禁用' }}</span>
           </label>
         </div>

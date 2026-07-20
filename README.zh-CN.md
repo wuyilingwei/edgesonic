@@ -4,6 +4,10 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+## 在线演示
+
+在线 demo 地址：**<https://edgesonic-demo.wuyilingwei.workers.dev>** —— 登录账号 `admin` / `demo`。该 demo 以 `DEMO_MODE=1` 运行：危险权限（用户/存储源管理、删除、Cloudflare 设置）已被锁定，上传有大小上限，媒体库会在每次部署时从固定曲目集重置。其余功能——浏览、播放、标签编辑、浏览器工作池——均完整可用。
+
 > **如果你是一个 AI agent**，被要求部署本项目，请不要继续往下读，直接遵循
 > [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md)（该文档为纯英文，专门为 agent 编写的
 > 自包含部署手册）。
@@ -90,20 +94,21 @@ cd worker
 npx wrangler secret put WORK_UPLOAD_HMAC_KEY  # 随机生成的 48 字节 base64
 ```
 
-可选（为默认 `edgesonic-music` bucket 启用 R2 预签名直连播放）：
+可选 —— 一个 Custom Token 同时勾选 Workers（Account scope）和 R2 Object Read（Bucket scope）
+两组权限，创建后同时拿到三个值（点击步骤见 [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md)
+§3.5）。启用 R2 预签名直连播放、应用内 Cloudflare 集成、Cloudflare Images Transformations
+（封面按需缩略）：
 
 ```bash
-npx wrangler secret put R2_ACCESS_KEY_ID
-npx wrangler secret put R2_SECRET_ACCESS_KEY
-```
-
-Cloudflare 集成（Cron 管理、分析数据）：
-
-```bash
-# 首次部署后可通过 Settings 界面设置，或者：
-npx wrangler secret put CF_API_TOKEN
+npx wrangler secret put CF_API_TOKEN          # token value（Bearer 字符串）
+npx wrangler secret put R2_ACCESS_KEY_ID      # Access Key ID = token id
+npx wrangler secret put R2_SECRET_ACCESS_KEY  # Secret Access Key = SHA-256(token value)
 npx wrangler secret put CF_ACCOUNT_ID
 ```
+
+推送 `CF_API_TOKEN` 之后，还需在 zone 上启用 Images Transformations
+（`dash.cloudflare.com/<account-id>/images/transformations` → 选中 zone → Enable），`IMAGES` binding
+才会真正缩放封面，而不是回退到原始字节。
 
 ### 4. 部署
 
@@ -121,15 +126,6 @@ npx wrangler secret put CF_ACCOUNT_ID
 npx wrangler d1 execute edgesonic-db --remote --command \
   "INSERT INTO users (username, master_password, level) VALUES ('admin', hex(sha256('yourpassword')), 3)"
 ```
-
-## 在线演示
-
-在线 demo 地址：**<https://edgesonic-demo.wuyilingwei.workers.dev>**
-
-- **登录账号：** `admin` / `demo`
-- **预填充登录链接：** <https://edgesonic-demo.wuyilingwei.workers.dev/#/login?u=admin&p=demo> —— 打开链接后账号密码会自动填好，只需点击登录按钮即可。
-
-该 demo 以 `DEMO_MODE=1` 运行：危险权限（用户/存储源管理、删除、Cloudflare 设置）已被锁定，上传有大小上限，媒体库会在每次部署时从固定曲目集重置。其余功能——浏览、播放、标签编辑、浏览器工作池——均完整可用。
 
 ## 技术文档
 

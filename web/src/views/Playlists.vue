@@ -476,7 +476,10 @@ onMounted(loadPlaylists);
             <input v-model="createForm.comment" class="form-input" />
           </div>
           <label class="checkbox-row">
-            <input v-model="createForm.public" type="checkbox" />
+            <label class="toggle">
+              <input v-model="createForm.public" type="checkbox" />
+              <span class="toggle-slider"></span>
+            </label>
             <span>{{ t("playlists.publicFlag") }}</span>
           </label>
         </div>
@@ -507,7 +510,10 @@ onMounted(loadPlaylists);
             <input v-model="editForm.comment" class="form-input" />
           </div>
           <label class="checkbox-row">
-            <input v-model="editForm.public" type="checkbox" />
+            <label class="toggle">
+              <input v-model="editForm.public" type="checkbox" />
+              <span class="toggle-slider"></span>
+            </label>
             <span>{{ t("playlists.publicFlag") }}</span>
           </label>
         </div>

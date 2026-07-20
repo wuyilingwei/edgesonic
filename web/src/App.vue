@@ -152,7 +152,6 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   <UpdateBanner />
 
   <div v-if="demoMode.enabled" class="demo-badge" role="status" aria-live="polite">
-    <span aria-hidden="true">⚙</span>
     <span class="demo-badge-text">{{ t("demo.badge") }}</span>
   </div>
 

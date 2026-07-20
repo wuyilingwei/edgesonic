@@ -274,6 +274,8 @@
     "fileTypeFilter": "File type filter",
     "fileTypeAudio": "Audio only",
     "fileTypeAll": "All files",
+    "parseMetadata": "Parse metadata on upload",
+    "parseMetadataHint": "Reads tags in-browser and submits them so the file links to the right album/artist immediately. Turn off for bulk uploads and scan later.",
     "uploaded": "File uploaded",
     "uploadFailed": "Upload failed",
     "selectFileFirst": "Select a file first",

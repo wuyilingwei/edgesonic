@@ -166,14 +166,18 @@ async function main() {
   {
     const sqlite = buildDb();
     const bucket = makeR2Bucket();
+    // The sized-cover ETag is synthetic and stable per (cover, size, format):
+    // no Accept header → jpeg → "covers/al-1_s128.jpg". A matching
+    // If-None-Match short-circuits to 304 before any R2 read or transform.
     bucket.store.set("covers/al-1", { body: new TextEncoder().encode("jpeg-bytes"), contentType: "image/jpeg" });
-    bucket.store.set("covers/al-1_s128", { body: new TextEncoder().encode("jpeg-bytes"), contentType: "image/jpeg", etag: '"cover-128-etag"' });
+    bucket.store.set("covers/al-1_s128.jpg", { body: new TextEncoder().encode("jpeg-bytes"), contentType: "image/jpeg" });
     const { get } = makeApp(sqlite, bucket, { username: "u", level: 1 });
-    const r = await get("/rest/getCoverArt?id=al-1&size=128", { headers: { "If-None-Match": '"cover-128-etag"' } });
+    const r = await get("/rest/getCoverArt?id=al-1&size=128", { headers: { "If-None-Match": '"covers/al-1_s128.jpg"' } });
     assert(r.status === 304, `304 status (got ${r.status})`);
     assert(r.headers.get("Content-Length") === null, `no Content-Length on 304 (got ${r.headers.get("Content-Length")})`);
     assert(r.headers.get("Content-Type") === null, `no Content-Type on 304 (got ${r.headers.get("Content-Type")})`);
     assert(r.headers.get("Cache-Control")?.includes("private"), `Cache-Control private (got ${r.headers.get("Cache-Control")})`);
+    assert(r.headers.get("Cache-Control")?.includes("immutable"), `Cache-Control immutable (got ${r.headers.get("Cache-Control")})`);
   }
 
   console.log("\ngetCoverArt 304 (legacy) strips body-descriptor headers:");

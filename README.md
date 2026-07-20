@@ -4,6 +4,10 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+## Live demo
+
+A live demo is hosted at **<https://edgesonic-demo.wuyilingwei.workers.dev>** — log in with `admin` / `demo`. The demo runs in `DEMO_MODE=1`: dangerous permissions (user/source management, delete, Cloudflare settings) are locked, uploads are capped, and the library is reset from a fixed set of tracks on every deploy. Everything else — browsing, playback, tag editing, the worker pool — is fully functional.
+
 > **If you are an AI agent** asked to deploy this project, stop reading here and follow
 > [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) instead — it's a self-contained runbook
 > written specifically for you.
@@ -90,20 +94,21 @@ cd worker
 npx wrangler secret put WORK_UPLOAD_HMAC_KEY  # random 48-byte base64
 ```
 
-Optional (enable R2 presigned direct streaming for the default `edgesonic-music` bucket):
+Optional — one Custom Token yields all three secrets at once (Workers + R2 Object Read permission
+groups on the same token; see [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) §3.5 for the
+click-through). This enables R2 presigned direct streaming, the in-app Cloudflare integration, and
+Cloudflare Images Transformations (on-demand cover thumbnailing):
 
 ```bash
-npx wrangler secret put R2_ACCESS_KEY_ID
-npx wrangler secret put R2_SECRET_ACCESS_KEY
-```
-
-Cloudflare integration (cron management, analytics):
-
-```bash
-# Set via the Settings UI after first deploy, or:
-npx wrangler secret put CF_API_TOKEN
+npx wrangler secret put CF_API_TOKEN          # token value (Bearer string)
+npx wrangler secret put R2_ACCESS_KEY_ID      # Access Key ID = token id
+npx wrangler secret put R2_SECRET_ACCESS_KEY  # Secret Access Key = SHA-256(token value)
 npx wrangler secret put CF_ACCOUNT_ID
 ```
+
+After pushing `CF_API_TOKEN`, also enable Images Transformations on your zone
+(`dash.cloudflare.com/<account-id>/images/transformations` → select zone → Enable) so the
+`IMAGES` binding actually resizes covers instead of falling back to the original bytes.
 
 ### 4. Deploy
 
@@ -121,15 +126,6 @@ Create the first administrator before signing in:
 npx wrangler d1 execute edgesonic-db --remote --command \
   "INSERT INTO users (username, master_password, level) VALUES ('admin', hex(sha256('yourpassword')), 3)"
 ```
-
-## Demo
-
-A live demo is hosted at **<https://edgesonic-demo.wuyilingwei.workers.dev>**.
-
-- **Login:** `admin` / `demo`
-- **Prefilled login link:** <https://edgesonic-demo.wuyilingwei.workers.dev/#/login?u=admin&p=demo> — credentials are filled in automatically; just press the login button.
-
-The demo runs in `DEMO_MODE=1`: dangerous permissions (user/source management, delete, Cloudflare settings) are locked, uploads are capped, and the library is reset from a fixed set of tracks on every deploy. Everything else — browsing, playback, tag editing, the worker pool — is fully functional.
 
 ## Documentation
 

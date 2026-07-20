@@ -45,27 +45,36 @@ export const mediaRoutes = new Hono<{
 }>();
 
 // ============================================================================
-//
-// Workers has no Canvas API; bundling @cf-wasm/photon would add ~1.5 MB of
-// cold-start cost for an end user benefit (sub-200 KB thumbnails) we can
-// approximate cheaply. The strategy:
-//  1. Validate `size` against an allow-list (only the values Subsonic
-//    clients actually request — DSub/Substreamer/Sonixd hover around
-//    64/128/256/512).
-//  2. If unset / invalid → behave like the legacy endpoint and serve the
-//    cached original at covers/<albumId>.
-//  3. If valid → serve covers/<albumId>_s<size>. First request copies the
-//    original into the sized slot (no real resize — fallback per
-//    findings.md decision 1). Clients still get a cache-friendly URL with
-//    a stable key per size; bandwidth optimisation is a follow-up.
+// Cover thumbnailing. getCoverArt resizes on demand via the Cloudflare Images
+// binding (env.IMAGES) and caches each (cover, size, format) in R2, so a cold
+// request transforms once and every later hit is a small R2 read. Any client
+// size hint snaps up to the nearest bucket, bounding the cached set.
 // ============================================================================
-const ALLOWED_COVER_SIZES = new Set([64, 96, 128, 192, 256, 384, 512]);
+const ALLOWED_COVER_SIZES = [64, 96, 128, 192, 256, 384, 512];
 
+// Snap any positive size hint up to the nearest allowed bucket (max 512) so
+// arbitrary client values (e.g. 200) still map to a bounded thumbnail set.
+// Unset / non-numeric → null → the legacy full-size path.
 function parseCoverSize(raw: string | null | undefined): number | null {
   if (!raw) return null;
   const n = parseInt(raw, 10);
   if (!Number.isFinite(n) || n <= 0) return null;
-  return ALLOWED_COVER_SIZES.has(n) ? n : null;
+  for (const s of ALLOWED_COVER_SIZES) if (n <= s) return s;
+  return ALLOWED_COVER_SIZES[ALLOWED_COVER_SIZES.length - 1];
+}
+
+// Spec-safe cover format negotiation: only serve webp/avif when the client
+// explicitly lists it in Accept; everything else — */*, no header, native
+// Subsonic clients — gets jpeg, so no client is handed a format it cannot
+// decode.
+function negotiateCoverFormat(accept: string | null | undefined): {
+  mime: "image/avif" | "image/webp" | "image/jpeg";
+  ext: "avif" | "webp" | "jpg";
+} {
+  const a = accept || "";
+  if (a.includes("image/avif")) return { mime: "image/avif", ext: "avif" };
+  if (a.includes("image/webp")) return { mime: "image/webp", ext: "webp" };
+  return { mime: "image/jpeg", ext: "jpg" };
 }
 
 // ============================================================================
@@ -636,53 +645,61 @@ const getCoverArtHandler = async (c: Context) => {
 
   if (!coverKey) return c.body(null, 404 as never);
 
-  // ---- size handling ------------------------------------------------------
-  // When a valid size was requested, serve from the sized cache key.
-  // First request copies the original bytes into the sized slot (no resize).
+  // ---- size handling: real thumbnail via Cloudflare Images ----------------
+  // Serve the negotiated (cover, size, format) from R2; a cold slot is
+  // transformed once and cached. Vary:Accept keeps per-format responses
+  // correct; the ETag is stable per slot so an immutable cache never
+  // revalidates within the max-age window.
   if (size) {
-    const sizedKey = `${coverKey}_s${size}`;
-    let sized = await env.MUSIC_BUCKET.get(sizedKey);
-    if (!sized) {
-      const original = await env.MUSIC_BUCKET.get(coverKey);
-      if (!original) return c.body(null, 404 as never);
-      // Buffer the original to a Uint8Array so we can both put() and respond
-      // with a fresh stream. The body of an R2Object is consumable once.
-      const buf = new Uint8Array(await original.arrayBuffer());
-      const headers = new Headers();
-      original.writeHttpMetadata(headers);
-      await env.MUSIC_BUCKET.put(sizedKey, buf, {
-        httpMetadata: { contentType: headers.get("Content-Type") || "image/jpeg" },
-      });
-      sized = await env.MUSIC_BUCKET.get(sizedKey);
-      if (!sized) {
-        // Put-but-no-get shouldn't happen; fall back to the original bytes
-        // so we don't 500 on a transient bucket weirdness.
-        const respHeaders = new Headers();
-        original.writeHttpMetadata(respHeaders);
-        respHeaders.set("X-EdgeSonic-Cover-Size", String(size));
-        respHeaders.set("X-EdgeSonic-Cover-Cache", "miss");
-        applyPrivateCache(respHeaders, COVER_MAX_AGE_SEC, original.httpEtag);
-        return new Response(buf, { headers: respHeaders });
-      }
-      const respHeaders = new Headers();
-      sized.writeHttpMetadata(respHeaders);
-      respHeaders.set("X-EdgeSonic-Cover-Size", String(size));
-      respHeaders.set("X-EdgeSonic-Cover-Cache", "miss");
-      applyPrivateCache(respHeaders, COVER_MAX_AGE_SEC, sized.httpEtag);
-      return new Response(sized.body, { headers: respHeaders });
-    }
-    const headers = new Headers();
-    sized.writeHttpMetadata(headers);
-    headers.set("X-EdgeSonic-Cover-Size", String(size));
-    headers.set("X-EdgeSonic-Cover-Cache", "hit");
-    applyPrivateCache(headers, COVER_MAX_AGE_SEC, sized.httpEtag);
-    if (etagMatches(c, sized.httpEtag)) {
+    const fmt = negotiateCoverFormat(c.req.header("Accept"));
+    const sizedKey = `${coverKey}_s${size}.${fmt.ext}`;
+    const etag = `"${sizedKey}"`;
+    if (etagMatches(c, etag)) {
       const nm = new Headers();
-      nm.set("Cache-Control", headers.get("Cache-Control") || `private, max-age=${COVER_MAX_AGE_SEC}`);
-      nm.set("ETag", sized.httpEtag);
+      applyPrivateCache(nm, COVER_MAX_AGE_SEC, etag, true);
+      nm.set("Vary", "Accept");
       return new Response(null, { status: 304, headers: nm });
     }
-    return new Response(sized.body, { headers });
+
+    const cached = await env.MUSIC_BUCKET.get(sizedKey);
+    if (cached) {
+      const headers = new Headers();
+      headers.set("Content-Type", fmt.mime);
+      headers.set("Vary", "Accept");
+      headers.set("X-EdgeSonic-Cover-Size", String(size));
+      headers.set("X-EdgeSonic-Cover-Cache", "hit");
+      applyPrivateCache(headers, COVER_MAX_AGE_SEC, etag, true);
+      return new Response(cached.body, { headers });
+    }
+
+    const original = await env.MUSIC_BUCKET.get(coverKey);
+    if (!original) return c.body(null, 404 as never);
+    try {
+      const result = await env.IMAGES
+        .input(original.body)
+        .transform({ width: size, height: size, fit: "scale-down" })
+        .output({ format: fmt.mime, quality: 80 });
+      const buf = new Uint8Array(await result.response().arrayBuffer());
+      const contentType = result.contentType() || fmt.mime;
+      await env.MUSIC_BUCKET.put(sizedKey, buf, { httpMetadata: { contentType } });
+      const headers = new Headers();
+      headers.set("Content-Type", contentType);
+      headers.set("Vary", "Accept");
+      headers.set("X-EdgeSonic-Cover-Size", String(size));
+      headers.set("X-EdgeSonic-Cover-Cache", "miss");
+      applyPrivateCache(headers, COVER_MAX_AGE_SEC, etag, true);
+      return new Response(buf, { headers });
+    } catch {
+      // Transformations disabled/unsupported input: serve the original bytes
+      // uncached rather than 500 or poisoning the sized slot with a full copy.
+      const fallback = await env.MUSIC_BUCKET.get(coverKey);
+      if (!fallback) return c.body(null, 404 as never);
+      const headers = new Headers();
+      fallback.writeHttpMetadata(headers);
+      headers.set("X-EdgeSonic-Cover-Cache", "bypass");
+      applyPrivateCache(headers, COVER_MAX_AGE_SEC, fallback.httpEtag);
+      return new Response(fallback.body, { headers });
+    }
   }
 
   // ---- legacy path (no size) ----------------------------------------------

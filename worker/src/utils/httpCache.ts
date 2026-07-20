@@ -21,8 +21,8 @@ import type { Context } from "hono";
 export const COVER_MAX_AGE_SEC = 86400;
 export const AUDIO_MAX_AGE_SEC = 3600;
 
-export function applyPrivateCache(headers: Headers, maxAgeSec: number, etag?: string | null): void {
-  headers.set("Cache-Control", `private, max-age=${maxAgeSec}`);
+export function applyPrivateCache(headers: Headers, maxAgeSec: number, etag?: string | null, immutable = false): void {
+  headers.set("Cache-Control", `private, max-age=${maxAgeSec}${immutable ? ", immutable" : ""}`);
   if (etag) headers.set("ETag", etag);
 }
 

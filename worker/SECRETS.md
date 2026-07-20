@@ -145,29 +145,46 @@ When either R2 secret is unset, `CF_ACCOUNT_ID` is absent, or the feature
 flag is `'0'`, the endpoint **falls back to the existing in-Worker stream**
 — no behaviour change, no error.
 
-### How to create the R2 S3 API token
+### How to create the token
 
-1. Cloudflare dashboard → **R2 → Manage R2 API Tokens** → **Create API Token**.
-2. Permissions: **Object Read** (only — presigned URLs are GET-only; the
-   worker never writes through S3).
-3. Specify bucket: `edgesonic-music` (or `*` if you prefer a single token
-   for future buckets).
+Cloudflare's **Create Token → Custom Token** flow lets a single token carry multiple permission
+groups, each with its own resource scope. Create one token with both groups below — do **not**
+create two separate tokens:
+
+1. Open `https://dash.cloudflare.com/<account-id>/api-tokens/create` and start a **Custom Token**.
+2. **Permission group 1 — Workers (Account scope)**: add **Workers CI**, **Workers Containers**,
+   **Workers Observability**, and **Workers Scripts** (choose *Edit* where offered). This is the
+   same set required for `CF_API_TOKEN` (task 054).
+3. **Permission group 2 — R2 (Bucket scope)**: add **Workers R2 Storage Bucket Item Read** and
+   scope it to the `edgesonic-music` bucket (or `*` if you prefer a single token for future
+   buckets). Presigned URLs are GET-only, so Object Read is enough — the worker never writes
+   through S3.
 4. TTL: leave default (no expiry) or set a rotation window.
-5. On creation Cloudflare shows **Access Key ID** and **Secret Access Key**
-   **once**. Copy them immediately — the secret is never shown again.
+5. On creation Cloudflare shows **three** values on the final page, each shown only once:
+   - **Token value** (Bearer string, top of the page) → `CF_API_TOKEN`
+   - **Access Key ID** → `R2_ACCESS_KEY_ID`
+   - **Secret Access Key** → `R2_SECRET_ACCESS_KEY`
+
+   The Access Key ID is the token id and the Secret Access Key is the SHA-256 of the token value
+   — both are derived from the same token, so one creation gives you all three. Copy them
+   immediately; the Secret Access Key is never shown again.
 
 ### How to set the secrets
 
 ```bash
 cd worker
 
+# The Bearer token value (same value you'd use for CF_API_TOKEN)
+wrangler secret put CF_API_TOKEN
+# paste the token value from the dashboard
+
 # The Access Key ID (safe to echo — it's like a username)
 wrangler secret put R2_ACCESS_KEY_ID
-# paste the Access Key ID from the R2 dashboard
+# paste the Access Key ID from the dashboard
 
 # The Secret Access Key (sensitive — handle like a password)
 wrangler secret put R2_SECRET_ACCESS_KEY
-# paste the Secret Access Key from the R2 dashboard
+# paste the Secret Access Key from the dashboard
 ```
 
 The R2 account id is **not** a separate secret — the worker reuses
@@ -198,13 +215,13 @@ a minute without a redeploy.
 
 ### Rotation
 
-Rotating the R2 S3 API token does **not** invalidate already-issued presigned
+Rotating the token does **not** invalidate already-issued presigned
 URLs until their 5-minute TTL elapses (the signature is computed from the
 secret at presign time, not verified against R2's live token list). To rotate:
 
-1. Create a new R2 API token in the dashboard.
-2. `wrangler secret put R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` with the
-   new values.
+1. Create a new Custom Token in the dashboard (same permission groups as §3).
+2. `wrangler secret put CF_API_TOKEN` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`
+   with the new values.
 3. Wait 5 minutes for outstanding presigned URLs to drain.
 
 ### Security notes
@@ -215,6 +232,38 @@ secret at presign time, not verified against R2's live token list). To rotate:
 - The Access Key ID is visible in the presigned URL's `X-Amz-Credential`
   query param. This is by design (S3 presigned URLs always expose it) — the
   Access Key ID alone cannot authenticate, only the paired secret can sign.
+- The Access Key ID is the **token id** and the Secret Access Key is the
+  SHA-256 of the token value. Both are derived from the same Custom Token, so
+  one token creation gives you `CF_API_TOKEN` + `R2_ACCESS_KEY_ID` +
+  `R2_SECRET_ACCESS_KEY` together. See `docs/DEPLOY_BY_AGENT.md` §3.5 for the
+  full click-through.
+
+### Enabling Cloudflare Images Transformations (cover thumbnails)
+
+The Cloudflare Images binding (`env.IMAGES`, declared in `wrangler.toml.example`)
+is what lets `getCoverArt` resize cover art on demand. The binding deploys
+regardless, but **transformations only execute when Images Transformations is
+enabled**; otherwise the handler catches the error and falls back to the
+original bytes (`X-EdgeSonic-Cover-Cache: bypass`).
+
+- **Custom domain (a zone is bound)** — dashboard:
+  `https://dash.cloudflare.com/<account-id>/images/transformations` → select the
+  zone → **Enable transformations**. Optional API fallback:
+  ```bash
+  curl -sS -X PATCH "https://api.cloudflare.com/client/v4/zones/<zone-id>/settings/image_resizing" \
+    -H "Authorization: Bearer $CF_API_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data '{"value":"on"}'
+  ```
+- **`*.workers.dev` only (no zone)** — skip the zone toggle; the Images binding
+  works directly on the Worker's account.
+
+Images Transformations bill per *unique* (source image, params) combination per
+calendar month; repeats inside the same month are free. `getCoverArt` caches
+each result in R2 under `<coverKey>_s<size>.<ext>`, so the billable count is
+roughly `(cover count) × (size buckets used) × (formats negotiated)` once per
+month. Check current pricing at
+`https://developers.cloudflare.com/images/pricing/`.
 
 ---
 

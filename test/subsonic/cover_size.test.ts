@@ -18,15 +18,19 @@
 //  * In-memory SQLite D1 shim with an `albums` row pre-baked.
 //  * R2 + KV map-backed shims that track every get/put so we can assert
 //   the sized-vs-original cache split.
+//  * A fake IMAGES binding that "resizes" by emitting `RESIZED:<format>` so we
+//   can assert the transform ran and which format was negotiated.
 //  * Hono harness mounts mediaRoutes directly (no auth wrapper — getCoverArt
 //   is guest-allowed in auth.ts anyway).
 //
 // Coverage:
-//  1. size=128 + R2 miss → bytes copied to covers/<id>_s128 → 200 with X-EdgeSonic-Cover-Cache: miss
-//  2. size=128 + R2 hit → original key never touched, header reports hit
-//   3. no size param    → legacy path serves covers/<id>
-//  4. size=999 (not in allowlist) → treated as no size (legacy path)
-//  5. legacy path with no `cover_r2_key` and no on-demand source → 404
+//  1. size + miss → transform once → cache covers/<id>_s<size>.<ext> → miss
+//  2. size + hit  → sized slot served, original + transform untouched
+//  3. no size     → legacy path serves the full original
+//  4. size=999    → snaps up to 512 (nearest bucket), not rejected
+//  5. no cover    → 404
+//  6. Accept negotiation → webp/avif slots; */* and none default to jpeg
+//  7. IMAGES unavailable → bypass: original bytes, no sized write, no 500
 //
 // Run: npx tsx test/subsonic/cover_size.test.ts
 
@@ -153,8 +157,38 @@ function makeKV() {
   };
 }
 
+// Fake IMAGES binding: records the format it was asked for and emits a
+// deterministic `RESIZED:<format>` payload so tests can assert the transform
+// ran and which format won negotiation.
+function makeImages(counter: { transforms: string[] }) {
+  const transformer = (fmt: { value: string }) => ({
+    transform() { return transformer(fmt); },
+    async output(opts: { format: string }) {
+      fmt.value = opts.format;
+      counter.transforms.push(opts.format);
+      const bytes = new TextEncoder().encode(`RESIZED:${opts.format}`);
+      return {
+        response() { return new Response(bytes, { headers: { "Content-Type": opts.format } }); },
+        contentType() { return opts.format; },
+        image() { return new Response(bytes).body!; },
+      };
+    },
+  });
+  return {
+    input(stream: ReadableStream<Uint8Array>) {
+      void stream; // consumed by the real binding; the fake ignores the bytes
+      return transformer({ value: "" });
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
-function makeApp(sqlite: DatabaseSync, r2: ReturnType<typeof makeR2>, kv: ReturnType<typeof makeKV>) {
+function makeApp(
+  sqlite: DatabaseSync,
+  r2: ReturnType<typeof makeR2>,
+  kv: ReturnType<typeof makeKV>,
+  images?: ReturnType<typeof makeImages>,
+) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const app = new Hono<{ Bindings: any }>();
   app.route("/rest", mediaRoutes);
@@ -162,10 +196,11 @@ function makeApp(sqlite: DatabaseSync, r2: ReturnType<typeof makeR2>, kv: Return
     DB: makeD1(sqlite),
     MUSIC_BUCKET: r2,
     KV: kv,
+    IMAGES: images, // undefined → handler's catch falls back to the original
   };
   return {
-    async get(url: string) {
-      const req = new Request(`http://test${url}`);
+    async get(url: string, headers?: Record<string, string>) {
+      const req = new Request(`http://test${url}`, { headers });
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       return app.fetch(req, env as any);
     },
@@ -173,8 +208,15 @@ function makeApp(sqlite: DatabaseSync, r2: ReturnType<typeof makeR2>, kv: Return
 }
 
 // Pre-bake a single original cover
-function seedCover(): { counter: Counter; r2: ReturnType<typeof makeR2>; kv: ReturnType<typeof makeKV> } {
+function seedCover(): {
+  counter: Counter;
+  imgCounter: { transforms: string[] };
+  r2: ReturnType<typeof makeR2>;
+  kv: ReturnType<typeof makeKV>;
+  images: ReturnType<typeof makeImages>;
+} {
   const counter: Counter = { get: [], put: [], head: [] };
+  const imgCounter = { transforms: [] as string[] };
   const r2 = makeR2({
     "covers/al-x": {
       data: new TextEncoder().encode("ORIGINAL_JPEG_BYTES_marker"),
@@ -182,96 +224,107 @@ function seedCover(): { counter: Counter; r2: ReturnType<typeof makeR2>; kv: Ret
     },
   }, counter);
   const kv = makeKV();
-  return { counter, r2, kv };
+  const images = makeImages(imgCounter);
+  return { counter, imgCounter, r2, kv, images };
 }
 
 // ---------------------------------------------------------------------------
 async function main() {
-  console.log("size=128 + R2 miss → copies original to sized key + serves miss:");
+  console.log("size=128 + R2 miss → transforms once, caches sized slot, serves miss:");
   {
-    const { counter, r2, kv } = seedCover();
-    const sqlite = buildDb();
-    const { get } = makeApp(sqlite, r2, kv);
+    const { counter, imgCounter, r2, kv, images } = seedCover();
+    const { get } = makeApp(buildDb(), r2, kv, images);
     const r = await get("/rest/getCoverArt?id=al-x&size=128");
     assert(r.status === 200, `200 (got ${r.status})`);
     assert(r.headers.get("X-EdgeSonic-Cover-Size") === "128", "size echo header");
     assert(r.headers.get("X-EdgeSonic-Cover-Cache") === "miss", "cache miss header");
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    assert(new TextDecoder().decode(bytes).includes("ORIGINAL_JPEG_BYTES_marker"), "serves original bytes");
-    assert(counter.put.includes("covers/al-x_s128"), "wrote sized cache key");
-    assert(r2._map.has("covers/al-x_s128"), "sized key persisted in R2");
-    assert(r.headers.get("Content-Type") === "image/jpeg", "Content-Type preserved");
+    assert(r.headers.get("Vary") === "Accept", "Vary: Accept");
+    assert(r.headers.get("Content-Type") === "image/jpeg", "jpeg default (no Accept)");
+    assert(imgCounter.transforms[0] === "image/jpeg", "transform ran as jpeg");
+    const bytes = new TextDecoder().decode(new Uint8Array(await r.arrayBuffer()));
+    assert(bytes === "RESIZED:image/jpeg", "serves transformed bytes");
+    assert(counter.put.includes("covers/al-x_s128.jpg"), "wrote format-scoped sized key");
+    assert(r2._map.has("covers/al-x_s128.jpg"), "sized key persisted in R2");
   }
 
-  console.log("\nsize=128 + R2 hit → does NOT touch original key:");
+  console.log("\nsize=128 + R2 hit → sized slot served, original + transform untouched:");
   {
     const counter: Counter = { get: [], put: [], head: [] };
+    const imgCounter = { transforms: [] as string[] };
     const r2 = makeR2({
       "covers/al-x": { data: new TextEncoder().encode("ORIGINAL"), contentType: "image/jpeg" },
-      "covers/al-x_s128": { data: new TextEncoder().encode("SIZED_128"), contentType: "image/jpeg" },
+      "covers/al-x_s128.jpg": { data: new TextEncoder().encode("SIZED_128"), contentType: "image/jpeg" },
     }, counter);
-    const kv = makeKV();
-    const sqlite = buildDb();
-    const { get } = makeApp(sqlite, r2, kv);
+    const { get } = makeApp(buildDb(), r2, makeKV(), makeImages(imgCounter));
     const r = await get("/rest/getCoverArt?id=al-x&size=128");
     assert(r.status === 200, "200");
     assert(r.headers.get("X-EdgeSonic-Cover-Cache") === "hit", "cache hit header");
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    assert(new TextDecoder().decode(bytes) === "SIZED_128", "serves sized bytes (not original)");
+    const bytes = new TextDecoder().decode(new Uint8Array(await r.arrayBuffer()));
+    assert(bytes === "SIZED_128", "serves sized bytes (not original)");
     assert(!counter.get.includes("covers/al-x"), "original key never read on hit");
     assert(counter.put.length === 0, "no put on hit");
+    assert(imgCounter.transforms.length === 0, "no transform on hit");
   }
 
   console.log("\nno size param → legacy path hits original key only:");
   {
-    const { counter, r2, kv } = seedCover();
-    const sqlite = buildDb();
-    const { get } = makeApp(sqlite, r2, kv);
+    const { counter, r2, kv, images } = seedCover();
+    const { get } = makeApp(buildDb(), r2, kv, images);
     const r = await get("/rest/getCoverArt?id=al-x");
     assert(r.status === 200, "200");
     assert(r.headers.get("X-EdgeSonic-Cover-Size") === null, "no size header on legacy path");
     assert(r.headers.get("X-EdgeSonic-Cover-Cache") === null, "no cache header on legacy path");
     assert(counter.get.includes("covers/al-x"), "legacy path reads original key");
     assert(counter.put.length === 0, "legacy path never writes");
-    const bytes = new Uint8Array(await r.arrayBuffer());
-    assert(new TextDecoder().decode(bytes).includes("ORIGINAL_JPEG_BYTES_marker"), "legacy serves original bytes");
+    const bytes = new TextDecoder().decode(new Uint8Array(await r.arrayBuffer()));
+    assert(bytes.includes("ORIGINAL_JPEG_BYTES_marker"), "legacy serves original bytes");
   }
 
-  console.log("\nsize=999 (not in allowlist) → treated as no size:");
+  console.log("\nsize=999 → snaps up to the 512 bucket (not rejected):");
   {
-    const { counter, r2, kv } = seedCover();
-    const sqlite = buildDb();
-    const { get } = makeApp(sqlite, r2, kv);
+    const { counter, r2, kv, images } = seedCover();
+    const { get } = makeApp(buildDb(), r2, kv, images);
     const r = await get("/rest/getCoverArt?id=al-x&size=999");
     assert(r.status === 200, "200");
-    assert(r.headers.get("X-EdgeSonic-Cover-Size") === null, "no size header for invalid size");
-    // legacy path reads ONLY covers/al-x; never reads or writes a sized variant
-    assert(!counter.get.some((k) => k.includes("_s")), "never reads any sized variant");
-    assert(counter.put.length === 0, "no put");
+    assert(r.headers.get("X-EdgeSonic-Cover-Size") === "512", "snapped to 512");
+    assert(counter.put.includes("covers/al-x_s512.jpg"), "cached at the 512 bucket");
   }
 
-  console.log("\nlegacy path 404 when album has no cover key and KV negative-cached:");
+  console.log("\nno cover → 404:");
   {
     const counter: Counter = { get: [], put: [], head: [] };
     const r2 = makeR2({}, counter);
-    const kv = makeKV();
-    await kv.put("nocover:al-none", "1");
-    const sqlite = buildDb();
-    const { get } = makeApp(sqlite, r2, kv);
+    const { get } = makeApp(buildDb(), r2, makeKV(), makeImages({ transforms: [] }));
     const r = await get("/rest/getCoverArt?id=al-none");
     assert(r.status === 404, `404 (got ${r.status})`);
   }
 
-  console.log("\nsize=64 → covers/<id>_s64 (separate cache key from 128):");
+  console.log("\nAccept negotiation → webp / avif slots; */* defaults to jpeg:");
+  {
+    const { r2, kv, images, counter } = seedCover();
+    const { get } = makeApp(buildDb(), r2, kv, images);
+    const webp = await get("/rest/getCoverArt?id=al-x&size=128", { Accept: "image/avif,image/webp,*/*" });
+    assert(webp.headers.get("Content-Type") === "image/avif", "avif wins when listed first");
+    assert(counter.put.includes("covers/al-x_s128.avif"), "avif slot key");
+
+    const wonly = await get("/rest/getCoverArt?id=al-x&size=128", { Accept: "image/webp,*/*" });
+    assert(wonly.headers.get("Content-Type") === "image/webp", "webp when only webp listed");
+    assert(counter.put.includes("covers/al-x_s128.webp"), "webp slot key");
+
+    const star = await get("/rest/getCoverArt?id=al-x&size=128", { Accept: "*/*" });
+    assert(star.headers.get("Content-Type") === "image/jpeg", "*/* falls back to jpeg (spec-safe)");
+  }
+
+  console.log("\nIMAGES unavailable → bypass to original, no sized write, no 500:");
   {
     const { counter, r2, kv } = seedCover();
-    const sqlite = buildDb();
-    const { get } = makeApp(sqlite, r2, kv);
-    await get("/rest/getCoverArt?id=al-x&size=64");
-    await get("/rest/getCoverArt?id=al-x&size=128");
-    assert(counter.put.includes("covers/al-x_s64"), "64-sized key written");
-    assert(counter.put.includes("covers/al-x_s128"), "128-sized key written");
-    assert(r2._map.has("covers/al-x_s64") && r2._map.has("covers/al-x_s128"), "both sized keys persisted");
+    const { get } = makeApp(buildDb(), r2, kv, undefined); // no IMAGES binding
+    const r = await get("/rest/getCoverArt?id=al-x&size=128");
+    assert(r.status === 200, `200 not 500 (got ${r.status})`);
+    assert(r.headers.get("X-EdgeSonic-Cover-Cache") === "bypass", "bypass header");
+    assert(!counter.put.some((k) => k.includes("_s")), "no sized slot written on bypass");
+    const bytes = new TextDecoder().decode(new Uint8Array(await r.arrayBuffer()));
+    assert(bytes.includes("ORIGINAL_JPEG_BYTES_marker"), "bypass serves original bytes");
   }
 
   console.log(failures ? `\n${failures} FAILURE(S)` : "\nALL PASS");

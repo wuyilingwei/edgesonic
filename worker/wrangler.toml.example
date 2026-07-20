@@ -66,6 +66,13 @@ database_id = "<YOUR_D1_DATABASE_ID>"
 binding = "MUSIC_BUCKET"
 bucket_name = "<YOUR_R2_BUCKET_NAME>"
 
+# Images binding — on-demand cover thumbnailing in getCoverArt. Requires
+# Transformations enabled for the zone (dashboard, or PATCH
+# /zones/{id}/settings/image_resizing {"value":"on"}); the handler falls back
+# to the original bytes when it is off.
+[images]
+binding = "IMAGES"
+
 [observability]
 enabled = true
 

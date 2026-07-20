@@ -10,9 +10,10 @@ import TagEditor from "../components/TagEditor.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
 import type { ScrapeResult } from "../lib/scrape";
 import { useWorkerPool } from "../stores/workerPool";
+import { extractMetadata } from "../lib/metadata";
 
 const { t } = useI18n();
-const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, batchWriteTags, tidyFolder, restUrl, hasPerm, coverArtUrl } = useAuth();
+const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, batchWriteTags, tidyFolder, restUrl, hasPerm, coverArtUrl, submitMetadata } = useAuth();
 const workerPool = useWorkerPool();
 
 interface StorageSource { id: string; type: string; name: string; baseUrl: string; }
@@ -89,6 +90,9 @@ const demoMode = useDemoMode();
 // rejected on upload.
 const uploadAcceptMode = ref<"audio" | "all">("audio");
 const uploadAccept = computed(() => (uploadAcceptMode.value === "audio" ? "audio/*" : undefined));
+// 270 — parse metadata on upload (default on). When off, the file lands in
+// R2/D1 with tag_scanned=0 and a manual scan picks it up later.
+const uploadParseMetadata = ref(true);
 const canSelectAllFiles = computed(() => demoMode.allowAllFileTypes);
 
 const canUpload = computed(() => hasPerm("upload"));
@@ -227,13 +231,29 @@ async function doUpload() {
       const file = uploadQueue.value[i];
       uploadMsg.value = t("files.uploadingFile", { current: i + 1, total });
       try {
-        await uploadFile(file, uploadTarget.value, path.value || undefined, {
+        const raw = await uploadFile(file, uploadTarget.value, path.value || undefined, {
           onProgress: (loaded, size) => {
             uploadProgressList.value[i] = size > 0 ? Math.round((loaded / size) * 100) : 0;
           },
         });
         uploadProgressList.value[i] = 100;
         uploadDoneCount.value++;
+        // 270 — when "parse metadata on upload" is on, parse the file's
+        // tags in-browser and submit them so the song relinks to the right
+        // album/artist immediately, no worker-pool round-trip needed.
+        if (uploadParseMetadata.value) {
+          try {
+            const resp = JSON.parse(raw) as { id?: string };
+            if (resp.id) {
+              const tags = await extractMetadata(file);
+              await submitMetadata(resp.id, tags as Record<string, string | number>);
+            }
+          } catch (parseErr) {
+            console.error(`[upload] metadata parse/submit failed for ${file.name}:`, parseErr);
+            // Not fatal — the file already lives in R2/D1; a manual scan
+            // will pick it up later.
+          }
+        }
       } catch (e) {
         uploadProgressList.value[i] = -1;
         uploadFailedNames.value.push(file.name);
@@ -898,6 +918,14 @@ onMounted(async () => {
         </div>
         <button class="btn-primary" :disabled="!uploadQueue.length || uploadBusy" @click="doUpload">{{ t("files.uploadBtn") }}</button>
       </div>
+      <div class="upload-options-row">
+        <label class="toggle" :title="t('files.parseMetadataHint')">
+          <input type="checkbox" v-model="uploadParseMetadata" />
+          <span class="toggle-slider"></span>
+        </label>
+        <span class="upload-options-label">{{ t("files.parseMetadata") }}</span>
+        <span class="upload-options-hint">{{ t("files.parseMetadataHint") }}</span>
+      </div>
       <!-- 089/S4: Upload queue list with per-file progress bars -->
       <div v-if="uploadQueue.length || uploadBusy" class="upload-queue">
         <div class="mono-label upload-queue-header">{{ t("files.uploadQueue") }}</div>
@@ -1248,7 +1276,10 @@ onMounted(async () => {
         </div>
 
         <label class="dry-run-row">
-          <input type="checkbox" v-model="tidyDryRun" />
+          <label class="toggle">
+            <input type="checkbox" v-model="tidyDryRun" />
+            <span class="toggle-slider"></span>
+          </label>
           <span>{{ t("files.tidyDryRun") }}</span>
         </label>
 
@@ -1347,6 +1378,16 @@ onMounted(async () => {
   padding: 0.45rem 0;
   word-break: break-all;
 }
+.upload-options-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--color-border-subtle);
+}
+.upload-options-label { font-size: var(--fs-sm); color: var(--color-text-secondary); }
+.upload-options-hint { font-size: var(--fs-xs); color: var(--color-text-muted); }
 .upload-msg { font-family: var(--font-mono); font-size: var(--fs-sm); margin-top: 0.5rem; color: var(--color-status-success); }
 .upload-msg.error { color: var(--color-status-error); }
 

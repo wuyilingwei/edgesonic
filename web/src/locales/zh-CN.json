@@ -275,6 +275,8 @@
     "fileTypeFilter": "文件类型筛选",
     "fileTypeAudio": "仅音频",
     "fileTypeAll": "所有文件",
+    "parseMetadata": "上传时顺便解析元信息",
+    "parseMetadataHint": "在浏览器内读取标签并提交，使文件立刻关联到正确的专辑/艺术家。批量上传时可关闭，稍后手动扫描。",
     "uploaded": "文件已上传",
     "uploadFailed": "上传失败",
     "selectFileFirst": "请先选择文件",

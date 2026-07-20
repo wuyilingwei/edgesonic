@@ -16,6 +16,8 @@
 interface Env {
   DB: D1Database;
   MUSIC_BUCKET: R2Bucket;
+  // Cloudflare Images binding — resizes cover art on demand in getCoverArt.
+  IMAGES: ImagesBinding;
   ASSETS: Fetcher;
   INSTANCE_ID: string;
   MAX_PROXY_DEPTH?: string;

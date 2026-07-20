@@ -1704,12 +1704,15 @@ onMounted(() => {
           <div class="scrape-source-list">
             <div v-for="(id, idx) in scrapeOrder" :key="id" class="scrape-source-row">
               <label class="scrape-source-toggle">
-                <input
-                  type="checkbox"
-                  :checked="scrapeEnabledSet.has(id)"
-                  :disabled="!canManageSettings"
-                  @change="toggleScrapeSource(id, ($event.target as HTMLInputElement).checked)"
-                />
+                <label class="toggle">
+                  <input
+                    type="checkbox"
+                    :checked="scrapeEnabledSet.has(id)"
+                    :disabled="!canManageSettings"
+                    @change="toggleScrapeSource(id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span class="toggle-slider"></span>
+                </label>
                 <span class="scrape-source-label">
                   {{ SCRAPE_ALL_SOURCES.find((s) => s.id === id)?.label || id }}
                 </span>
@@ -1768,14 +1771,14 @@ onMounted(() => {
             <!-- ETag check -->
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.scan.etagCheck") }}</span>
-              <span class="scan-toggle">
+              <label class="toggle">
                 <input
                   type="checkbox"
                   v-model="scanEtagCheck"
                   :disabled="!canManageSettings"
                 />
-                <span>{{ scanEtagCheck ? t("common.on") : t("common.off") }}</span>
-              </span>
+                <span class="toggle-slider"></span>
+              </label>
             </label>
             <p class="feature-desc tc-desc">{{ t("settings.common.scan.etagCheckDesc") }}</p>
 
@@ -1824,14 +1827,14 @@ onMounted(() => {
           <div class="transcode-grid">
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.crossOriginIsolation.toggleLabel") }}</span>
-              <span class="scan-toggle">
+              <label class="toggle">
                 <input
                   type="checkbox"
                   v-model="cioEnabled"
                   :disabled="!canManageSettings"
                 />
-                <span>{{ cioEnabled ? t("common.on") : t("common.off") }}</span>
-              </span>
+                <span class="toggle-slider"></span>
+              </label>
             </label>
             <p class="feature-desc tc-desc">{{ t("settings.common.crossOriginIsolation.toggleDesc") }}</p>
 
@@ -2009,10 +2012,10 @@ onMounted(() => {
           <div class="transcode-grid">
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.presign.r2Toggle") }}</span>
-              <span class="scan-toggle">
+              <label class="toggle">
                 <input type="checkbox" v-model="r2PresignEnabled" :disabled="!canManageSettings" />
-                <span>{{ r2PresignEnabled ? t("common.on") : t("common.off") }}</span>
-              </span>
+                <span class="toggle-slider"></span>
+              </label>
             </label>
             <p class="feature-desc tc-desc">{{ t("settings.common.presign.r2ToggleDesc") }}</p>
             <div class="tc-actions">
@@ -2021,16 +2024,16 @@ onMounted(() => {
                 :disabled="!canManageSettings || r2PresignBusy"
                 @click="saveR2Presign"
               >
-               {{ t("settings.common.presign.save") }}
+                {{ t("settings.common.presign.save") }}
               </button>
             </div>
 
             <label class="tc-row">
               <span class="tc-key">{{ t("settings.common.presign.webdavToggle") }}</span>
-              <span class="scan-toggle">
+              <label class="toggle">
                 <input type="checkbox" v-model="webdavPresignEnabled" :disabled="!canManageSettings" />
-                <span>{{ webdavPresignEnabled ? t("common.on") : t("common.off") }}</span>
-              </span>
+                <span class="toggle-slider"></span>
+              </label>
             </label>
             <p class="feature-desc tc-desc">{{ t("settings.common.presign.webdavToggleDesc") }}</p>
             <div class="tc-actions">
@@ -2106,12 +2109,15 @@ onMounted(() => {
           <div class="scrape-source-list">
             <div v-for="(id, idx) in artistInfoOrder" :key="id" class="scrape-source-row">
               <label class="scrape-source-toggle">
-                <input
-                  type="checkbox"
-                  :checked="artistInfoEnabledSet.has(id)"
-                  :disabled="!canManageSettings"
-                  @change="toggleArtistInfoSource(id, ($event.target as HTMLInputElement).checked)"
-                />
+                <label class="toggle">
+                  <input
+                    type="checkbox"
+                    :checked="artistInfoEnabledSet.has(id)"
+                    :disabled="!canManageSettings"
+                    @change="toggleArtistInfoSource(id, ($event.target as HTMLInputElement).checked)"
+                  />
+                  <span class="toggle-slider"></span>
+                </label>
                 <span class="scrape-source-label">
                   {{ ARTIST_INFO_ALL_SOURCES.find((s) => s.id === id)?.label || id }}
                 </span>

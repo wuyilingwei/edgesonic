@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
-import { runLowPriority } from "../lib/requestBudget";
 
 defineOptions({ inheritAttrs: false });
 
@@ -44,7 +43,9 @@ function loadImage(): Promise<void> {
 }
 
 function load(): void {
-  void runLowPriority(loadImage).catch(() => {
+  // Covers are small, cacheable GETs — let the browser (HTTP/2 multiplexing)
+  // handle concurrency instead of serialising them through a client budget.
+  void loadImage().catch(() => {
     if (!cancelled) emit("error");
   });
 }
