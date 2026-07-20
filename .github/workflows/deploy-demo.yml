@@ -7,8 +7,8 @@ name: Deploy EdgeSonic Demo
 # ALL demo reset responsibility lives in this workflow — the demo Worker
 # itself does NOT perform any periodic reset. Each time this workflow
 # runs (after every release publish, or manually) it:
-#   1. Force-deletes + recreates the demo R2 bucket (wipes every visitor
-#      upload / modification / cache entry in one shot).
+#   1. Removes every demo R2 object (wipes every visitor upload /
+#      modification / cache entry while preserving the bucket binding).
 #   2. Re-uploads the canonical demo library from the repo's
 #      demo-library/ directory.
 #   3. Re-applies the D1 schema + seeds the demo superadmin.
@@ -175,9 +175,18 @@ jobs:
             '.[] | select(.name==$n) | (.uuid // .database_id)')
           echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
 
-          # R2 bucket is force-deleted and recreated in the reupload step
-          # below, so we don't create it here. The reupload step handles
-          # both deletion and creation atomically.
+          # Keep the bucket resource stable so the Worker's R2 binding and
+          # remote uploads always target the same bucket identity. The
+          # reupload step below removes every object for a full data reset.
+          R2_CREATE=$(curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets" \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"name\":\"$R2_NAME\",\"locationHint\":\"apac\"}")
+          if ! echo "$R2_CREATE" | jq -e '.success == true or (.errors[0].code == 10004)' >/dev/null; then
+            echo "::error::Bucket create failed: $R2_CREATE"
+            exit 1
+          fi
 
           # INSTANCE_ID for the demo Worker — random per run so re-deploys
           # rotate the anti-loop marker. uuid4 (pure random) is fine here:
@@ -301,11 +310,11 @@ jobs:
             exit 0
           fi
 
-          # Nuke the entire bucket so every visitor upload / modification
-          # is gone. R2 REST API doesn't support force-delete of a non-empty
-          # bucket, so we list every object and delete them one by one,
-          # then delete the empty bucket, then recreate it. The Cloudflare
-          # REST API returns up to 1000 keys per page; paginate until done.
+          # Nuke every object so every visitor upload / modification is gone.
+          # Keep the bucket itself: deleting and recreating a same-named R2
+          # bucket can leave Worker bindings or remote writes on the prior
+          # resource identity while Cloudflare propagates the replacement.
+          # The REST API returns up to 1000 keys per page; paginate until done.
           echo "Emptying $R2_NAME..."
           CURSOR=""
           while :; do
@@ -327,22 +336,6 @@ jobs:
             CURSOR=$(echo "$LIST_RESP" | jq -r '.result_info.cursor // empty')
             if [ -z "$CURSOR" ]; then break; fi
           done
-
-          echo "Deleting empty bucket $R2_NAME..."
-          DEL=$(curl -s -X DELETE "$API/$R2_NAME" -H "$AUTH")
-          if ! echo "$DEL" | jq -e '.success == true or (.errors[0].code == 10006)' >/dev/null; then
-            echo "::error::Bucket delete failed: $DEL"
-            exit 1
-          fi
-          echo "Creating $R2_NAME..."
-          CREATE=$(curl -s -X POST "$API" -H "$AUTH" -H "Content-Type: application/json" \
-            -d "{\"name\":\"$R2_NAME\",\"locationHint\":\"apac\"}")
-          if ! echo "$CREATE" | jq -e '.success == true or (.errors[0].code == 10004)' >/dev/null; then
-            echo "::error::Bucket create failed: $CREATE"
-            exit 1
-          fi
-          # Give R2 a beat to settle before we start PUTting objects.
-          sleep 2
 
           # Upload every file under .github/demo/data/ from the repo checkout.
           # Repo path .github/demo/data/<path> → R2 key demo-library/<path>.
@@ -475,6 +468,11 @@ jobs:
           # in the browser work queue after the source scan completes.
           for _ in $(seq 1 30); do
             STATUS=$(curl -s -b "$COOKIE_JAR" "$BASE/storage/scan/status")
+            if echo "$STATUS" | grep -q 'has been deleted'; then
+              echo "Waiting for the new D1 binding to reach this edge..."
+              sleep 3
+              continue
+            fi
             if echo "$STATUS" | grep -q 'status="failed"'; then
               echo "::error::R2 scan failed: $STATUS"
               exit 1
