@@ -160,6 +160,11 @@ const STRING_FEATURE_KEYS = new Set([
     // Cumulative R2 storage ceiling in bytes (0 = disabled). Editable in
     // normal mode; locked in demo mode via DEMO_LOCKED_FEATURE_KEYS.
     "r2_max_storage_bytes",
+    // Default UI theme id. Editable in normal mode; locked in demo mode.
+    "default_theme",
+    // Whether /files/upload accepts any file type ("1") or only audio
+    // extensions ("0"). Editable in normal mode; locked in demo mode.
+    "allow_all_file_types",
   ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -307,6 +312,16 @@ function validateFeatureString(key: string, value: string): string | null {
       if (!/^\d+$/.test(value)) return "r2_max_storage_bytes must be a non-negative integer";
       const n = parseInt(value, 10);
       if (n < 0 || n > 1_000_000_000_000) return "r2_max_storage_bytes must be between 0 and 1TB";
+      return null;
+    }
+    case "default_theme": {
+      // Any non-empty string ≤64 chars is accepted; the actual theme id
+      // validity is enforced client-side (the SPA ignores unknown ids).
+      if (value.length > 64) return "default_theme too long (max 64 chars)";
+      return null;
+    }
+    case "allow_all_file_types": {
+      if (value !== "0" && value !== "1") return "allow_all_file_types must be '0' or '1'";
       return null;
     }
     case "worker_poll_interval_seconds": {

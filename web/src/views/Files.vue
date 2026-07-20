@@ -76,6 +76,21 @@ function showToast(msg: string, type = "success") {
   setTimeout(() => { toast.value.show = false; }, 3000);
 }
 
+import { useDemoMode } from "../stores/demoMode";
+
+const demoMode = useDemoMode();
+// Upload file-type filter. Defaults to "audio" (the input element's accept
+// attribute restricts the OS file picker). When the server has enabled
+// allow_all_file_types AND the user explicitly picks "all" from the
+// dropdown, we drop the accept attribute so any file can be selected.
+// The backend still validates the suffix regardless, so this is purely a
+// UX hint — flipping it to "all" on a server that hasn't enabled the
+// feature just means the picker shows non-audio files that will be
+// rejected on upload.
+const uploadAcceptMode = ref<"audio" | "all">("audio");
+const uploadAccept = computed(() => (uploadAcceptMode.value === "audio" ? "audio/*" : undefined));
+const canSelectAllFiles = computed(() => demoMode.allowAllFileTypes);
+
 const canUpload = computed(() => hasPerm("upload"));
 const canScan = computed(() => hasPerm("manage_files"));
 const isR2 = computed(() => currentSource.value === "r2");
@@ -873,7 +888,13 @@ onMounted(async () => {
         </div>
         <div class="form-group" style="flex:2">
           <label class="form-label">{{ t("files.file") }}</label>
-          <input ref="uploadInput" type="file" multiple accept="audio/*" class="form-input" @change="onUploadFile" />
+          <div class="upload-file-row">
+            <input ref="uploadInput" type="file" multiple :accept="uploadAccept" class="form-input" @change="onUploadFile" />
+            <select v-if="canSelectAllFiles" v-model="uploadAcceptMode" class="form-input upload-type-select" :aria-label="t('files.fileTypeFilter')">
+              <option value="audio">{{ t("files.fileTypeAudio") }}</option>
+              <option value="all">{{ t("files.fileTypeAll") }}</option>
+            </select>
+          </div>
         </div>
         <button class="btn-primary" :disabled="!uploadQueue.length || uploadBusy" @click="doUpload">{{ t("files.uploadBtn") }}</button>
       </div>
@@ -1316,6 +1337,9 @@ onMounted(async () => {
 }
 
 .upload-panel { margin-bottom: 1.25rem; }
+.upload-file-row { display: flex; gap: 0.5rem; align-items: center; }
+.upload-file-row .form-input { flex: 1; min-width: 0; }
+.upload-type-select { width: auto; flex: 0 0 auto; }
 .upload-dest {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);

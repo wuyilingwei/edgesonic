@@ -84,4 +84,15 @@ interface Env {
   // via DEMO_LOCKED_FEATURE_KEYS so a visitor can't lift the cap. 0
   // disables the cumulative guard (per-upload cap still applies in demo).
   R2_MAX_LIMIT?: string;
+  // Default UI theme id. When set, the SPA applies this theme on first
+  // visit (before the user picks their own). Resolution: env.DEFAULT_THEME
+  // → D1 feature_strings row "default_theme" → unset (SPA uses "black").
+  // Demo mode locks the D1 row against edits.
+  DEFAULT_THEME?: string;
+  // Whether /files/upload accepts any file type ("1") or only audio
+  // extensions ("0"). Resolution: env.ALLOW_ALL_FILE_TYPES → D1
+  // feature_strings row "allow_all_file_types" → "0" (audio-only).
+  // Demo mode locks the D1 row against edits so a visitor can't upload
+  // arbitrary payloads.
+  ALLOW_ALL_FILE_TYPES?: string;
 }

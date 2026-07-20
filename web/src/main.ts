@@ -18,6 +18,7 @@ import { createRouter, createWebHashHistory } from "vue-router";
 import { createPinia } from "pinia";
 import { i18n } from "./i18n";
 import "./theme"; // side-effect: applies saved theme attribute before first paint
+import { setTheme } from "./theme";
 import App from "./App.vue";
 import Login from "./views/Login.vue";
 import Dashboard from "./views/Dashboard.vue";
@@ -114,10 +115,17 @@ async function checkVersion() {
   try {
     const r = await fetch("/edgesonic/version", { cache: "no-store" });
     if (!r.ok) return;
-    const j = (await r.json()) as { ok?: boolean; version?: string; buildTime?: string | null; demoMode?: boolean };
+    const j = (await r.json()) as { ok?: boolean; version?: string; buildTime?: string | null; demoMode?: boolean; defaultTheme?: string | null; allowAllFileTypes?: boolean };
     if (!j.ok || typeof j.version !== "string" || (j.buildTime !== null && typeof j.buildTime !== "string")) return;
     updateBanner.notify({ version: j.version, buildTime: j.buildTime ?? null });
     demoMode.setEnabled(!!j.demoMode);
+    demoMode.setAllowAllFileTypes(!!j.allowAllFileTypes);
+    // Apply the server-declared default theme on first visit (when the
+    // user hasn't picked one yet). Once a theme is in localStorage it
+    // wins — this only seeds the initial experience.
+    if (typeof j.defaultTheme === "string" && j.defaultTheme && !localStorage.getItem("edgesonic_theme")) {
+      setTheme(j.defaultTheme);
+    }
   } catch {
     // Network blip / offline tab: ignore. We'll retry next interval.
   }

@@ -34,7 +34,7 @@
 // fetch works even after the session expires. The payload only exposes the
 // build version and build time.
 import { Hono } from "hono";
-import { isDemoMode } from "../../utils/demoMode";
+import { isDemoMode, defaultTheme, allowAllFileTypes } from "../../utils/demoMode";
 
 export const versionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -55,6 +55,8 @@ async function readBuildInfoFromAsset(c: import("hono").Context<{ Bindings: Env 
 versionRoutes.get("/version", async (c) => {
   const envVersion = c.env.EDGESONIC_VERSION;
   const envBuildTime = c.env.EDGESONIC_BUILD_TIME;
+  const theme = await defaultTheme(c.env);
+  const allowAll = await allowAllFileTypes(c.env);
   // Prefer explicit env vars (operator override); fall back to the bundled
   // build-info.json asset which always matches the deployed frontend.
   if (envVersion) {
@@ -63,6 +65,8 @@ versionRoutes.get("/version", async (c) => {
       version: envVersion,
       buildTime: envBuildTime || null,
       demoMode: isDemoMode(c.env),
+      defaultTheme: theme,
+      allowAllFileTypes: allowAll,
     });
   }
   const asset = await readBuildInfoFromAsset(c);
@@ -71,5 +75,7 @@ versionRoutes.get("/version", async (c) => {
     version: asset?.version || "dev",
     buildTime: asset?.buildTime || null,
     demoMode: isDemoMode(c.env),
+    defaultTheme: theme,
+    allowAllFileTypes: allowAll,
   });
 });

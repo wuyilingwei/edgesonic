@@ -8,3 +8,11 @@ DEMO_MAX_UPLOAD_BYTES=52428800
 # Total R2 storage ceiling in bytes. Default 100 MiB.
 # 0 disables the cumulative guard (per-upload cap still applies).
 R2_MAX_LIMIT=104857600
+
+# Default UI theme applied on first visit (before the user picks their
+# own). "sp-sky" is the 星空 theme.
+DEFAULT_THEME=sp-sky
+
+# Whether /files/upload accepts any file type. "0" = audio only.
+# Demo locks this so visitors can't upload arbitrary payloads.
+ALLOW_ALL_FILE_TYPES=0

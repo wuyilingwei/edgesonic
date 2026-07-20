@@ -45,6 +45,12 @@ export const DEMO_LOCKED_FEATURE_KEYS = new Set<string>([
   // Cumulative R2 storage ceiling — locked in demo so a visitor can't
   // lift the cap from the Settings UI.
   "r2_max_storage_bytes",
+  // Default UI theme — locked in demo so the operator's chosen showcase
+  // theme (e.g. sp-sky) can't be overridden from the Settings UI.
+  "default_theme",
+  // File-type gate — locked in demo so a visitor can't switch to
+  // "allow all" and upload arbitrary payloads.
+  "allow_all_file_types",
 ]);
 
 export function isDemoMode(env: { DEMO_MODE?: string }): boolean {
@@ -96,6 +102,54 @@ export async function r2MaxStorageBytes(
     // feature_strings table may be absent on a fresh DB; fall through.
   }
   return isDemoMode(env) ? 100 * 1024 * 1024 : 0;
+}
+
+// Resolve the default UI theme id. Env var wins, then D1 feature_strings
+// row "default_theme", then null (SPA falls back to "black").
+export async function defaultTheme(env: { DEFAULT_THEME?: string; DB: D1Database }): Promise<string | null> {
+  const envTheme = (env.DEFAULT_THEME || "").trim();
+  if (envTheme) return envTheme;
+  try {
+    const row = await env.DB
+      .prepare("SELECT value FROM feature_strings WHERE key = ?")
+      .bind("default_theme")
+      .first<{ value: string }>();
+    if (row && row.value.trim()) return row.value.trim();
+  } catch {
+    // feature_strings table may be absent on a fresh DB.
+  }
+  return null;
+}
+
+// Resolve whether /files/upload accepts any file type. "1" = allow all,
+// "0" = audio-only. Resolution: env.ALLOW_ALL_FILE_TYPES → D1
+// feature_strings row "allow_all_file_types" → "0".
+export async function allowAllFileTypes(env: { ALLOW_ALL_FILE_TYPES?: string; DB: D1Database }): Promise<boolean> {
+  const envRaw = (env.ALLOW_ALL_FILE_TYPES || "").trim();
+  if (envRaw === "1" || envRaw === "0") return envRaw === "1";
+  try {
+    const row = await env.DB
+      .prepare("SELECT value FROM feature_strings WHERE key = ?")
+      .bind("allow_all_file_types")
+      .first<{ value: string }>();
+    if (row) {
+      const v = row.value.trim();
+      if (v === "1" || v === "0") return v === "1";
+    }
+  } catch {
+    // feature_strings table may be absent on a fresh DB.
+  }
+  return false;
+}
+
+// Audio file extensions accepted when allow_all_file_types is false.
+export const AUDIO_SUFFIXES = new Set([
+  "flac", "mp3", "m4a", "aac", "ogg", "opus", "wav",
+  "mp4", "m4b", "aiff", "aif", "wma", "alac",
+]);
+
+export function isAudioSuffix(suffix: string): boolean {
+  return AUDIO_SUFFIXES.has(suffix.toLowerCase());
 }
 
 // Sum the size of every object currently in the R2 bucket. Used by the

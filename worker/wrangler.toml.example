@@ -38,6 +38,14 @@ EDGESONIC_VERSION = "dev"
 # unset here. Demo mode locks the D1 row against edits so a visitor can't
 # lift the cap from the Settings UI.
 # R2_MAX_LIMIT = "0"
+# Default UI theme applied on first visit (before the user picks their
+# own). Falls back to the D1 feature_strings row "default_theme" when
+# unset here. Demo mode locks the D1 row against edits.
+# DEFAULT_THEME = "sp-sky"
+# Whether /files/upload accepts any file type ("1") or only audio
+# extensions ("0"). Falls back to the D1 feature_strings row
+# "allow_all_file_types" when unset here. Demo mode locks the D1 row.
+# ALLOW_ALL_FILE_TYPES = "0"
 
 # Static Assets (Vue frontend) — 需先 `npm run build:web` 生成 web/dist
 [assets]

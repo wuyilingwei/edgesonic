@@ -10,8 +10,12 @@ import { ref } from "vue";
 
 export const useDemoMode = defineStore("demoMode", () => {
   const enabled = ref(false);
+  const allowAllFileTypes = ref(false);
   function setEnabled(v: boolean) {
     enabled.value = !!v;
   }
-  return { enabled, setEnabled };
+  function setAllowAllFileTypes(v: boolean) {
+    allowAllFileTypes.value = !!v;
+  }
+  return { enabled, allowAllFileTypes, setEnabled, setAllowAllFileTypes };
 });

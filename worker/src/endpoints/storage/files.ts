@@ -51,7 +51,7 @@ filesRoutes.use("*", async (c, next) => {
 // (no song_masters row) — the user can see it in the Files tree browser.
 import { dispatchWork } from "../edgesonic/work";
 import { getFeatureString } from "../../utils/features";
-import { isDemoMode, demoMaxUploadBytes, r2MaxStorageBytes, demoR2TotalBytes } from "../../utils/demoMode";
+import { isDemoMode, demoMaxUploadBytes, r2MaxStorageBytes, demoR2TotalBytes, allowAllFileTypes, isAudioSuffix } from "../../utils/demoMode";
 
 filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
@@ -73,6 +73,14 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const db = env.DB;
   const now = Math.floor(Date.now() / 1000);
   const sizeHeader = parseInt(c.req.header("Content-Length") || "0", 10);
+
+  // File-type gate. When allow_all_file_types is off (default), only audio
+  // extensions are accepted. Operators can flip the feature_string to "1"
+  // to accept any file type; demo mode locks that row so a visitor can't.
+  const allowAll = await allowAllFileTypes(env);
+  if (!allowAll && !isAudioSuffix(suffix)) {
+    return c.json({ ok: false, error: `File type .${suffix} not allowed (audio only)` }, 415);
+  }
 
   // Demo mode: per-upload cap. The cumulative R2 storage cap below applies
   // in both normal and demo modes.

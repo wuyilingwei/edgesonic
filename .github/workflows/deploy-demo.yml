@@ -239,21 +239,28 @@ jobs:
         run: |
           set -euo pipefail
           # .github/demo/env is a simple KEY=VALUE file shipping demo-
-          # specific defaults: DEMO_MAX_UPLOAD_BYTES, R2_MAX_LIMIT, etc.
-          # Workflow inputs override these when non-empty.
+          # specific defaults: DEMO_MAX_UPLOAD_BYTES, R2_MAX_LIMIT,
+          # DEFAULT_THEME, ALLOW_ALL_FILE_TYPES. Workflow inputs override
+          # these when non-empty.
           MAXUP_DEFAULT="52428800"
           R2LIMIT_DEFAULT="104857600"
+          THEME_DEFAULT=""
+          ALLOWALL_DEFAULT="0"
           if [ -f .github/demo/env ]; then
             echo "Loading .github/demo/env..."
             # shellcheck disable=SC1090
             set -a; . .github/demo/env; set +a
             [ -n "${DEMO_MAX_UPLOAD_BYTES:-}" ] && MAXUP_DEFAULT="$DEMO_MAX_UPLOAD_BYTES"
             [ -n "${R2_MAX_LIMIT:-}" ] && R2LIMIT_DEFAULT="$R2_MAX_LIMIT"
+            [ -n "${DEFAULT_THEME:-}" ] && THEME_DEFAULT="$DEFAULT_THEME"
+            [ -n "${ALLOW_ALL_FILE_TYPES:-}" ] && ALLOWALL_DEFAULT="$ALLOW_ALL_FILE_TYPES"
           else
             echo "::notice::.github/demo/env not found — using built-in defaults."
           fi
           echo "maxup=${MAXUP_DEFAULT}" >> "$GITHUB_OUTPUT"
           echo "r2limit=${R2LIMIT_DEFAULT}" >> "$GITHUB_OUTPUT"
+          echo "theme=${THEME_DEFAULT}" >> "$GITHUB_OUTPUT"
+          echo "allowall=${ALLOWALL_DEFAULT}" >> "$GITHUB_OUTPUT"
 
       - name: Reupload demo-library/ from repo
         env:
@@ -336,13 +343,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MAXUP: ${{ github.event.inputs.demo_max_upload_bytes || steps.demoenv.outputs.maxup }}
           R2LIMIT: ${{ github.event.inputs.r2_max_limit || steps.demoenv.outputs.r2limit }}
+          THEME: ${{ steps.demoenv.outputs.theme }}
+          ALLOWALL: ${{ steps.demoenv.outputs.allowall }}
         run: |
           set -euo pipefail
           BUILD_INFO=$(cat edgesonic-release/web/dist/build-info.json)
           node -e 'const v=JSON.parse(process.argv[1]); if (!v.version || !v.buildTime || Number.isNaN(Date.parse(v.buildTime))) process.exit(1)' "$BUILD_INFO"
           VERSION=$(node -e 'console.log(JSON.parse(process.argv[1]).version)' "$BUILD_INFO")
           BUILD_TIME=$(node -e 'console.log(JSON.parse(process.argv[1]).buildTime)' "$BUILD_INFO")
-          echo "Deploying demo Worker edgesonic-demo with WORKER_VERSION=$VERSION, DEMO_MODE=1, DEMO_MAX_UPLOAD_BYTES=$MAXUP, R2_MAX_LIMIT=$R2LIMIT"
+          echo "Deploying demo Worker edgesonic-demo with WORKER_VERSION=$VERSION, DEMO_MODE=1, DEMO_MAX_UPLOAD_BYTES=$MAXUP, R2_MAX_LIMIT=$R2LIMIT, DEFAULT_THEME=$THEME, ALLOW_ALL_FILE_TYPES=$ALLOWALL"
           wrangler deploy \
             --config edgesonic-release/worker/wrangler.toml \
             --containers-rollout=none \
@@ -351,7 +360,9 @@ jobs:
             --var EDGESONIC_BUILD_TIME:"${BUILD_TIME}" \
             --var DEMO_MODE:"1" \
             --var DEMO_MAX_UPLOAD_BYTES:"${MAXUP}" \
-            --var R2_MAX_LIMIT:"${R2LIMIT}"
+            --var R2_MAX_LIMIT:"${R2LIMIT}" \
+            --var DEFAULT_THEME:"${THEME}" \
+            --var ALLOW_ALL_FILE_TYPES:"${ALLOWALL}"
 
       - name: Post-deploy reminder
         run: |
