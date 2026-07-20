@@ -102,7 +102,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
 
       # wrangler is the deploy tool, not part of the app — install it directly
       # instead of `npm ci`-ing the whole monorepo (which would pull in web's
