@@ -49,6 +49,11 @@ on:
         required: false
         default: '21600'
         type: string
+      demo_library_snapshot_tag:
+        description: 'Release tag containing demo-library-snapshot.tar.gz to restore into R2 demo-library/. Leave empty to skip snapshot restore.'
+        required: false
+        default: ''
+        type: string
 
 jobs:
   deploy:
@@ -217,6 +222,47 @@ jobs:
           else
             echo "users table already has $USER_COUNT row(s) — skipping seed."
           fi
+
+      - name: Restore demo-library/ R2 snapshot
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GH_TOKEN: ${{ github.token }}
+          SRC: ${{ github.event.inputs.source_repo || 'wuyilingwei/edgesonic' }}
+          SNAP_TAG: ${{ github.event.inputs.demo_library_snapshot_tag || steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Try to download demo-library-snapshot.tar.gz from the resolved
+          # release (or the pinned snapshot tag). If the asset doesn't exist,
+          # the demo Worker starts with an empty demo-library/ and visitors
+          # simply see no sample songs until a snapshot is published.
+          ASSET="demo-library-snapshot.tar.gz"
+          echo "Looking for $ASSET in release '$SNAP_TAG' of '$SRC'..."
+          if ! gh release download "$SNAP_TAG" --repo "$SRC" --pattern "$ASSET" --clobber; then
+            echo "::notice::No $ASSET found in release $SNAP_TAG — skipping R2 snapshot restore."
+            echo "Publish a tar.gz containing demo-library/... files as $ASSET to populate the demo library."
+            exit 0
+          fi
+          mkdir -p snapshot && tar xzf "$ASSET" -C snapshot
+          if [ ! -d snapshot/demo-library ]; then
+            echo "::error::$ASSET does not contain a top-level demo-library/ directory."
+            exit 1
+          fi
+
+          # Upload every file under demo-library/ into the R2 bucket, key
+          # prefixed with demo-library/. We use the S3-compatible API via
+          # wrangler r2 object put (streamed) since the Worker binding isn't
+          # reachable from CI. wrangler r2 object put supports --pipe for
+          # stdin so we don't need a temp file per object.
+          R2_NAME="edgesonic-demo-music"
+          COUNT=0
+          while IFS= read -r -d '' FILE; do
+            KEY="${FILE#snapshot/}"
+            echo "  → $R2_NAME/$KEY"
+            wrangler r2 object put "$R2_NAME/$KEY" --pipe --file "$FILE" --content-type "$(file --mime-type -b "$FILE")" >/dev/null
+            COUNT=$((COUNT + 1))
+          done < <(find snapshot/demo-library -type f -print0)
+          echo "::notice::Restored $COUNT files into $R2_NAME/demo-library/ from $SNAP_TAG"
 
       - name: Deploy demo Worker
         env:

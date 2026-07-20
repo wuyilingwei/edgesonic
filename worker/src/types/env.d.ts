@@ -81,7 +81,4 @@ interface Env {
   // Optional override path or URL for the demo template JSON. Defaults to the
   // bundled worker/demo-template.json asset.
   DEMO_TEMPLATE_OVERRIDE?: string;
-  // Optional GitHub release tag identifying an R2 snapshot to restore from
-  // during the demo reset. Unset → only clear non-whitelisted keys.
-  DEMO_R2_SNAPSHOT_TAG?: string;
 }

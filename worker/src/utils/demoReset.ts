@@ -5,8 +5,10 @@
 //   1. Reloads features / feature_strings / user_permissions from the
 //      bundled worker/demo-template.json (or DEMO_TEMPLATE_OVERRIDE).
 //   2. Clears the R2 bucket of any key outside the keep-prefix whitelist
-//      (demo-library/, avatars/). A future enhancement will pull a tagged
-//      snapshot from a GitHub release to repopulate demo-library/.
+//      (demo-library/, avatars/). Visitor uploads under music/, cache/,
+//      _uploads/ etc. are wiped; the canonical demo library under
+//      demo-library/ is restored separately by the deploy-demo GitHub
+//      workflow from a release asset, NOT by this Worker.
 //
 // Self-gated via a D1 kv_store row so it survives the 15-minute Worker
 // isolate lifetime. The first tick after DEMO_MODE is enabled always runs
