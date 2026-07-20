@@ -34,6 +34,7 @@
 // fetch works even after the session expires. The payload only exposes the
 // build version and build time.
 import { Hono } from "hono";
+import { isDemoMode } from "../../utils/demoMode";
 
 export const versionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -61,6 +62,7 @@ versionRoutes.get("/version", async (c) => {
       ok: true,
       version: envVersion,
       buildTime: envBuildTime || null,
+      demoMode: isDemoMode(c.env),
     });
   }
   const asset = await readBuildInfoFromAsset(c);
@@ -68,5 +70,6 @@ versionRoutes.get("/version", async (c) => {
     ok: true,
     version: asset?.version || "dev",
     buildTime: asset?.buildTime || null,
+    demoMode: isDemoMode(c.env),
   });
 });

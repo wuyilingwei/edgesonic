@@ -22,6 +22,7 @@
 import { Hono } from "hono";
 import { subsonicError, sha256 } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
+import { isDemoMode } from "../../utils/demoMode";
 import { subsonicOK } from "../../utils/xml";
 import type { User } from "../../types/entities";
 
@@ -68,11 +69,19 @@ const changePasswordHandler = async (c: import("hono").Context<{ Bindings: Env; 
 
   const db = c.env.DB;
   const target = await db
-    .prepare("SELECT username FROM users WHERE username = ?")
+    .prepare("SELECT username, level FROM users WHERE username = ?")
     .bind(username)
-    .first<{ username: string }>();
+    .first<{ username: string; level: number }>();
   if (!target) {
     return c.text(subsonicError(70, "User not found"), 404, {
+      "Content-Type": "application/xml; charset=UTF-8",
+    });
+  }
+
+  // Demo mode locks superadmin password rotation so a visitor holding the
+  // demo superadmin password can't lock everyone else out.
+  if (isDemoMode(c.env) && target.level >= 3) {
+    return c.text(subsonicError(50, "Superadmin password is locked in demo mode"), 403, {
       "Content-Type": "application/xml; charset=UTF-8",
     });
   }

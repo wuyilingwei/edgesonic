@@ -1190,5 +1190,10 @@
     "version": "Version",
     "license": "License",
     "more_info": "For more information, visit"
+  },
+  "demo": {
+    "badge": "Demo mode · data resets every 6h",
+    "locked": "Locked in demo mode",
+    "uploadCap": "Upload size is capped in demo mode"
   }
 }

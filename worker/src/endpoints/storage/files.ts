@@ -51,6 +51,7 @@ filesRoutes.use("*", async (c, next) => {
 // (no song_masters row) — the user can see it in the Files tree browser.
 import { dispatchWork } from "../edgesonic/work";
 import { getFeatureString } from "../../utils/features";
+import { isDemoMode, demoMaxUploadBytes } from "../../utils/demoMode";
 
 filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
@@ -72,6 +73,16 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const db = env.DB;
   const now = Math.floor(Date.now() / 1000);
   const sizeHeader = parseInt(c.req.header("Content-Length") || "0", 10);
+
+  // Demo mode: cap upload size so a visitor can't fill R2 with multi-GB
+  // payloads. The non-demo path stays uncapped (aside from the Worker
+  // sub-request limit).
+  if (isDemoMode(env)) {
+    const cap = demoMaxUploadBytes(env);
+    if (sizeHeader && sizeHeader > cap) {
+      return c.json({ ok: false, error: `Demo upload cap is ${cap} bytes` }, 413);
+    }
+  }
 
   if (source === "webdav") {
     const creds = await getSourceCredentials(db, "webdav", env);

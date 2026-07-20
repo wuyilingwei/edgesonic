@@ -68,4 +68,20 @@ interface Env {
   // fast primary (a Secret survives `wrangler deploy`); the kv_store D1 row
   // `cron_recovery_state` is the durable backup. See utils/cronRecovery.ts.
   CRON_STATE?: string;
+  // Demo mode. Set DEMO_MODE="1" in [vars] to engage. The Worker
+  // then locks superadmin password changes, disables dangerous permissions
+  // and feature flags, caps upload size, and periodically resets D1/R2 to
+  // the bundled demo template. See worker/src/utils/demoMode.ts.
+  DEMO_MODE?: string;
+  // Override the per-upload byte ceiling in demo mode (default 50 MiB).
+  DEMO_MAX_UPLOAD_BYTES?: string;
+  // Optional cron expression overriding the default "0 */6 * * *" demo reset
+  // cadence. Only meaningful when DEMO_MODE="1".
+  DEMO_RESET_CRON?: string;
+  // Optional override path or URL for the demo template JSON. Defaults to the
+  // bundled worker/demo-template.json asset.
+  DEMO_TEMPLATE_OVERRIDE?: string;
+  // Optional GitHub release tag identifying an R2 snapshot to restore from
+  // during the demo reset. Unset → only clear non-whitelisted keys.
+  DEMO_R2_SNAPSHOT_TAG?: string;
 }

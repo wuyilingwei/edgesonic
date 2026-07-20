@@ -14,12 +14,12 @@ on:
   workflow_dispatch:
     inputs:
       cf_api_token:
-        description: 'Cloudflare API Token (Workers:Edit + D1:Edit + R2:Edit)'
-        required: true
+        description: 'Cloudflare API Token (Workers:Edit + D1:Edit + R2:Edit). Leave empty to use the repo secret CLOUDFLARE_API_TOKEN.'
+        required: false
         type: string
       cf_account_id:
-        description: 'Cloudflare Account ID'
-        required: true
+        description: 'Cloudflare Account ID. Leave empty to use the repo secret CLOUDFLARE_ACCOUNT_ID.'
+        required: false
         type: string
       release_channel:
         description: 'Which release to deploy'
@@ -73,11 +73,31 @@ jobs:
       contents: read
 
     steps:
+      - name: Resolve Cloudflare credentials
+        id: cf
+        env:
+          INPUT_TOKEN:   ${{ inputs.cf_api_token }}
+          INPUT_ACCOUNT: ${{ inputs.cf_account_id }}
+          SECRET_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SECRET_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          TOKEN="${INPUT_TOKEN:-$SECRET_TOKEN}"
+          ACCOUNT="${INPUT_ACCOUNT:-$SECRET_ACCOUNT}"
+          if [ -z "$TOKEN" ] || [ -z "$ACCOUNT" ]; then
+            echo "::error::Missing Cloudflare credentials. Either pass them as workflow inputs or set repo secrets CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID."
+            exit 1
+          fi
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          echo "account=$ACCOUNT" >> "$GITHUB_OUTPUT"
+
       # Mask before any step that could echo the values.
       - name: Mask sensitive inputs
+        env:
+          TOKEN:   ${{ steps.cf.outputs.token }}
+          ACCOUNT: ${{ steps.cf.outputs.account }}
         run: |
-          echo "::add-mask::${{ inputs.cf_api_token }}"
-          echo "::add-mask::${{ inputs.cf_account_id }}"
+          echo "::add-mask::${TOKEN}"
+          echo "::add-mask::${ACCOUNT}"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -131,8 +151,8 @@ jobs:
       - name: Provision Cloudflare resources
         id: provision
         env:
-          CLOUDFLARE_API_TOKEN:  ${{ inputs.cf_api_token }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+          CLOUDFLARE_API_TOKEN:  ${{ steps.cf.outputs.token }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ steps.cf.outputs.account }}
           DB_NAME: ${{ inputs.d1_database_name }}
           R2_NAME: ${{ inputs.r2_bucket_name }}
         run: |
@@ -170,7 +190,7 @@ jobs:
 
       - name: Generate wrangler.toml
         env:
-          CF_ACCOUNT_ID: ${{ inputs.cf_account_id }}
+          CF_ACCOUNT_ID: ${{ steps.cf.outputs.account }}
           DB_ID:   ${{ steps.provision.outputs.db_id }}
           R2_NAME: ${{ inputs.r2_bucket_name }}
           INST:    ${{ steps.provision.outputs.inst }}
@@ -194,7 +214,7 @@ jobs:
 
       - name: Deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ inputs.cf_api_token }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.cf.outputs.token }}
         run: |
           BUILD_INFO=$(cat edgesonic-release/web/dist/build-info.json)
           node -e 'const v=JSON.parse(process.argv[1]); if (!v.version || !v.buildTime || Number.isNaN(Date.parse(v.buildTime))) process.exit(1)' "$BUILD_INFO"

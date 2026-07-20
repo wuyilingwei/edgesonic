@@ -1,0 +1,69 @@
+{
+  "features": {
+    "enable_cross_origin_isolation": 1,
+    "enable_r2_presign": 1,
+    "enable_webdav_presign": 1,
+    "worker_pool_enabled": 1,
+    "allow_being_proxied": 1
+  },
+  "feature_strings": {
+    "transcode_engine": "browser_pool",
+    "transcode_mode": "on_demand",
+    "default_transcode_profiles": "[]",
+    "scan_interval_hours": "24",
+    "scan_etag_check": "1",
+    "scan_rescan_strategy": "auto",
+    "scan_browser_auto": "1",
+    "worker_pool_enabled": "1",
+    "worker_poll_interval_seconds": "60",
+    "worker_batch_size": "4",
+    "worker_claim_ttl_seconds": "60",
+    "worker_max_concurrent": "2",
+    "metadata_recheck_interval_hours": "0",
+    "lrc_backfill_interval_hours": "0",
+    "artist_scrape_interval_hours": "0",
+    "lastfm_fallback_sources": "[\"netease\",\"qmusic\",\"lastfm\"]",
+    "scrape_enabled_sources": "[\"netease\",\"qmusic\",\"kugou\"]",
+    "cache_tier_standard": "{\"budgetMb\":512,\"maxFileMb\":50,\"ttlDays\":7}",
+    "cache_tier_extended": "{\"budgetMb\":0,\"maxFileMb\":0,\"ttlDays\":0}",
+    "r2_free_allocation_gb": "10"
+  },
+  "user_permissions": {
+    "0": {
+      "stream": true,
+      "browse": true,
+      "search": true
+    },
+    "1": {
+      "stream": true,
+      "browse": true,
+      "search": true,
+      "download": true,
+      "upload": true,
+      "edit_tags": true,
+      "edit_annotations": true,
+      "manage_files": true,
+      "manage_credentials": true,
+      "participate_work": true,
+      "share": true,
+      "manage_playlists": true
+    },
+    "2": {
+      "stream": true,
+      "browse": true,
+      "search": true,
+      "download": true,
+      "upload": true,
+      "edit_tags": true,
+      "edit_annotations": true,
+      "manage_files": true,
+      "manage_credentials": true,
+      "participate_work": true,
+      "share": true,
+      "manage_playlists": true,
+      "manage_podcasts": true,
+      "manage_radio": true
+    }
+  },
+  "storage_sources_keep_prefixes": ["demo-library/"]
+}

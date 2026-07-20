@@ -89,6 +89,10 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (url.origin !== self.location.origin) {
+    // CORS-enabled APIs (e.g. api.github.com for the update check) must go
+    // through the normal browser fetch — wrapping them in no-cors yields an
+    // opaque response the page cannot read, silently breaking the feature.
+    if (url.hostname === "api.github.com") return; // default fetch
     // Cross-origin: cache opaque responses briefly (fonts, images).
     event.respondWith(
       (async () => {

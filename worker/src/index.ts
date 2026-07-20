@@ -28,6 +28,7 @@ import { maybeRunArtistScrapeBackfill } from "./utils/artistScrapeBackfill";
 import { maybeRunPeerSync } from "./utils/peerSync";
 import { reapExpiredGuestTokens } from "./utils/guestTokenReaper";
 import { maybeRunCacheEviction } from "./utils/cacheEviction";
+import { maybeRunDemoReset } from "./utils/demoReset";
 import { webLoginRoutes } from "./endpoints/edgesonic/auth";
 import { sharePublicRoutes } from "./endpoints/share_public";
 
@@ -179,6 +180,14 @@ export default {
     ctx.waitUntil(
       maybeRunCacheEviction(env, ctx).catch((e) => {
         console.error("scheduled maybeRunCacheEviction failed:", e);
+      }),
+    );
+    // Demo mode: periodic reset of D1 settings + R2 non-whitelisted keys.
+    // Self-gates on a kv_store row so it only fires every N seconds; a no-op
+    // when DEMO_MODE != "1".
+    ctx.waitUntil(
+      maybeRunDemoReset(env).catch((e) => {
+        console.error("scheduled maybeRunDemoReset failed:", e);
       }),
     );
   },

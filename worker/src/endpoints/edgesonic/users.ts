@@ -29,6 +29,7 @@ import { Hono } from "hono";
 import { GUEST_USERNAME, permissionMiddleware, sha256 } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
 import { ensureNicknameColumn } from "../../utils/schema_patch";
+import { isDemoMode } from "../../utils/demoMode";
 import type { User } from "../../types/entities";
 
 export const usersRoutes = new Hono<{ Bindings: Env; Variables: { user: User } }>();
@@ -158,6 +159,13 @@ usersRoutes.post("/users/update", permissionMiddleware("manage_users"), async (c
     (body.level !== undefined && body.level >= ADMIN_TIER_LEVEL);
   if (targetIsOrBecomesAdminTier && caller.level < 3) {
     return c.json({ ok: false, error: "Only a super-admin can manage admin/super-admin accounts" }, 403);
+  }
+
+  // Demo mode: never let anyone rotate a superadmin password — the demo
+  // superadmin credentials are public, and a password change would lock
+  // the next visitor out.
+  if (isDemoMode(c.env) && body.password && existingTarget?.level === 3) {
+    return c.json({ ok: false, error: "Superadmin password is locked in demo mode" }, 403);
   }
 
   if (body.password) {

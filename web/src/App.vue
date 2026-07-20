@@ -9,6 +9,7 @@ import PlayerBar from "./components/PlayerBar.vue";
 import UpdateBanner from "./components/UpdateBanner.vue";
 import { usePlayerStore } from "./stores/player";
 import { useWorkerPool } from "./stores/workerPool";
+import { useDemoMode } from "./stores/demoMode";
 import { activeTheme, resetTheme, restoreSavedTheme } from "./theme";
 import { getTheme } from "./themes/registry";
 import { ensureBuiltinThemeLoaded } from "./themes/builtin";
@@ -20,6 +21,7 @@ const { t } = useI18n();
 const { isLoggedIn, level, logout, hasPerm, fetchMe, displayName } = useAuth();
 const player = usePlayerStore();
 const workerPool = useWorkerPool();
+const demoMode = useDemoMode();
 watch(isLoggedIn, (now) => {
   if (now) {
     // Refresh real effective permissions so nav gates by capability, not just
@@ -148,6 +150,11 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   <div v-else-if="activeThemeDef?.mountBackground" ref="bgHostEl" aria-hidden="true"></div>
 
   <UpdateBanner />
+
+  <div v-if="demoMode.enabled" class="demo-badge" role="status" aria-live="polite">
+    <span aria-hidden="true">⚙</span>
+    <span class="demo-badge-text">{{ t("demo.badge", "Demo mode · data resets every 6h") }}</span>
+  </div>
 
   <Transition name="toast">
     <button
@@ -496,4 +503,24 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
   .main { margin-left: 0; padding-left: 1rem; padding-right: 1rem; }
   .now-playing-collapse { display: inline-flex; left: 1rem; }
 }
+
+/* --- Demo mode badge --- */
+.demo-badge {
+  position: fixed;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2000;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.6rem;
+  background: rgba(255, 165, 0, 0.85);
+  color: #1a1a1a;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 999px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.demo-badge-text { white-space: nowrap; }
 </style>

@@ -27,6 +27,7 @@ import Files from "./views/Files.vue";
 import Users from "./views/Users.vue";
 import Settings from "./views/Settings.vue";
 import { useUpdateBanner } from "./stores/updateBanner";
+import { useDemoMode } from "./stores/demoMode";
 const routes = [
   { path: "/login", component: Login, meta: { title: "Login", public: true } },
   { path: "/", component: Dashboard, meta: { title: "Dashboard" } },
@@ -91,6 +92,7 @@ app.use(i18n);
 // The loaded bundle, not the first delayed API probe, defines the baseline.
 // This preserves deploy detection when a rollout happens just after page load.
 const updateBanner = useUpdateBanner(pinia);
+const demoMode = useDemoMode(pinia);
 updateBanner.notify({
   version: __EDGESONIC_VERSION__,
   buildTime: __EDGESONIC_BUILD_TIME__,
@@ -112,9 +114,10 @@ async function checkVersion() {
   try {
     const r = await fetch("/edgesonic/version", { cache: "no-store" });
     if (!r.ok) return;
-    const j = (await r.json()) as { ok?: boolean; version?: string; buildTime?: string | null };
+    const j = (await r.json()) as { ok?: boolean; version?: string; buildTime?: string | null; demoMode?: boolean };
     if (!j.ok || typeof j.version !== "string" || (j.buildTime !== null && typeof j.buildTime !== "string")) return;
     updateBanner.notify({ version: j.version, buildTime: j.buildTime ?? null });
+    demoMode.setEnabled(!!j.demoMode);
   } catch {
     // Network blip / offline tab: ignore. We'll retry next interval.
   }

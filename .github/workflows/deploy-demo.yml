@@ -1,0 +1,247 @@
+name: Deploy EdgeSonic Demo
+
+# Deploys a fully isolated demo Worker (edgesonic-demo) that runs with
+# DEMO_MODE=1 so all demo guards engage (locked superadmin password,
+# disabled dangerous perms, capped upload size, 6-hour periodic reset of D1
+# settings + R2 non-whitelisted keys).
+#
+# Resources are auto-provisioned on first run:
+#   - Worker script: edgesonic-demo
+#   - D1 database:   edgesonic-demo-db
+#   - R2 bucket:     edgesonic-demo-music
+#
+# Credentials come from the same repo secrets the main deploy workflow uses:
+#   - secrets.CLOUDFLARE_API_TOKEN
+#   - secrets.CLOUDFLARE_ACCOUNT_ID
+# Set them once with:
+#   gh secret set CLOUDFLARE_API_TOKEN
+#   gh secret set CLOUDFLARE_ACCOUNT_ID
+#
+# Triggers:
+#   - Automatically after `Release EdgeSonic` completes successfully
+#     (workflow_run) so every published release updates the demo.
+#   - Manually via workflow_dispatch (e.g. to redeploy without cutting a new
+#     release, or to test demo deploy in isolation).
+
+on:
+  workflow_run:
+    workflows: ["Release EdgeSonic (precompiled package)"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Pin an exact release tag (e.g. v1.2.3). Defaults to the latest stable release.'
+        required: false
+        default: ''
+        type: string
+      source_repo:
+        description: 'Repo to download the precompiled release package from.'
+        required: false
+        default: 'wuyilingwei/edgesonic'
+        type: string
+      demo_max_upload_bytes:
+        description: 'Per-upload byte cap (default 52428800 = 50 MiB).'
+        required: false
+        default: '52428800'
+        type: string
+      demo_reset_seconds:
+        description: 'Reset cadence in seconds (default 21600 = 6h).'
+        required: false
+        default: '21600'
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy demo Worker
+    runs-on: ubuntu-latest
+    # Only run on success of the triggering Release workflow. Manual
+    # workflow_dispatch runs skip this gate (github.event_name !== 'workflow_run').
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Assert repo secrets are set
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CF_TOKEN" ] || [ -z "$CF_ACCOUNT" ]; then
+            echo "::error::Missing repo secrets CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID."
+            echo "::error::Set them once with:"
+            echo "::error::  gh secret set CLOUDFLARE_API_TOKEN"
+            echo "::error::  gh secret set CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          fi
+
+      - name: Mask sensitive values
+        run: |
+          echo "::add-mask::${{ secrets.CLOUDFLARE_API_TOKEN }}"
+          echo "::add-mask::${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install wrangler
+        run: npm install -g wrangler@4.94.0
+
+      - name: Resolve release tag
+        id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SRC: ${{ github.event.inputs.source_repo || 'wuyilingwei/edgesonic' }}
+          PIN: ${{ github.event.inputs.release_tag || '' }}
+        run: |
+          set -euo pipefail
+          if [ -n "$PIN" ]; then
+            TAG="$PIN"
+          elif [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # The Release workflow's triggering tag is surfaced via
+            # workflow_run.head_branch (e.g. "v1.2.3"). Fall back to the
+            # GitHub "latest" release if it's somehow empty.
+            TAG="${{ github.event.workflow_run.head_branch }}"
+            if [ -z "$TAG" ] || [ "$TAG" = "main" ]; then
+              TAG=$(gh release view --repo "$SRC" --json tagName --jq .tagName)
+            fi
+          else
+            TAG=$(gh release view --repo "$SRC" --json tagName --jq .tagName)
+          fi
+          echo "Deploying demo from release '$TAG' of '$SRC'"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download & extract release package
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SRC: ${{ github.event.inputs.source_repo || 'wuyilingwei/edgesonic' }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.tag.outputs.tag }}"
+          gh release download "$TAG" --repo "$SRC" \
+            --pattern 'edgesonic-release.tar.gz' \
+            --pattern 'edgesonic-release.tar.gz.sha256'
+          sha256sum -c edgesonic-release.tar.gz.sha256
+          tar xzf edgesonic-release.tar.gz
+          test -d edgesonic-release/worker
+          test -d edgesonic-release/web/dist
+          test -s edgesonic-release/web/dist/build-info.json
+
+      - name: Provision Cloudflare resources
+        id: provision
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          DB_NAME="edgesonic-demo-db"
+          R2_NAME="edgesonic-demo-music"
+
+          # D1: get or create
+          DB_LIST=$(wrangler d1 list --json 2>/dev/null || echo "[]")
+          DB_ID=$(echo "$DB_LIST" | jq -r --arg n "$DB_NAME" \
+            '.[] | select(.name==$n) | (.uuid // .database_id // "") | select(length>0)' \
+            2>/dev/null || echo "")
+          if [ -z "$DB_ID" ]; then
+            echo "Creating D1 database '$DB_NAME'..."
+            wrangler d1 create "$DB_NAME" >/dev/null
+            DB_ID=$(wrangler d1 list --json | jq -r --arg n "$DB_NAME" \
+              '.[] | select(.name==$n) | (.uuid // .database_id)')
+          fi
+          echo "db_id=$DB_ID" >> "$GITHUB_OUTPUT"
+
+          # R2: create bucket if missing
+          R2_LIST=$(wrangler r2 bucket list --json 2>/dev/null || echo "[]")
+          R2_EXISTS=$(echo "$R2_LIST" | jq -r --arg n "$R2_NAME" \
+            '.[] | select(.name==$n) | .name' 2>/dev/null || echo "")
+          if [ -z "$R2_EXISTS" ]; then
+            echo "Creating R2 bucket '$R2_NAME'..."
+            wrangler r2 bucket create "$R2_NAME" >/dev/null
+          fi
+
+          # INSTANCE_ID for the demo Worker — deterministic per repo so re-runs
+          # don't drift. Derive from the repo full name + "demo" so it's stable
+          # but distinct from the production instance.
+          INST=$(uuidgen --namespace @dns --name "${{ github.repository }}-demo" | tr '[:upper:]' '[:lower:]')
+          echo "inst=$INST" >> "$GITHUB_OUTPUT"
+
+      - name: Generate demo wrangler.toml
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          DB_ID:   ${{ steps.provision.outputs.db_id }}
+          R2_NAME: edgesonic-demo-music
+          INST:    ${{ steps.provision.outputs.inst }}
+        run: |
+          set -euo pipefail
+          # The release package ships worker/wrangler.toml.example. We sed the
+          # demo-specific values into it; demo uses <worker>.workers.dev so
+          # the routes block is stripped. Worker name is overridden below.
+          sed \
+            -e "s|<YOUR_CLOUDFLARE_ACCOUNT_ID>|${CF_ACCOUNT_ID}|g" \
+            -e "s|<YOUR_D1_DATABASE_ID>|${DB_ID}|g" \
+            -e "s|<YOUR_R2_BUCKET_NAME>|${R2_NAME}|g" \
+            -e "s|<GENERATE_A_UUID>|${INST}|g" \
+            edgesonic-release/worker/wrangler.toml.example > edgesonic-release/worker/wrangler.toml
+          # No custom domain — use edgesonic-demo.<account>.workers.dev.
+          sed -i '/^routes/,/^\]/d' edgesonic-release/worker/wrangler.toml
+          # Rename the Worker script to edgesonic-demo so it's isolated from
+          # any production deploy on the same account.
+          sed -i 's|^name = "edgesonic"|name = "edgesonic-demo"|' edgesonic-release/worker/wrangler.toml
+
+      - name: Apply DB schema + seed demo superadmin
+        env:
+          CLOUDFLARE_API_TOKEN:  ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          DB_NAME="edgesonic-demo-db"
+          # Apply schema (idempotent — every CREATE uses IF NOT EXISTS).
+          wrangler d1 execute "$DB_NAME" --remote \
+            --config edgesonic-release/worker/wrangler.toml \
+            --file edgesonic-release/worker/migrations/Schema.sql
+
+          # Seed the demo superadmin only if the users table is empty. The
+          # password hash is sha256("demoadmin") — same convention as the
+          # README's first-login bootstrap.
+          USER_COUNT=$(wrangler d1 execute "$DB_NAME" --remote \
+            --config edgesonic-release/worker/wrangler.toml \
+            --command 'SELECT COUNT(*) AS c FROM users' --json \
+            | jq -r '.[0].results[0].c')
+          if [ "$USER_COUNT" = "0" ]; then
+            echo "Seeding demo superadmin (admin / demoadmin)..."
+            PASS_HASH=$(node -e 'const c=require("crypto");console.log(c.createHash("sha256").update("demoadmin").digest("hex"))')
+            wrangler d1 execute "$DB_NAME" --remote \
+              --config edgesonic-release/worker/wrangler.toml \
+              --command "INSERT INTO users (username, master_password, level, enabled, created_at, updated_at) VALUES ('admin', '$PASS_HASH', 3, 1, strftime('%s','now'), strftime('%s','now'))" \
+              >/dev/null
+          else
+            echo "users table already has $USER_COUNT row(s) — skipping seed."
+          fi
+
+      - name: Deploy demo Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MAXUP: ${{ github.event.inputs.demo_max_upload_bytes || '52428800' }}
+          RESET: ${{ github.event.inputs.demo_reset_seconds || '21600' }}
+        run: |
+          set -euo pipefail
+          BUILD_INFO=$(cat edgesonic-release/web/dist/build-info.json)
+          node -e 'const v=JSON.parse(process.argv[1]); if (!v.version || !v.buildTime || Number.isNaN(Date.parse(v.buildTime))) process.exit(1)' "$BUILD_INFO"
+          VERSION=$(node -e 'console.log(JSON.parse(process.argv[1]).version)' "$BUILD_INFO")
+          BUILD_TIME=$(node -e 'console.log(JSON.parse(process.argv[1]).buildTime)' "$BUILD_INFO")
+          echo "Deploying demo Worker edgesonic-demo with WORKER_VERSION=$VERSION, DEMO_MODE=1"
+          wrangler deploy \
+            --config edgesonic-release/worker/wrangler.toml \
+            --containers-rollout=none \
+            --var WORKER_VERSION:"${VERSION}" \
+            --var EDGESONIC_VERSION:"${VERSION}" \
+            --var EDGESONIC_BUILD_TIME:"${BUILD_TIME}" \
+            --var DEMO_MODE:"1" \
+            --var DEMO_MAX_UPLOAD_BYTES:"${MAXUP}" \
+            --var DEMO_RESET_CRON:"${RESET}"
+
+      - name: Post-deploy reminder
+        run: |
+          echo "::notice::Demo Worker deployed at https://edgesonic-demo.${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.workers.dev"
+          echo "::notice::Login: admin / demoadmin"
+          echo "::notice::After first deploy, sign in and open Settings → Cloudflare → 'Ensure default cron' so the periodic demo reset runs."

@@ -17,6 +17,7 @@ import { Hono } from "hono";
 import { invalidateFeature, invalidateFeatureString } from "../../utils/features";
 import { permissionMiddleware } from "../../auth";
 import { hasPermission } from "../../utils/permissions";
+import { isDemoMode, isDemoLockedFeature } from "../../utils/demoMode";
 import type { User } from "../../types/entities";
 
 // System settings are gated on `manage_settings` (default L3, grantable to L2
@@ -75,6 +76,9 @@ featuresRoutes.post("/features/update", async (c) => {
   }
   if (!body.key || (body.value !== 0 && body.value !== 1)) {
     return c.json({ ok: false, error: "Expected { key, value: 0|1 }" }, 400);
+  }
+  if (isDemoMode(c.env) && isDemoLockedFeature(body.key)) {
+    return c.json({ ok: false, error: "Feature is locked in demo mode" }, 403);
   }
 
   const result = await c.env.DB.prepare(
@@ -362,6 +366,9 @@ featuresRoutes.post("/features/updateString", async (c) => {
   }
   if (!STRING_FEATURE_KEYS.has(body.key)) {
     return c.json({ ok: false, error: `Unknown feature: ${body.key}` }, 404);
+  }
+  if (isDemoMode(c.env) && isDemoLockedFeature(body.key)) {
+    return c.json({ ok: false, error: "Feature is locked in demo mode" }, 403);
   }
   const validation = validateFeatureString(body.key, body.value);
   if (validation) {

@@ -40,6 +40,7 @@ import type { TranscodePayload } from "../../transcode/browser_pool";
 import { verifyUploadToken } from "../../utils/workUploadToken";
 import { createQueries } from "../../db/queries";
 import { getProfile } from "../../transcode/profiles";
+import { isDemoMode, demoMaxUploadBytes } from "../../utils/demoMode";
 
 export const workUploadRoutes = new Hono<{
   Bindings: Env;
@@ -51,6 +52,10 @@ export const workUploadRoutes = new Hono<{
 // 256MB as a safety ceiling — anything past that almost certainly means a
 // runaway browser is dumping the wrong file.
 const MAX_UPLOAD_BYTES = 256 * 1024 * 1024;
+
+function effectiveUploadCap(env: Env): number {
+  return isDemoMode(env) ? demoMaxUploadBytes(env) : MAX_UPLOAD_BYTES;
+}
 
 workUploadRoutes.post("/work/upload", async (c) => {
   const env = c.env as Env;
@@ -105,15 +110,16 @@ workUploadRoutes.post("/work/upload", async (c) => {
   // 4. Body — Workers' c.req.arrayBuffer() consumes the entire request body.
   //  Reject early on Content-Length too big; the actual buffered length is
   //  re-checked after read in case the header lied.
+  const cap = effectiveUploadCap(env);
   const contentLength = parseInt(c.req.header("Content-Length") || "0", 10);
-  if (contentLength && contentLength > MAX_UPLOAD_BYTES) {
+  if (contentLength && contentLength > cap) {
     return c.json({ ok: false, error: "Payload too large" }, 413);
   }
   const buf = await c.req.arrayBuffer();
   if (buf.byteLength === 0) {
     return c.json({ ok: false, error: "Empty body" }, 400);
   }
-  if (buf.byteLength > MAX_UPLOAD_BYTES) {
+  if (buf.byteLength > cap) {
     return c.json({ ok: false, error: "Payload too large" }, 413);
   }
 

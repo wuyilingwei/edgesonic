@@ -35,6 +35,7 @@
 // permission check when the admin has saved the matrix at least once.
 
 import type { User } from "../types/entities";
+import { isDemoMode, isDemoDisabledPerm } from "./demoMode";
 
 type PermissionUser = Pick<User, "level">;
 
@@ -106,9 +107,28 @@ export function isPermissionHardlocked(level: number, permission: string): boole
 }
 
 export async function getEffectivePermissions(
-  env: { DB: D1Database; PERMISSIONS_OVERRIDE?: string },
+  env: { DB: D1Database; PERMISSIONS_OVERRIDE?: string; DEMO_MODE?: string },
   user: User,
 ): Promise<Record<string, boolean>> {
+  // Demo-mode read-time enforcement: dangerous perms are forced off even for
+  // level 3, so a public demo instance can't be bricked by a visitor who
+  // happens to hold the superadmin password. See utils/demoMode.ts.
+  const demoActive = isDemoMode(env);
+  if (demoActive) {
+    const demoPerms: Record<string, boolean> = {};
+    for (const k of ALL_PERMISSIONS) {
+      demoPerms[k] = !isDemoDisabledPerm(k);
+    }
+    // Level 3 still gets manage_permissions (it's hardcoded below) — but
+    // every demo-disabled perm is forced off regardless of level.
+    if (user.level === 3) {
+      demoPerms["manage_permissions"] = true;
+      return demoPerms;
+    }
+    // Non-level-3 path: overlay demo locks on top of the D1/override result.
+    // First fall through to the D1 read below, then mask.
+  }
+
   // Super admin (level 3) always holds every permission, regardless of what
   // the D1 rows or PERMISSIONS_OVERRIDE say. The matrix UI hides the level 3
   // card entirely, so the row state for level 3 is cosmetic at best and a
@@ -144,15 +164,26 @@ export async function getEffectivePermissions(
     if (perms[k] && isHardlocked(user.level, k)) perms[k] = false;
   }
 
+  // Demo-mode read-time enforcement (non-level-3 path): dangerous perms are
+  // forced off. Level 3 was handled above.
+  if (demoActive) {
+    for (const k of Object.keys(perms)) {
+      if (perms[k] && isDemoDisabledPerm(k)) perms[k] = false;
+    }
+  }
+
   perms["manage_permissions"] = user.level === 3;
   return perms;
 }
 
 export async function hasPermission(
-  env: { DB: D1Database; PERMISSIONS_OVERRIDE?: string },
+  env: { DB: D1Database; PERMISSIONS_OVERRIDE?: string; DEMO_MODE?: string },
   user: PermissionUser,
   permission: string,
 ): Promise<boolean> {
+  // Demo mode: dangerous perms are off for everyone, including level 3.
+  if (isDemoMode(env) && isDemoDisabledPerm(permission)) return false;
+
   // manage_permissions is deliberately never toggleable — neither via the
   // D1 user_permissions row nor the PERMISSIONS_OVERRIDE env cache. If it
   // were an ordinary row, a bad manual SQL edit, a stale env push, or a
