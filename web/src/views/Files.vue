@@ -1,7 +1,7 @@
 
 <script setup lang="ts">
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatSize } from "../api";
 import { mapConcurrent } from "../lib/concurrency";
@@ -91,6 +91,8 @@ const uploadAcceptMode = ref<"audio" | "all">("audio");
 const uploadAccept = computed(() => (uploadAcceptMode.value === "audio" ? "audio/*" : undefined));
 const canSelectAllFiles = computed(() => demoMode.allowAllFileTypes);
 
+const DEMO_R2_PATH = "demo-library/music";
+
 const canUpload = computed(() => hasPerm("upload"));
 const canScan = computed(() => hasPerm("manage_files"));
 const isR2 = computed(() => currentSource.value === "r2");
@@ -169,12 +171,19 @@ async function loadDir() {
 
 function selectSource(id: string) {
   currentSource.value = id;
-  path.value = id === "r2" ? "music" : "";
+  path.value = id === "r2" ? (demoMode.enabled ? DEMO_R2_PATH : "music") : "";
   clearSelection();
   loadDir();
   // the count tracks the active source.
   loadPending();
 }
+
+watch(() => demoMode.enabled, (enabled) => {
+  if (enabled && currentSource.value === "r2" && path.value === "music") {
+    path.value = DEMO_R2_PATH;
+    loadDir();
+  }
+});
 
 async function loadPending() {
   if (!currentSource.value || currentSource.value === "r2") {

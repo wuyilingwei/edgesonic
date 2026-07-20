@@ -508,7 +508,8 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
 .demo-badge {
   position: fixed;
   top: 0.5rem;
-  right: 0.5rem;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 2000;
   display: inline-flex;
   align-items: center;
