@@ -370,9 +370,11 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // Self-scheduling timeout replaces fixed setInterval. After each
   // poll, next delay is chosen based on whether the queue had work:
   //  - got tasks → 0 (continuous, back-to-back) for aggressive drain
-  //  - empty     → pollIntervalMs (configured, default 5min) for idle
-  // This lets a large scan backlog drain as fast as the browser can go,
-  // without changing the idle behaviour that protects D1 from over-polling.
+  //  - empty     → IDLE_PROBE_MS (short) so a fresh batch is picked up
+  //                soon after the previous one finished, instead of
+  //                waiting the full configured idle interval.
+  // pollIntervalMs (default 5min) is only used during the post-start /
+  // post-resume grace period so a briefly-opened tab doesn't grab tasks.
   let timeoutId: number | null = null;
   let hadTasksLastPoll = false;
   // Tools.vue shows a live "auto-start in mm:ss" countdown next to the
@@ -396,7 +398,7 @@ export const useWorkerPool = defineStore("workerPool", () => {
     const inGracePeriod = sinceStart < START_DELAY_MS;
     const delay = inGracePeriod
       ? pollIntervalMs.value
-      : (hadTasksLastPoll ? 0 : pollIntervalMs.value);
+      : (hadTasksLastPoll ? 0 : IDLE_PROBE_MS);
     nextPollAt.value = Date.now() + delay;
     timeoutId = window.setTimeout(async () => {
       await pollAndDrain();
@@ -407,6 +409,10 @@ export const useWorkerPool = defineStore("workerPool", () => {
   // first automatic poll by 5 minutes so a briefly-opened tab doesn't grab
   // work queue tasks. Manual pollNow() bypasses this delay.
   const START_DELAY_MS = 5 * 60 * 1000;
+  // Short idle probe used after the grace period when the last poll found
+  // no tasks. Keeps a drained batch from waiting 5 minutes before the next
+  // check; the server-side poll is cheap (single indexed SELECT).
+  const IDLE_PROBE_MS = 10_000;
   let poolStartedAt = 0;
 
   function start(): void {
