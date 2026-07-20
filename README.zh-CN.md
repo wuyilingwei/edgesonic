@@ -122,6 +122,15 @@ npx wrangler d1 execute edgesonic-db --remote --command \
   "INSERT INTO users (username, master_password, level) VALUES ('admin', hex(sha256('yourpassword')), 3)"
 ```
 
+## 在线演示
+
+在线 demo 地址：**<https://edgesonic-demo.wuyilingwei.workers.dev>**
+
+- **登录账号：** `admin` / `demo`
+- **预填充登录链接：** <https://edgesonic-demo.wuyilingwei.workers.dev/#/login?u=admin&p=demo> —— 打开链接后账号密码会自动填好，只需点击登录按钮即可。
+
+该 demo 以 `DEMO_MODE=1` 运行：危险权限（用户/存储源管理、删除、Cloudflare 设置）已被锁定，上传有大小上限，媒体库会在每次部署时从固定曲目集重置。其余功能——浏览、播放、标签编辑、浏览器工作池——均完整可用。
+
 ## 技术文档
 
 更深入的技术参考文档都在 [`docs/`](docs/) 目录下：

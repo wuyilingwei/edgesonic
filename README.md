@@ -122,6 +122,15 @@ npx wrangler d1 execute edgesonic-db --remote --command \
   "INSERT INTO users (username, master_password, level) VALUES ('admin', hex(sha256('yourpassword')), 3)"
 ```
 
+## Demo
+
+A live demo is hosted at **<https://edgesonic-demo.wuyilingwei.workers.dev>**.
+
+- **Login:** `admin` / `demo`
+- **Prefilled login link:** <https://edgesonic-demo.wuyilingwei.workers.dev/#/login?u=admin&p=demo> — credentials are filled in automatically; just press the login button.
+
+The demo runs in `DEMO_MODE=1`: dangerous permissions (user/source management, delete, Cloudflare settings) are locked, uploads are capped, and the library is reset from a fixed set of tracks on every deploy. Everything else — browsing, playback, tag editing, the worker pool — is fully functional.
+
 ## Documentation
 
 The technical reference lives under [`docs/`](docs/):
