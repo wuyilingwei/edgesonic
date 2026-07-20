@@ -219,9 +219,13 @@ async function doUpload() {
         });
         uploadProgressList.value[i] = 100;
         uploadDoneCount.value++;
-      } catch {
+      } catch (e) {
         uploadProgressList.value[i] = -1;
         uploadFailedNames.value.push(file.name);
+        // Surface the backend's error message (e.g. demo upload cap, R2
+        // storage limit) so the user knows why this specific file failed.
+        const reason = e instanceof Error ? e.message : String(e);
+        showToast(`${t("files.uploadFailed")}: ${reason}`, "error");
       }
     }
     if (uploadFailedNames.value.length === 0) {

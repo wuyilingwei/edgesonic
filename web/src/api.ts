@@ -482,7 +482,17 @@ export function useAuth() {
       }
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
-        else reject(new Error(`Upload failed: ${xhr.status}`));
+        else {
+          // Surface the backend's { ok:false, error } message so the UI can
+          // show the real reason (e.g. demo upload cap, payload too large)
+          // instead of a generic "Upload failed: 413".
+          let detail = `Upload failed: ${xhr.status}`;
+          try {
+            const body = JSON.parse(xhr.responseText);
+            if (body && typeof body.error === "string") detail = body.error;
+          } catch { /* not JSON — keep status-only message */ }
+          reject(new Error(detail));
+        }
       };
       xhr.onerror = () => reject(new Error("Upload network error"));
       xhr.send(file);

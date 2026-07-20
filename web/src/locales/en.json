@@ -1192,8 +1192,9 @@
     "more_info": "For more information, visit"
   },
   "demo": {
-    "badge": "Demo mode · data resets every 6h",
+    "badge": "Demo mode",
     "locked": "Locked in demo mode",
-    "uploadCap": "Upload size is capped in demo mode"
+    "uploadCap": "Upload size is capped in demo mode",
+    "storageFull": "R2 storage limit reached"
   }
 }

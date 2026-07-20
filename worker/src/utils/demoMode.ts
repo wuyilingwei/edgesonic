@@ -42,6 +42,9 @@ export const DEMO_LOCKED_FEATURE_KEYS = new Set<string>([
   "metadata_recheck_interval_hours",
   "lrc_backfill_interval_hours",
   "artist_scrape_interval_hours",
+  // Cumulative R2 storage ceiling — locked in demo so a visitor can't
+  // lift the cap from the Settings UI.
+  "r2_max_storage_bytes",
 ]);
 
 export function isDemoMode(env: { DEMO_MODE?: string }): boolean {
@@ -63,6 +66,51 @@ export function demoMaxUploadBytes(env: { DEMO_MAX_UPLOAD_BYTES?: string }): num
   const raw = parseInt(env.DEMO_MAX_UPLOAD_BYTES || "", 10);
   if (Number.isFinite(raw) && raw > 0) return Math.min(raw, 256 * 1024 * 1024);
   return 50 * 1024 * 1024; // 50 MiB default in demo
+}
+
+// Resolve the cumulative R2 storage ceiling. Resolution order:
+//   1. env.R2_MAX_LIMIT (set via wrangler [vars] or secret)
+//   2. D1 feature_strings row "r2_max_storage_bytes"
+//   3. Default: 100 MiB in demo mode, 0 (disabled) in normal mode.
+//
+// In demo mode the "r2_max_storage_bytes" feature_strings row is locked
+// against edits via DEMO_LOCKED_FEATURE_KEYS, so a visitor cannot lift the
+// cap by editing settings. In normal mode the operator can adjust it from
+// the Settings UI like any other feature_string.
+export async function r2MaxStorageBytes(
+  env: { R2_MAX_LIMIT?: string; DB: D1Database; DEMO_MODE?: string },
+): Promise<number> {
+  const envRaw = parseInt(env.R2_MAX_LIMIT || "", 10);
+  if (Number.isFinite(envRaw) && envRaw >= 0) return envRaw;
+  // Fall back to D1 feature_strings.
+  try {
+    const row = await env.DB
+      .prepare("SELECT value FROM feature_strings WHERE key = ?")
+      .bind("r2_max_storage_bytes")
+      .first<{ value: string }>();
+    if (row) {
+      const d1Raw = parseInt(row.value, 10);
+      if (Number.isFinite(d1Raw) && d1Raw >= 0) return d1Raw;
+    }
+  } catch {
+    // feature_strings table may be absent on a fresh DB; fall through.
+  }
+  return isDemoMode(env) ? 100 * 1024 * 1024 : 0;
+}
+
+// Sum the size of every object currently in the R2 bucket. Used by the
+// upload guard to enforce r2MaxStorageBytes. R2 list returns up to 1000
+// keys per page; loop until exhausted.
+export async function demoR2TotalBytes(bucket: R2Bucket): Promise<number> {
+  let total = 0;
+  let cursor: string | undefined;
+  do {
+    const listed = await bucket.list({ cursor, limit: 1000 });
+    for (const obj of listed.objects) total += obj.size;
+    if (!listed.truncated) break;
+    cursor = listed.cursor;
+  } while (cursor);
+  return total;
 }
 
 // R2 key prefixes that survive the periodic demo reset. Everything else

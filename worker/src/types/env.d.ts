@@ -77,4 +77,11 @@ interface Env {
   // Per-upload byte ceiling in demo mode (default 50 MiB). Enforced by the
   // Worker at the /files/upload and /work/upload endpoints.
   DEMO_MAX_UPLOAD_BYTES?: string;
+  // Total R2 storage ceiling in bytes. Applies in BOTH normal and demo
+  // modes. Normal mode: read from this env var first, else fall back to
+  // the D1 feature_strings row "r2_max_storage_bytes". Demo mode: same
+  // resolution, but the feature_strings row is also locked against edits
+  // via DEMO_LOCKED_FEATURE_KEYS so a visitor can't lift the cap. 0
+  // disables the cumulative guard (per-upload cap still applies in demo).
+  R2_MAX_LIMIT?: string;
 }

@@ -31,6 +31,13 @@ MAX_PROXY_DEPTH = "3"
 # 部署脚本会覆盖此值；保留 dev 以避免本地默认值被误认为 Unix 时间戳。
 WORKER_VERSION = "dev"
 EDGESONIC_VERSION = "dev"
+# Optional cumulative R2 storage ceiling in bytes. When set, the Worker sums
+# existing R2 object sizes before each /files/upload and /work/upload and
+# rejects uploads that would push the total past this limit. 0 disables the
+# guard. Falls back to the D1 feature_strings row "r2_max_storage_bytes" when
+# unset here. Demo mode locks the D1 row against edits so a visitor can't
+# lift the cap from the Settings UI.
+# R2_MAX_LIMIT = "0"
 
 # Static Assets (Vue frontend) — 需先 `npm run build:web` 生成 web/dist
 [assets]

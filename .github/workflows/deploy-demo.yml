@@ -53,6 +53,11 @@ on:
         required: false
         default: '52428800'
         type: string
+      r2_max_limit:
+        description: 'Total R2 storage ceiling in bytes (default 104857600 = 100 MiB). 0 disables the cumulative guard.'
+        required: false
+        default: '104857600'
+        type: string
 
 jobs:
   deploy:
@@ -229,9 +234,9 @@ jobs:
           AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
           API="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/r2/buckets"
 
-          # Skip entirely when the repo has no demo-library/ directory.
-          if [ ! -d demo-library ] || [ -z "$(find demo-library -type f -print -quit)" ]; then
-            echo "::notice::No demo-library/ directory in the repo — skipping reupload. Demo will start with an empty library."
+          # Skip entirely when the repo has no .github/demo/ directory.
+          if [ ! -d .github/demo ] || [ -z "$(find .github/demo -type f -print -quit)" ]; then
+            echo "::notice::No .github/demo/ directory in the repo — skipping reupload. Demo will start with an empty library."
             exit 0
           fi
 
@@ -256,30 +261,32 @@ jobs:
           # Give R2 a beat to settle before we start PUTting objects.
           sleep 2
 
-          # Upload every file under demo-library/ from the repo checkout.
-          # Repo path demo-library/<artist>/<album>/<track>.mp3 →
-          # R2 key demo-library/<artist>/<album>/<track>.mp3.
+          # Upload every file under .github/demo/ from the repo checkout.
+          # Repo path .github/demo/<artist>/<album>/<track>.mp3 →
+          # R2 key demo-library/<artist>/<album>/<track>.mp3 (the demo Worker
+          # keeps demo-library/ as the whitelisted prefix).
           COUNT=0
           while IFS= read -r -d '' FILE; do
-            KEY="${FILE#demo-library/}"
+            KEY="${FILE#.github/demo/}"
             CONTENT_TYPE="$(file --mime-type -b "$FILE")"
             echo "  → $R2_NAME/demo-library/$KEY"
             wrangler r2 object put "$R2_NAME/demo-library/$KEY" --file "$FILE" --content-type "$CONTENT_TYPE" >/dev/null
             COUNT=$((COUNT + 1))
-          done < <(find demo-library -type f -print0)
+          done < <(find .github/demo -type f -print0)
           echo "::notice::Uploaded $COUNT files into $R2_NAME/demo-library/"
 
       - name: Deploy demo Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           MAXUP: ${{ github.event.inputs.demo_max_upload_bytes || '52428800' }}
+          R2LIMIT: ${{ github.event.inputs.r2_max_limit || '104857600' }}
         run: |
           set -euo pipefail
           BUILD_INFO=$(cat edgesonic-release/web/dist/build-info.json)
           node -e 'const v=JSON.parse(process.argv[1]); if (!v.version || !v.buildTime || Number.isNaN(Date.parse(v.buildTime))) process.exit(1)' "$BUILD_INFO"
           VERSION=$(node -e 'console.log(JSON.parse(process.argv[1]).version)' "$BUILD_INFO")
           BUILD_TIME=$(node -e 'console.log(JSON.parse(process.argv[1]).buildTime)' "$BUILD_INFO")
-          echo "Deploying demo Worker edgesonic-demo with WORKER_VERSION=$VERSION, DEMO_MODE=1"
+          echo "Deploying demo Worker edgesonic-demo with WORKER_VERSION=$VERSION, DEMO_MODE=1, R2_MAX_LIMIT=$R2LIMIT"
           wrangler deploy \
             --config edgesonic-release/worker/wrangler.toml \
             --containers-rollout=none \
@@ -287,7 +294,8 @@ jobs:
             --var EDGESONIC_VERSION:"${VERSION}" \
             --var EDGESONIC_BUILD_TIME:"${BUILD_TIME}" \
             --var DEMO_MODE:"1" \
-            --var DEMO_MAX_UPLOAD_BYTES:"${MAXUP}"
+            --var DEMO_MAX_UPLOAD_BYTES:"${MAXUP}" \
+            --var R2_MAX_LIMIT:"${R2LIMIT}"
 
       - name: Post-deploy reminder
         run: |

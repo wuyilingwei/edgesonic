@@ -153,7 +153,7 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
 
   <div v-if="demoMode.enabled" class="demo-badge" role="status" aria-live="polite">
     <span aria-hidden="true">⚙</span>
-    <span class="demo-badge-text">{{ t("demo.badge", "Demo mode · data resets every 6h") }}</span>
+    <span class="demo-badge-text">{{ t("demo.badge") }}</span>
   </div>
 
   <Transition name="toast">

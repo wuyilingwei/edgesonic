@@ -19,6 +19,7 @@ import {
   isDemoDisabledPerm,
   isDemoLockedFeature,
   demoMaxUploadBytes,
+  r2MaxStorageBytes,
   DEMO_DISABLED_PERMS,
 } from "../../worker/src/utils/demoMode";
 import { accountRoutes } from "../../worker/src/endpoints/subsonic/account";
@@ -71,7 +72,8 @@ function buildDb() {
       ('worker_pool_enabled', 1, '', 0);
     INSERT INTO feature_strings (key, value, description, updated_at) VALUES
       ('transcode_engine', 'browser_pool', '', 0),
-      ('scan_interval_hours', '24', '', 0);
+      ('scan_interval_hours', '24', '', 0),
+      ('r2_max_storage_bytes', '52428800', '', 0);
   `);
   return sqlite;
 }
@@ -114,11 +116,29 @@ async function main() {
     assert(isDemoLockedFeature("scan_interval_hours"), "scan_interval_hours locked");
     assert(isDemoLockedFeature("lastfm_api_key") === false, "lastfm_api_key not locked (operator can rotate)");
     assert(isDemoLockedFeature("r2_free_allocation_gb") === false, "r2_free_allocation_gb not locked");
+    assert(isDemoLockedFeature("r2_max_storage_bytes"), "r2_max_storage_bytes locked in demo (visitor can't lift cap)");
 
     assert(demoMaxUploadBytes({}) === 50 * 1024 * 1024, "default cap 50 MiB");
     assert(demoMaxUploadBytes({ DEMO_MAX_UPLOAD_BYTES: "1048576" }) === 1024 * 1024, "override 1 MiB");
     assert(demoMaxUploadBytes({ DEMO_MAX_UPLOAD_BYTES: "999999999999" }) === 256 * 1024 * 1024, "capped at 256 MiB");
     assert(demoMaxUploadBytes({ DEMO_MAX_UPLOAD_BYTES: "abc" }) === 50 * 1024 * 1024, "invalid → default");
+  }
+
+  console.log("\nr2MaxStorageBytes resolution order (env → D1 → default):");
+  {
+    const sqlite = buildDb();
+    const db = makeD1(sqlite);
+    // 1. env var wins.
+    assert(await r2MaxStorageBytes({ R2_MAX_LIMIT: "123456", DB: db }) === 123456, "env R2_MAX_LIMIT wins");
+    // 2. env empty → D1 feature_strings row (seeded at 52428800 = 50 MiB).
+    assert(await r2MaxStorageBytes({ DB: db }) === 52428800, "falls back to D1 feature_strings");
+    // 3. env empty + D1 row missing → demo default 100 MiB.
+    sqlite.prepare("DELETE FROM feature_strings WHERE key = 'r2_max_storage_bytes'").run();
+    assert(await r2MaxStorageBytes({ DB: db, DEMO_MODE: "1" }) === 100 * 1024 * 1024, "demo default 100 MiB");
+    // 4. env empty + D1 row missing + non-demo → 0 (disabled).
+    assert(await r2MaxStorageBytes({ DB: db }) === 0, "non-demo default 0 (disabled)");
+    // 5. env var 0 explicitly disables even in demo.
+    assert(await r2MaxStorageBytes({ R2_MAX_LIMIT: "0", DB: db, DEMO_MODE: "1" }) === 0, "env 0 disables in demo too");
   }
 
   console.log("\nhasPermission: demo forces disabled perms off even for level 3:");

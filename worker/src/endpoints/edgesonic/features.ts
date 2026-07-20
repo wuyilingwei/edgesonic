@@ -157,6 +157,9 @@ const STRING_FEATURE_KEYS = new Set([
     // song_masters.lyrics from a sibling .lrc file for songs that were never
     // caught by 094's scan-time/on-demand sidecar checks. 0=disabled.
     "lrc_backfill_interval_hours",
+    // Cumulative R2 storage ceiling in bytes (0 = disabled). Editable in
+    // normal mode; locked in demo mode via DEMO_LOCKED_FEATURE_KEYS.
+    "r2_max_storage_bytes",
   ]);
 
 // Per-key validation. Returns null on success, error message otherwise.
@@ -297,6 +300,13 @@ function validateFeatureString(key: string, value: string): string | null {
       if (!/^\d+$/.test(value)) return "lrc_backfill_interval_hours must be a non-negative integer";
       const n = parseInt(value, 10);
       if (n < 0 || n > 168) return "lrc_backfill_interval_hours must be between 0 and 168";
+      return null;
+    }
+    case "r2_max_storage_bytes": {
+      // Cumulative R2 storage ceiling in bytes. 0 disables the guard.
+      if (!/^\d+$/.test(value)) return "r2_max_storage_bytes must be a non-negative integer";
+      const n = parseInt(value, 10);
+      if (n < 0 || n > 1_000_000_000_000) return "r2_max_storage_bytes must be between 0 and 1TB";
       return null;
     }
     case "worker_poll_interval_seconds": {

@@ -40,7 +40,7 @@ import type { TranscodePayload } from "../../transcode/browser_pool";
 import { verifyUploadToken } from "../../utils/workUploadToken";
 import { createQueries } from "../../db/queries";
 import { getProfile } from "../../transcode/profiles";
-import { isDemoMode, demoMaxUploadBytes } from "../../utils/demoMode";
+import { isDemoMode, demoMaxUploadBytes, r2MaxStorageBytes, demoR2TotalBytes } from "../../utils/demoMode";
 
 export const workUploadRoutes = new Hono<{
   Bindings: Env;
@@ -121,6 +121,19 @@ workUploadRoutes.post("/work/upload", async (c) => {
   }
   if (buf.byteLength > cap) {
     return c.json({ ok: false, error: "Payload too large" }, 413);
+  }
+
+  // 4b. Cumulative R2 storage guard (both modes). Transcoded outputs land
+  // under cache/transcoded/ and count against the same ceiling as originals.
+  const totalCap = await r2MaxStorageBytes(env);
+  if (totalCap > 0) {
+    const used = await demoR2TotalBytes(env.MUSIC_BUCKET);
+    if (used + buf.byteLength > totalCap) {
+      return c.json({
+        ok: false,
+        error: `R2 storage limit reached: ${used}/${totalCap} bytes already used`,
+      }, 413);
+    }
   }
 
   // 5. Write to R2. Path scheme `cache/transcoded/<instanceId>_<profile>.<suffix>`

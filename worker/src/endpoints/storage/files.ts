@@ -51,7 +51,7 @@ filesRoutes.use("*", async (c, next) => {
 // (no song_masters row) — the user can see it in the Files tree browser.
 import { dispatchWork } from "../edgesonic/work";
 import { getFeatureString } from "../../utils/features";
-import { isDemoMode, demoMaxUploadBytes } from "../../utils/demoMode";
+import { isDemoMode, demoMaxUploadBytes, r2MaxStorageBytes, demoR2TotalBytes } from "../../utils/demoMode";
 
 filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const env = c.env as Env;
@@ -74,13 +74,29 @@ filesRoutes.post("/files/upload", permissionMiddleware("upload"), async (c) => {
   const now = Math.floor(Date.now() / 1000);
   const sizeHeader = parseInt(c.req.header("Content-Length") || "0", 10);
 
-  // Demo mode: cap upload size so a visitor can't fill R2 with multi-GB
-  // payloads. The non-demo path stays uncapped (aside from the Worker
-  // sub-request limit).
+  // Demo mode: per-upload cap. The cumulative R2 storage cap below applies
+  // in both normal and demo modes.
   if (isDemoMode(env)) {
     const cap = demoMaxUploadBytes(env);
     if (sizeHeader && sizeHeader > cap) {
       return c.json({ ok: false, error: `Demo upload cap is ${cap} bytes` }, 413);
+    }
+  }
+
+  // Cumulative R2 storage guard (both modes). When R2_MAX_LIMIT env or the
+  // r2_max_storage_bytes feature_string is set, sum existing R2 object sizes
+  // and reject uploads that would push the total past the ceiling.
+  if (source !== "webdav") {
+    const totalCap = await r2MaxStorageBytes(env);
+    if (totalCap > 0) {
+      const used = await demoR2TotalBytes(env.MUSIC_BUCKET);
+      const projected = used + (sizeHeader || 0);
+      if (projected > totalCap) {
+        return c.json({
+          ok: false,
+          error: `R2 storage limit reached: ${used}/${totalCap} bytes already used`,
+        }, 413);
+      }
     }
   }
 
