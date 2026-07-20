@@ -11,8 +11,6 @@ export const DEMO_DISABLED_PERMS = [
   "maintenance_reclaim",
   "maintenance_reset",
   "delete",
-  "manage_users",
-  "manage_sources",
 ] as const;
 
 const DEMO_DISABLED_PERM_SET = new Set<string>(DEMO_DISABLED_PERMS);

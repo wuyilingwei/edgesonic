@@ -149,8 +149,12 @@ async function main() {
     assert(await hasPermission(envDemo, { level: 3 }, "dispatch_work") === false, "demo L3 dispatch_work=false");
     assert(await hasPermission(envDemo, { level: 3 }, "delete") === false, "demo L3 delete=false");
     assert(await hasPermission(envDemo, { level: 3 }, "maintenance_cleanup") === false, "demo L3 maintenance_cleanup=false");
-    assert(await hasPermission(envDemo, { level: 3 }, "manage_users") === false, "demo L3 manage_users=false");
-    assert(await hasPermission(envDemo, { level: 3 }, "manage_sources") === false, "demo L3 manage_sources=false");
+    // manage_users / manage_sources stay available in demo — the workflow
+    // resets D1/R2 on each deploy, so the operator can let visitors explore
+    // these panels. Only truly destructive or environment-breaking perms are
+    // locked.
+    assert(await hasPermission(envDemo, { level: 3 }, "manage_users") === true, "demo L3 manage_users=true (workflow resets)");
+    assert(await hasPermission(envDemo, { level: 3 }, "manage_sources") === true, "demo L3 manage_sources=true (workflow resets)");
     // Non-disabled perms still flow through level 3 short-circuit.
     assert(await hasPermission(envDemo, { level: 3 }, "stream") === true, "demo L3 stream=true");
     assert(await hasPermission(envDemo, { level: 3 }, "manage_settings") === true, "demo L3 manage_settings=true");
@@ -171,7 +175,9 @@ async function main() {
     assert(superPerms["manage_cloudflare"] === false, "effective demo L3 manage_cloudflare=false");
     assert(superPerms["dispatch_work"] === false, "effective demo L3 dispatch_work=false");
     assert(superPerms["delete"] === false, "effective demo L3 delete=false");
-    assert(superPerms["manage_users"] === false, "effective demo L3 manage_users=false");
+    // manage_users / manage_sources stay on in demo (workflow resets).
+    assert(superPerms["manage_users"] === true, "effective demo L3 manage_users=true");
+    assert(superPerms["manage_sources"] === true, "effective demo L3 manage_sources=true");
     assert(superPerms["stream"] === true, "effective demo L3 stream=true");
     assert(superPerms["manage_settings"] === true, "effective demo L3 manage_settings=true");
 
