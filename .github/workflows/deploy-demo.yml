@@ -88,6 +88,17 @@ jobs:
           echo "::add-mask::${{ secrets.CLOUDFLARE_API_TOKEN }}"
           echo "::add-mask::${{ secrets.CLOUDFLARE_ACCOUNT_ID }}"
 
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          # Sparse checkout: only the .github/demo/ subtree is needed for
+          # the env defaults + sample library. Keeps the demo deploy fast
+          # and avoids dragging the whole repo into the runner.
+          sparse-checkout: |
+            .github/demo
+          # 0 downloads only the commit's tree, not the full history.
+          fetch-depth: 0
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
