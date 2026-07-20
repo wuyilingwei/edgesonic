@@ -160,8 +160,10 @@ jobs:
 
           # INSTANCE_ID for the demo Worker — deterministic per repo so re-runs
           # don't drift. Derive from the repo full name + "demo" so it's stable
-          # but distinct from the production instance.
-          INST=$(uuidgen --namespace @dns --name "${{ github.repository }}-demo" | tr '[:upper:]' '[:lower:]')
+          # but distinct from the production instance. Use python3 uuid5
+          # (SHA-1 namespace) for cross-platform determinism; `uuidgen
+          # --namespace @dns` syntax varies between Linux distros.
+          INST=$(python3 -c 'import uuid,sys; print(str(uuid.uuid5(uuid.NAMESPACE_DNS, sys.argv[1] + "-demo")))' "${{ github.repository }}")
           echo "inst=$INST" >> "$GITHUB_OUTPUT"
 
       - name: Generate demo wrangler.toml
