@@ -338,27 +338,27 @@ jobs:
           done
 
           # Upload every file under .github/demo/data/ from the repo checkout.
-          # Repo path .github/demo/data/<path> → R2 key demo-library/<path>.
-          # The demo Worker keeps demo-library/ as the whitelisted prefix so
-          # the periodic cleanup doesn't touch uploaded demo content.
+          # Repo path .github/demo/data/<path> → R2 key music/<path>. The demo
+          # Worker serves from the same `music/` prefix the normal app uses,
+          # so no demo-specific path logic is needed in the frontend.
           COUNT=0
           while IFS= read -r -d '' FILE; do
             # Skip macOS .DS_Store metadata files.
             case "$(basename "$FILE")" in .DS_Store) continue;; esac
             KEY="${FILE#.github/demo/data/}"
             CONTENT_TYPE="$(file --mime-type -b "$FILE")"
-            echo "  → $R2_NAME/demo-library/$KEY"
+            echo "  → $R2_NAME/music/$KEY"
             # R2 object commands otherwise default to the runner's local
             # simulator. Explicit remote mode is required to restore the
-            # Cloudflare bucket that the demo Worker is bound to.
-            wrangler r2 object put "$R2_NAME/demo-library/$KEY" \
+            # Cloudflare bucket the demo Worker is bound to.
+            wrangler r2 object put "$R2_NAME/music/$KEY" \
               --remote \
               --config edgesonic-release/worker/wrangler.toml \
               --file "$FILE" \
               --content-type "$CONTENT_TYPE" >/dev/null
             COUNT=$((COUNT + 1))
           done < <(find .github/demo/data -type f -print0)
-          echo "::notice::Uploaded $COUNT files into $R2_NAME/demo-library/"
+          echo "::notice::Uploaded $COUNT files into $R2_NAME/music/"
           echo "file_count=$COUNT" >> "$GITHUB_OUTPUT"
 
       - name: Deploy demo Worker

@@ -166,8 +166,10 @@ export async function demoR2TotalBytes(bucket: R2Bucket): Promise<number> {
 }
 
 // R2 key prefixes that survive the periodic demo reset. Everything else
-// under MUSIC_BUCKET is deleted every DEMO_RESET_CRON tick.
-export const DEMO_R2_KEEP_PREFIXES = ["demo-library/", "avatars/"];
+// under MUSIC_BUCKET is deleted every DEMO_RESET_CRON tick. The demo
+// library is uploaded under `music/` — the same prefix the normal app
+// serves from — so no demo-specific path logic is needed in the frontend.
+export const DEMO_R2_KEEP_PREFIXES = ["music/", "avatars/"];
 
 export function isDemoKeptR2Key(key: string): boolean {
   return DEMO_R2_KEEP_PREFIXES.some((p) => key.startsWith(p));
