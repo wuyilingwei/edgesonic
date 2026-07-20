@@ -49,14 +49,14 @@ on:
         default: 'wuyilingwei/edgesonic'
         type: string
       demo_max_upload_bytes:
-        description: 'Per-upload byte cap (default 52428800 = 50 MiB).'
+        description: 'Per-upload byte cap (default 52428800 = 50 MiB). Leave empty to read from .github/demo/env.'
         required: false
-        default: '52428800'
+        default: ''
         type: string
       r2_max_limit:
-        description: 'Total R2 storage ceiling in bytes (default 104857600 = 100 MiB). 0 disables the cumulative guard.'
+        description: 'Total R2 storage ceiling in bytes (default 104857600 = 100 MiB). Leave empty to read from .github/demo/env.'
         required: false
-        default: '104857600'
+        default: ''
         type: string
 
 jobs:
@@ -223,6 +223,27 @@ jobs:
             echo "users table already has $USER_COUNT row(s) — skipping seed."
           fi
 
+      - name: Load demo env defaults
+        id: demoenv
+        run: |
+          set -euo pipefail
+          # .github/demo/env is a simple KEY=VALUE file shipping demo-
+          # specific defaults: DEMO_MAX_UPLOAD_BYTES, R2_MAX_LIMIT, etc.
+          # Workflow inputs override these when non-empty.
+          MAXUP_DEFAULT="52428800"
+          R2LIMIT_DEFAULT="104857600"
+          if [ -f .github/demo/env ]; then
+            echo "Loading .github/demo/env..."
+            # shellcheck disable=SC1090
+            set -a; . .github/demo/env; set +a
+            [ -n "${DEMO_MAX_UPLOAD_BYTES:-}" ] && MAXUP_DEFAULT="$DEMO_MAX_UPLOAD_BYTES"
+            [ -n "${R2_MAX_LIMIT:-}" ] && R2LIMIT_DEFAULT="$R2_MAX_LIMIT"
+          else
+            echo "::notice::.github/demo/env not found — using built-in defaults."
+          fi
+          echo "maxup=${MAXUP_DEFAULT}" >> "$GITHUB_OUTPUT"
+          echo "r2limit=${R2LIMIT_DEFAULT}" >> "$GITHUB_OUTPUT"
+
       - name: Reupload demo-library/ from repo
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -234,9 +255,9 @@ jobs:
           AUTH="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
           API="https://api.cloudflare.com/client/v4/accounts/$ACCOUNT/r2/buckets"
 
-          # Skip entirely when the repo has no .github/demo/ directory.
-          if [ ! -d .github/demo ] || [ -z "$(find .github/demo -type f -print -quit)" ]; then
-            echo "::notice::No .github/demo/ directory in the repo — skipping reupload. Demo will start with an empty library."
+          # Skip entirely when the repo has no .github/demo/data/ directory.
+          if [ ! -d .github/demo/data ] || [ -z "$(find .github/demo/data -type f ! -name '.DS_Store' -print -quit)" ]; then
+            echo "::notice::No .github/demo/data/ directory in the repo — skipping reupload. Demo will start with an empty library."
             exit 0
           fi
 
@@ -261,32 +282,34 @@ jobs:
           # Give R2 a beat to settle before we start PUTting objects.
           sleep 2
 
-          # Upload every file under .github/demo/ from the repo checkout.
-          # Repo path .github/demo/<artist>/<album>/<track>.mp3 →
-          # R2 key demo-library/<artist>/<album>/<track>.mp3 (the demo Worker
-          # keeps demo-library/ as the whitelisted prefix).
+          # Upload every file under .github/demo/data/ from the repo checkout.
+          # Repo path .github/demo/data/<path> → R2 key demo-library/<path>.
+          # The demo Worker keeps demo-library/ as the whitelisted prefix so
+          # the periodic cleanup doesn't touch uploaded demo content.
           COUNT=0
           while IFS= read -r -d '' FILE; do
-            KEY="${FILE#.github/demo/}"
+            # Skip macOS .DS_Store metadata files.
+            case "$(basename "$FILE")" in .DS_Store) continue;; esac
+            KEY="${FILE#.github/demo/data/}"
             CONTENT_TYPE="$(file --mime-type -b "$FILE")"
             echo "  → $R2_NAME/demo-library/$KEY"
             wrangler r2 object put "$R2_NAME/demo-library/$KEY" --file "$FILE" --content-type "$CONTENT_TYPE" >/dev/null
             COUNT=$((COUNT + 1))
-          done < <(find .github/demo -type f -print0)
+          done < <(find .github/demo/data -type f -print0)
           echo "::notice::Uploaded $COUNT files into $R2_NAME/demo-library/"
 
       - name: Deploy demo Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          MAXUP: ${{ github.event.inputs.demo_max_upload_bytes || '52428800' }}
-          R2LIMIT: ${{ github.event.inputs.r2_max_limit || '104857600' }}
+          MAXUP: ${{ github.event.inputs.demo_max_upload_bytes || steps.demoenv.outputs.maxup }}
+          R2LIMIT: ${{ github.event.inputs.r2_max_limit || steps.demoenv.outputs.r2limit }}
         run: |
           set -euo pipefail
           BUILD_INFO=$(cat edgesonic-release/web/dist/build-info.json)
           node -e 'const v=JSON.parse(process.argv[1]); if (!v.version || !v.buildTime || Number.isNaN(Date.parse(v.buildTime))) process.exit(1)' "$BUILD_INFO"
           VERSION=$(node -e 'console.log(JSON.parse(process.argv[1]).version)' "$BUILD_INFO")
           BUILD_TIME=$(node -e 'console.log(JSON.parse(process.argv[1]).buildTime)' "$BUILD_INFO")
-          echo "Deploying demo Worker edgesonic-demo with WORKER_VERSION=$VERSION, DEMO_MODE=1, R2_MAX_LIMIT=$R2LIMIT"
+          echo "Deploying demo Worker edgesonic-demo with WORKER_VERSION=$VERSION, DEMO_MODE=1, DEMO_MAX_UPLOAD_BYTES=$MAXUP, R2_MAX_LIMIT=$R2LIMIT"
           wrangler deploy \
             --config edgesonic-release/worker/wrangler.toml \
             --containers-rollout=none \

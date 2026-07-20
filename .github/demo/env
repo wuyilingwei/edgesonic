@@ -1,0 +1,10 @@
+# EdgeSonic demo defaults.
+# Simple KEY=VALUE file sourced by .github/workflows/deploy-demo.yml.
+# Workflow_dispatch inputs override these when non-empty.
+
+# Per-upload byte ceiling. Default 50 MiB.
+DEMO_MAX_UPLOAD_BYTES=52428800
+
+# Total R2 storage ceiling in bytes. Default 100 MiB.
+# 0 disables the cumulative guard (per-upload cap still applies).
+R2_MAX_LIMIT=104857600
