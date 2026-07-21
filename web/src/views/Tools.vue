@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
 import { useWorkerPool } from "../stores/workerPool";
 import { mapConcurrent } from "../lib/concurrency";
+import Icon from "../components/Icon.vue";
 import { normalizeForMatch } from "../lib/trackMatch";
 
 const { t } = useI18n();
@@ -60,10 +61,10 @@ const etaText = computed<string>(() => {
   const effectiveSpeed = speed * 0.8;
   if (effectiveSpeed <= 0) return "—";
   const minutes = Math.ceil(remaining / effectiveSpeed);
-  if (minutes < 60) return `${minutes} 分钟`;
+  if (minutes < 60) return t("common.minutes", { n: minutes });
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
-  return mins > 0 ? `${hours} 小时 ${mins} 分钟` : `${hours} 小时`;
+  return mins > 0 ? t("common.hoursMinutes", { h: hours, m: mins }) : t("common.hours", { n: hours });
 });
 
 async function loadWorkStatus() {
@@ -86,7 +87,7 @@ function saveMaxConcurrent() {
   maxConcurrentBusy.value = true;
   try {
     workerPool.setMaxConcurrent(n);
-    showToast("并发度已保存到本机");
+    showToast(t("tools.workPool.concurrencySaved"));
   } finally {
     maxConcurrentBusy.value = false;
   }
@@ -170,11 +171,11 @@ async function rescanSelectedOrphans() {
   orphanRescanBusy.value = true;
   try {
     const res = await rescanSongs(orphanSelected.value);
-    showToast(res.ok ? `已重新加入扫描队列 ${res.dispatched ?? 0} 个` : `重新扫描失败：${res.error || "unknown"}`, res.ok ? "success" : "error");
+    showToast(res.ok ? t("tools.orphan.rescued", { n: res.dispatched ?? 0 }) : t("tools.orphan.rescanFailed", { error: res.error || "unknown" }), res.ok ? "success" : "error");
     orphanSelected.value = [];
     await loadOrphanSongs();
   } catch (e) {
-    showToast(`重新扫描失败：${e instanceof Error ? e.message : String(e)}`, "error");
+    showToast(t("tools.orphan.rescanFailed", { error: e instanceof Error ? e.message : String(e) }), "error");
   } finally {
     orphanRescanBusy.value = false;
   }
@@ -187,14 +188,15 @@ async function deleteSelectedOrphans() {
     const data = JSON.parse(await edgesonicPost("maintenance/orphanSongs/delete", { masterIds: orphanSelected.value })) as
       { ok?: boolean; deleted?: number; failed?: number; error?: string };
     if (data.ok) {
-      showToast(`已删除 ${data.deleted ?? 0} 首${data.failed ? `，失败 ${data.failed} 首` : ""}`, data.failed ? "error" : "success");
+      const failedSuffix = data.failed ? t("tools.orphan.deletedFailedSuffix", { n: data.failed }) : "";
+      showToast(t("tools.orphan.deleted", { n: data.deleted ?? 0, failed: failedSuffix }), data.failed ? "error" : "success");
     } else {
-      showToast(`删除失败：${data.error || "unknown"}`, "error");
+      showToast(t("tools.orphan.deleteFailed", { error: data.error || "unknown" }), "error");
     }
     orphanSelected.value = [];
     await loadOrphanSongs();
   } catch (e) {
-    showToast(`删除失败：${e instanceof Error ? e.message : String(e)}`, "error");
+    showToast(t("tools.orphan.deleteFailed", { error: e instanceof Error ? e.message : String(e) }), "error");
   } finally {
     orphanDeleteBusy.value = false;
   }
@@ -286,7 +288,7 @@ const migrateMode = ref<"clone" | "push">("clone");
 
 interface CloneForm { url: string; username: string; password: string; }
 const cloneForm = ref<CloneForm>({ url: "", username: "", password: "" });
-const cloneMetadataEnabled = ref(true);
+const cloneMetadataEnabled = ref(false);
 const cloneAudioEnabled = ref(false);
 const cloneAudioMode = ref<"browser" | "worker">("browser");
 const cloneStarredEnabled = ref(true);
@@ -796,7 +798,7 @@ async function cloneMetadataStage() {
           : songs;
         for (const s of keptSongs) out.push({ s, albumNode, artist: meta.artist });
       } catch (e: unknown) {
-        cloneLogPush(`metadata: ✗ album ${meta.name} (scan) — ${e instanceof Error ? e.message : String(e)}`);
+        cloneLogPush(`metadata: [FAIL] album ${meta.name} (scan) — ${e instanceof Error ? e.message : String(e)}`);
       }
     }, () => cloneCancelRequested.value);
     return out;
@@ -824,7 +826,7 @@ async function cloneMetadataStage() {
       if (sid) { cloneCache.metadataDone.add(sid); markCloneCacheDirty(); }
     } catch (e: unknown) {
       stage.failed++;
-      cloneLogPush(`metadata: ✗ ${payload.song.title} — ${e instanceof Error ? e.message : String(e)}`);
+      cloneLogPush(`metadata: [FAIL] ${payload.song.title} — ${e instanceof Error ? e.message : String(e)}`);
     }
   // 159: mapConcurrent's isCancelled param was never wired up here — it only
   // stopped a lane from picking up the *next* item, but nothing was even
@@ -951,10 +953,10 @@ async function cloneAudioStage() {
         if (!data.ok) throw new Error(data.error || "fetchAudioToR2 rejected");
         stage.done++;
         if (s.id) { cloneCache.audioDone.add(s.id); markCloneCacheDirty(); }
-        cloneLogPush(`audio: ✓ ${s.artist} — ${s.title} (${fmtBytes(data.size || s.size || 0)}, worker)`);
+        cloneLogPush(`audio: [OK] ${s.artist} — ${s.title} (${fmtBytes(data.size || s.size || 0)}, worker)`);
       } catch (e: unknown) {
         stage.failed++;
-        cloneLogPush(`audio: ✗ ${s.artist} — ${s.title} — ${e instanceof Error ? e.message : String(e)}`);
+        cloneLogPush(`audio: [FAIL] ${s.artist} — ${s.title} — ${e instanceof Error ? e.message : String(e)}`);
       }
       return;
     }
@@ -1003,10 +1005,10 @@ async function cloneAudioStage() {
       if (!data.ok) throw new Error(data.error || "ingestAudio rejected");
       stage.done++;
       if (s.id) { cloneCache.audioDone.add(s.id); markCloneCacheDirty(); }
-      cloneLogPush(`audio: ✓ ${s.artist} — ${s.title} (${fmtBytes(buf.byteLength)})`);
+      cloneLogPush(`audio: [OK] ${s.artist} — ${s.title} (${fmtBytes(buf.byteLength)})`);
     } catch (e: unknown) {
       stage.failed++;
-      cloneLogPush(`audio: ✗ ${s.artist} — ${s.title} — ${e instanceof Error ? e.message : String(e)}`);
+      cloneLogPush(`audio: [FAIL] ${s.artist} — ${s.title} — ${e instanceof Error ? e.message : String(e)}`);
     }
   }, () => cloneCancelRequested.value);
   stage.status = cloneCancelRequested.value ? "skipped" : "done";
@@ -1116,10 +1118,10 @@ async function clonePlaylistsStage(targetUser: string) {
       }
       const result = await upsertPlaylistChunked({ id, name, owner: targetUser, public: isPublic, comment }, entries);
       stage.done++;
-      cloneLogPush(`playlists: ✓ ${name} (${entries.length - result.unmatched}/${entries.length} entries matched${result.unmatched ? `, ${result.unmatched} missed` : ""})`);
+      cloneLogPush(`playlists: [OK] ${name} (${entries.length - result.unmatched}/${entries.length} entries matched${result.unmatched ? `, ${result.unmatched} missed` : ""})`);
     } catch (e: unknown) {
       stage.failed++;
-      cloneLogPush(`playlists: ✗ ${jget(p, "name") || "?"} — ${e instanceof Error ? e.message : String(e)}`);
+      cloneLogPush(`playlists: [FAIL] ${jget(p, "name") || "?"} — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   stage.status = cloneCancelRequested.value ? "skipped" : "done";
@@ -1160,12 +1162,12 @@ async function cloneStarredStage(targetUser: string) {
       const result = await upsertStarredChunked(targetUser, items);
       stage.done = items.length - result.unmatched;
       stage.failed = result.unmatched;
-      cloneLogPush(`starred: ✓ ${items.length - result.unmatched}/${items.length} applied${result.unmatched ? `, ${result.unmatched} missed` : ""}`);
+      cloneLogPush(`starred: [OK] ${items.length - result.unmatched}/${items.length} applied${result.unmatched ? `, ${result.unmatched} missed` : ""}`);
     } catch (e: unknown) {
       stage.failed = items.length;
       stage.status = "error";
       stage.message = e instanceof Error ? e.message : String(e);
-      cloneLogPush(`starred: ✗ ${stage.message}`);
+      cloneLogPush(`starred: [FAIL] ${stage.message}`);
       return;
     }
   }
@@ -1196,10 +1198,10 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
     }
     if (items.length > 0) {
       const result = await upsertStarredChunked(username, items);
-      cloneLogPush(`users: ✓ ${username} — ${items.length - result.unmatched}/${items.length} starred item(s)${result.unmatched ? `, ${result.unmatched} missed` : ""}`);
+      cloneLogPush(`users: [OK] ${username} — ${items.length - result.unmatched}/${items.length} starred item(s)${result.unmatched ? `, ${result.unmatched} missed` : ""}`);
     }
   } catch (e: unknown) {
-    cloneLogPush(`users: ✗ ${username} (starred) — ${e instanceof Error ? e.message : String(e)}`);
+    cloneLogPush(`users: [FAIL] ${username} (starred) — ${e instanceof Error ? e.message : String(e)}`);
   }
 
   // Only playlists this user actually owns — a public playlist owned by
@@ -1238,9 +1240,9 @@ async function cloneUserStarredAndPlaylists(username: string, password: string):
       count++;
       if (result.unmatched) cloneLogPush(`users: ! ${username}/${name} — ${result.unmatched} playlist item(s) not matched by name`);
     }
-    if (count > 0) cloneLogPush(`users: ✓ ${username} — ${count} playlist(s)`);
+    if (count > 0) cloneLogPush(`users: [OK] ${username} — ${count} playlist(s)`);
   } catch (e: unknown) {
-    cloneLogPush(`users: ✗ ${username} (playlists) — ${e instanceof Error ? e.message : String(e)}`);
+    cloneLogPush(`users: [FAIL] ${username} (playlists) — ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -1274,7 +1276,7 @@ async function cloneUsersStage() {
       const enabled = jget(u, "disabled") !== "true";
       if (!username || !password) {
         stage.failed++;
-        cloneLogPush(`users: ✗ ${username || "?"} — missing username/password (upstream must expose password)`);
+        cloneLogPush(`users: [FAIL] ${username || "?"} — missing username/password (upstream must expose password)`);
         continue;
       }
       const data = JSON.parse(await edgesonicPost("clone/upsertUser", {
@@ -1283,7 +1285,7 @@ async function cloneUsersStage() {
       }));
       if (!data.ok) throw new Error(data.error || "upsertUser rejected");
       stage.done++;
-      cloneLogPush(`users: ✓ ${username}`);
+      cloneLogPush(`users: [OK] ${username}`);
       // clonePlaylistsStage/cloneStarredStage above only ever cover the
       // single admin identity used to authenticate this whole run — skip
       // it here so its starred/playlists don't get pulled (and upserted)
@@ -1293,7 +1295,7 @@ async function cloneUsersStage() {
       }
     } catch (e: unknown) {
       stage.failed++;
-      cloneLogPush(`users: ✗ ${jget(u, "username") || "?"} — ${e instanceof Error ? e.message : String(e)}`);
+      cloneLogPush(`users: [FAIL] ${jget(u, "username") || "?"} — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   stage.status = cloneCancelRequested.value ? "skipped" : "done";
@@ -1340,12 +1342,12 @@ async function runClone() {
       await cloneFetchJson("getAlbumList2", { type: "alphabeticalByName", size: "1" });
     } catch (pingErr: unknown) {
       const msg = pingErr instanceof Error ? pingErr.message : String(pingErr);
-      cloneLogPush(`ping: ✗ ${msg}`);
+      cloneLogPush(`ping: [FAIL] ${msg}`);
       const text = t("settings.common.clone.pingFailed", { error: msg });
       showToast(text, "error");
       return;
     }
-    cloneLogPush(`ping: ✓ upstream reachable, credentials accepted`);
+    cloneLogPush(`ping: [OK] upstream reachable, credentials accepted`);
 
     cloneFilterSongIds.value = await buildCloneFilterSet();
     if (cloneFilterSongIds.value) {
@@ -1366,7 +1368,7 @@ async function runClone() {
           stg.status = "error";
           stg.message = msg;
         }
-        cloneLogPush(`${name}: ✗ aborted — ${msg}`);
+        cloneLogPush(`${name}: [FAIL] aborted — ${msg}`);
         throw e;
       }
     };
@@ -1509,10 +1511,10 @@ async function pushStarredStage() {
       const resp = await cloneFetchJson("star", { id: m.id });
       if (!upstreamOk(resp)) throw new Error("upstream star rejected");
       stage.done++;
-      cloneLogPush(`push starred: ✓ ${s.title} → ${m.id}`);
+      cloneLogPush(`push starred: [OK] ${s.title} → ${m.id}`);
     } catch (e: unknown) {
       stage.failed++;
-      cloneLogPush(`push starred: ✗ ${s.title || "?"} — ${e instanceof Error ? e.message : String(e)}`);
+      cloneLogPush(`push starred: [FAIL] ${s.title || "?"} — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   stage.status = pushCancelRequested.value ? "skipped" : "done";
@@ -1565,15 +1567,15 @@ async function pushPlaylistsStage() {
       if (pushCancelRequested.value) break;
       if (ids.length === 0) {
         stage.failed++;
-        cloneLogPush(`push playlists: ✗ ${name} — 0/${entries.length} matched, not created`);
+        cloneLogPush(`push playlists: [FAIL] ${name} — 0/${entries.length} matched, not created`);
         continue;
       }
       if (!(await upstreamCreatePlaylist(name, ids))) throw new Error("upstream createPlaylist rejected");
       stage.done++;
-      cloneLogPush(`push playlists: ✓ ${name} (${ids.length}/${entries.length} matched${missed ? `, ${missed} missed` : ""})`);
+      cloneLogPush(`push playlists: [OK] ${name} (${ids.length}/${entries.length} matched${missed ? `, ${missed} missed` : ""})`);
     } catch (e: unknown) {
       stage.failed++;
-      cloneLogPush(`push playlists: ✗ ${name} — ${e instanceof Error ? e.message : String(e)}`);
+      cloneLogPush(`push playlists: [FAIL] ${name} — ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   stage.status = pushCancelRequested.value ? "skipped" : "done";
@@ -1628,7 +1630,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
     </div>
 
     <div v-if="!isUser" class="empty-state">
-      <div class="empty-state-icon">⚿</div>
+      <div class="empty-state-icon"><Icon name="lock" /></div>
       <div>{{ t("tools.signInRequired") }}</div>
     </div>
 
@@ -1637,21 +1639,21 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
            (button header + v-show body, no transition) instead of the
            bespoke .tools-accordion this page used to have. -->
 
-      <!-- ============ SUBSONIC 迁移工具（克隆 + 推送，中间切换） ============ -->
+      <!-- ============ Subsonic migrate tool (clone + push, switch in middle) ============ -->
       <section class="settings-section card" :class="{ open: open.migrate }">
         <button class="section-header" @click="toggleSection('migrate')">
-          <span class="section-title">SUBSONIC 迁移工具</span>
+          <span class="section-title">{{ t("tools.sections.migrate") }}</span>
           <span class="section-caret">{{ open.migrate ? '−' : '+' }}</span>
         </button>
         <div v-show="open.migrate" class="section-body">
           <div class="seg">
-            <button type="button" :class="['seg-btn', { active: migrateMode === 'clone' }]" @click="migrateMode = 'clone'">克隆（拉取）</button>
-            <button v-if="isSuperAdmin" type="button" :class="['seg-btn', { active: migrateMode === 'push' }]" @click="migrateMode = 'push'">推送（写回）</button>
+            <button type="button" :class="['seg-btn', { active: migrateMode === 'clone' }]" @click="migrateMode = 'clone'">{{ t("tools.migrate.clonePull") }}</button>
+            <button v-if="isSuperAdmin" type="button" :class="['seg-btn', { active: migrateMode === 'push' }]" @click="migrateMode = 'push'">{{ t("tools.migrate.pushWrite") }}</button>
           </div>
 
           <!-- Shared upstream credentials — both directions talk to the same server -->
           <div class="sub-block">
-            <div class="sub-header"><span class="mono-label">上游服务器</span></div>
+            <div class="sub-header"><span class="mono-label">{{ t("tools.migrate.upstream") }}</span></div>
             <div class="transcode-grid">
               <label class="tc-row">
                 <span class="tc-key">{{ t("settings.common.clone.url") }}</span>
@@ -1823,7 +1825,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
               <div v-for="key in (['metadata', 'audio', 'playlists', 'starred', 'users'] as const)" :key="key" class="clone-stage-row">
                 <span class="clone-stage-label">{{ t(`settings.common.clone.stages.${key}`) }}</span>
                 <span class="clone-stage-count">{{ cloneStages[key].done }} / {{ cloneStages[key].total }}</span>
-                <span v-if="cloneStages[key].failed" class="clone-stage-failed">✗ {{ cloneStages[key].failed }}</span>
+                <span v-if="cloneStages[key].failed" class="clone-stage-failed"><Icon name="cross" /> {{ cloneStages[key].failed }}</span>
                 <span class="status-badge" :class="cloneStatusClass(cloneStages[key].status)">
                   {{ t(`settings.common.clone.status.${cloneStages[key].status}`) }}
                 </span>
@@ -1848,7 +1850,7 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
               <div v-for="key in (['starred', 'playlists'] as const)" :key="key" class="clone-stage-row">
                 <span class="clone-stage-label">{{ t(`settings.common.clone.push.${key}`) }}</span>
                 <span class="clone-stage-count">{{ pushStages[key].done }} / {{ pushStages[key].total }}</span>
-                <span v-if="pushStages[key].failed" class="clone-stage-failed">✗ {{ pushStages[key].failed }}</span>
+                <span v-if="pushStages[key].failed" class="clone-stage-failed"><Icon name="cross" /> {{ pushStages[key].failed }}</span>
                 <span class="status-badge" :class="cloneStatusClass(pushStages[key].status)">
                   {{ t(`settings.common.clone.status.${pushStages[key].status}`) }}
                 </span>
@@ -1864,10 +1866,10 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
         </div>
       </section>
 
-      <!-- ============ 对端同步（每用户非 guest） ============ -->
+      <!-- ============ Peer sync (per-user, non-guest) ============ -->
       <section v-if="!isGuest" class="settings-section card" :class="{ open: open.peerSync }">
         <button class="section-header" @click="toggleSection('peerSync')">
-          <span class="section-title">{{ t("settings.common.sync.title") }}</span>
+          <span class="section-title">{{ t("tools.sections.peerSync") }}</span>
           <span class="section-caret">{{ open.peerSync ? "−" : "+" }}</span>
         </button>
 
@@ -1875,9 +1877,10 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
           <div class="sub-block">
             <div class="sub-header">
               <span class="mono-label">{{ t("settings.common.sync.title") }}</span>
-              <span class="status-badge" :class="syncEnabled ? 'success' : 'muted'">
-                {{ syncEnabled ? t("settings.common.sync.on") : t("settings.common.sync.off") }}
-              </span>
+              <label class="toggle" :title="syncEnabled ? t('settings.common.sync.on') : t('settings.common.sync.off')">
+                <input type="checkbox" :checked="syncEnabled" :disabled="syncBusy" @change="saveSyncConfig(($event.target as HTMLInputElement).checked)" />
+                <span class="toggle-slider"></span>
+              </label>
             </div>
             <p class="feature-desc tc-desc" style="margin-left:0">{{ t("settings.common.sync.desc") }}</p>
             <label class="tc-row">
@@ -1921,40 +1924,31 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
               />
             </div>
             <div class="tc-actions">
-              <label class="toggle" style="margin-right:auto">
-                <input type="checkbox" :checked="syncEnabled" :disabled="syncBusy" @change="saveSyncConfig(($event.target as HTMLInputElement).checked)" />
-                <span class="toggle-slider"></span>
-              </label>
               <button class="btn-primary" :disabled="syncBusy" @click="saveSyncConfig()">{{ t("common.save") }}</button>
             </div>
           </div>
         </div>
       </section>
 
-      <!-- 176: the migrate tool above is available to any signed-in user.
-           工作池 gates on the participate_work permission itself (level 1
-           "user" has it by default — see App.vue's "admin-only tools inside
-           gate themselves individually" note); the remaining maintenance
-           sections below stay super-admin only. -->
-      <!-- ============ 工作池 ============ -->
+      <!-- ============ Work pool ============ -->
       <section v-if="workerPool.eligible" class="settings-section card" :class="{ open: open.workPool }">
         <button class="section-header" @click="toggleSection('workPool')">
-          <span class="section-title">WORKER 预解析</span>
+          <span class="section-title">{{ t("tools.sections.workPool") }}</span>
           <span class="section-caret">{{ open.workPool ? '−' : '+' }}</span>
         </button>
         <div v-show="open.workPool" class="section-body">
       <!-- Work pool card -->
       <div class="card tools-work-pool-card">
         <div class="card-header">
-          <span class="card-title">Worker 预解析</span>
+          <span class="card-title">{{ t("tools.workPool.title") }}</span>
           <div class="wp-header-actions">
-            <span v-if="workerPool.isWorking" class="wp-auto-status wp-auto-status-running">运行中</span>
-            <span v-else-if="autoStartCountdownText" class="wp-auto-status">{{ autoStartCountdownText }} 后自动启动</span>
-            <button class="wp-refresh" :disabled="workerPool.isWorking" @click="workerPool.pollNow()">立即开始</button>
+            <span v-if="workerPool.isWorking" class="wp-auto-status wp-auto-status-running">{{ t("tools.workPool.running") }}</span>
+            <span v-else-if="autoStartCountdownText" class="wp-auto-status">{{ t("tools.workPool.autoStart", { sec: autoStartCountdownText }) }}</span>
+            <button class="wp-refresh" :disabled="workerPool.isWorking" @click="workerPool.pollNow()">{{ t("tools.workPool.startNow") }}</button>
           </div>
         </div>
         <div class="wp-progress-line">
-          <span class="wp-progress-label">解析进度</span>
+          <span class="wp-progress-label">{{ t("tools.workPool.progress") }}</span>
           <span class="wp-progress-num">{{ workCounts.completed }} / {{ totalTasks }} ({{ progressPct }}%)</span>
         </div>
         <div class="wp-progress-bar">
@@ -1963,100 +1957,99 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
         <!-- Real-time: which song this browser is parsing right now. -->
         <div v-if="workerPool.stats.currentFileName" class="wp-current-song mono-label">
           <span class="wp-current-dot" aria-hidden="true"></span>
-          正在解析：{{ workerPool.stats.currentFileName }}
+          {{ t("tools.workPool.parsing") }}{{ workerPool.stats.currentFileName }}
         </div>
         <div class="wp-counts">
-          <div class="wp-count"><span class="wp-count-label">队列</span><span class="wp-count-num">{{ workCounts.queued }}</span></div>
-          <div class="wp-count"><span class="wp-count-label">进行中</span><span class="wp-count-num">{{ workCounts.claimed }}</span></div>
-          <div class="wp-count"><span class="wp-count-label">完成</span><span class="wp-count-num">{{ workCounts.completed }}</span></div>
-          <div class="wp-count" :class="{ 'wp-count-emphasis': workCounts.failed > 0 }"><span class="wp-count-label">失败</span><span class="wp-count-num">{{ workCounts.failed }}</span></div>
+          <div class="wp-count"><span class="wp-count-label">{{ t("tools.workPool.queue") }}</span><span class="wp-count-num">{{ workCounts.queued }}</span></div>
+          <div class="wp-count"><span class="wp-count-label">{{ t("tools.workPool.inProgress") }}</span><span class="wp-count-num">{{ workCounts.claimed }}</span></div>
+          <div class="wp-count"><span class="wp-count-label">{{ t("tools.workPool.completed") }}</span><span class="wp-count-num">{{ workCounts.completed }}</span></div>
+          <div class="wp-count" :class="{ 'wp-count-emphasis': workCounts.failed > 0 }"><span class="wp-count-label">{{ t("tools.workPool.failed") }}</span><span class="wp-count-num">{{ workCounts.failed }}</span></div>
         </div>
         <div class="wp-speed-row">
           <div class="wp-speed-item">
-            <span class="wp-count-label">本机速度</span>
-            <span class="wp-count-num">{{ workerPool.speedPerMin === null ? '—' : `${workerPool.speedPerMin}/分钟` }}</span>
+            <span class="wp-count-label">{{ t("tools.workPool.localSpeed") }}</span>
+            <span class="wp-count-num">{{ workerPool.speedPerMin === null ? '—' : `${workerPool.speedPerMin}${t("tools.workPool.perMinute")}` }}</span>
           </div>
           <div class="wp-speed-item">
-            <span class="wp-count-label">总速度</span>
-            <span class="wp-count-num">{{ globalSpeedPerMin === null ? '—' : `${globalSpeedPerMin}/分钟` }}</span>
+            <span class="wp-count-label">{{ t("tools.workPool.totalSpeed") }}</span>
+            <span class="wp-count-num">{{ globalSpeedPerMin === null ? '—' : `${globalSpeedPerMin}${t("tools.workPool.perMinute")}` }}</span>
           </div>
           <div class="wp-speed-item">
-            <span class="wp-count-label">预计剩余</span>
+            <span class="wp-count-label">{{ t("tools.workPool.eta") }}</span>
             <span class="wp-count-num">{{ etaText }}</span>
           </div>
         </div>
         <div class="wp-workers">
-          <div class="wp-workers-title">活跃浏览器 worker</div>
-          <div v-if="workLoad.length === 0" class="wp-workers-empty">无浏览器在线</div>
+          <div class="wp-workers-title">{{ t("tools.workPool.activeWorkers") }}</div>
+          <div v-if="workLoad.length === 0" class="wp-workers-empty">{{ t("tools.workPool.noWorkers") }}</div>
           <ul v-else class="wp-workers-list">
             <li v-for="row in workLoad" :key="row.username" class="wp-worker-row">
               <span class="wp-worker-name">{{ row.username }}</span>
-              <span class="wp-worker-load">{{ row.n }} 个任务</span>
+              <span class="wp-worker-load">{{ t("tools.workPool.tasks", { n: row.n }) }}</span>
             </li>
           </ul>
         </div>
         <div v-if="workCounts.failed > 0 || workCounts.claimed > 0" class="wp-actions">
-          <button v-if="workCounts.failed > 0 && hasPerm('maintenance_reset')" class="btn-secondary btn-sm" @click="onResetFailedWork()">重启失败</button>
-          <button v-if="workCounts.claimed > 0 && hasPerm('maintenance_reclaim')" class="btn-secondary btn-sm" @click="onReclaimStaleWork()">回收超时</button>
+          <button v-if="workCounts.failed > 0 && hasPerm('maintenance_reset')" class="btn-secondary btn-sm" @click="onResetFailedWork()">{{ t("tools.workPool.resetFailed") }}</button>
+          <button v-if="workCounts.claimed > 0 && hasPerm('maintenance_reclaim')" class="btn-secondary btn-sm" @click="onReclaimStaleWork()">{{ t("tools.workPool.reclaimStale") }}</button>
         </div>
 
-        <!-- 本机设置：参与开关、本机统计、能力、并发度——原先分散在设置页，
-             现在集中到这里（同一台浏览器的运行参数）。 -->
+        <!-- Local settings: participation toggle, local stats, capabilities, concurrency. -->
         <div class="wp-worker-toggle">
           <label class="wp-toggle-label">
             <label class="toggle">
               <input type="checkbox" :checked="workerPool.enabled" @change="workerPool.setEnabled(($event.target as HTMLInputElement).checked)" />
               <span class="toggle-slider"></span>
             </label>
-            <span>浏览器 Worker: {{ workerPool.enabled ? '已启用' : '已禁用' }}</span>
+            <span>{{ t("tools.workPool.workerEnabled", { state: workerPool.enabled ? t("tools.workPool.enabled") : t("tools.workPool.disabled") }) }}</span>
           </label>
         </div>
         <div class="wp-local-stats">
-          <span class="wp-count-label">本机统计</span>
-          <span class="wp-local-stat wp-local-stat-ok">成功 {{ workerPool.stats.completed }}</span>
-          <span class="wp-local-stat wp-local-stat-fail">失败 {{ workerPool.stats.failed }}</span>
+          <span class="wp-count-label">{{ t("tools.workPool.localStats") }}</span>
+          <span class="wp-local-stat wp-local-stat-ok">{{ t("tools.workPool.ok") }} {{ workerPool.stats.completed }}</span>
+          <span class="wp-local-stat wp-local-stat-fail">{{ t("tools.workPool.failed") }} {{ workerPool.stats.failed }}</span>
         </div>
         <div class="wp-caps">
-          <span class="wp-count-label">当前能力</span>
+          <span class="wp-count-label">{{ t("tools.workPool.currentCaps") }}</span>
           <span v-for="cap in workerPool.caps" :key="cap" class="wp-cap-pill">{{ cap }}</span>
           <span v-if="workerPool.caps.length === 0" class="text-muted">—</span>
         </div>
         <div class="wp-concurrency">
-          <span class="wp-count-label">并发度</span>
+          <span class="wp-count-label">{{ t("tools.workPool.concurrency") }}</span>
           <input
             type="number" min="1" max="8" step="1"
             v-model.number="maxConcurrentInput"
             class="form-input wp-concurrency-input"
           />
-          <button class="btn-secondary btn-sm" :disabled="maxConcurrentBusy" @click="saveMaxConcurrent">保存</button>
-          <span class="wp-concurrency-hint">1-8（并发上限，仅本机生效）——浏览器会按最近任务成功/失败率，在 1 到此上限之间自动升降实际并发数</span>
-          <span class="wp-count-label" style="margin-left: 0.6rem">当前并发 {{ workerPool.currentConcurrency }} / {{ workerPool.maxConcurrent }}</span>
+          <button class="btn-secondary btn-sm" :disabled="maxConcurrentBusy" @click="saveMaxConcurrent">{{ t("tools.workPool.save") }}</button>
+          <span class="wp-concurrency-hint">{{ t("tools.workPool.concurrencyHint") }}</span>
+          <span class="wp-count-label" style="margin-left: 0.6rem">{{ t("tools.workPool.currentConcurrency", { cur: workerPool.currentConcurrency, max: workerPool.maxConcurrent }) }}</span>
         </div>
 
         <div v-if="workerPool.lastError" class="wp-last-error">
-          <span>⚠</span> <code>{{ workerPool.lastError }}</code>
+          <span>{{ t("tools.workPool.errorPrefix") }}</span> <code>{{ workerPool.lastError }}</code>
         </div>
       </div>
         </div>
       </section>
 
       <template v-if="isSuperAdmin">
-      <!-- ============ 存储与 R2 费用 ============ -->
+      <!-- ============ Storage & R2 cost ============ -->
       <section class="settings-section card" :class="{ open: open.storage }">
         <button class="section-header" @click="toggleSection('storage')">
-          <span class="section-title">存储与 R2 费用</span>
+          <span class="section-title">{{ t("tools.sections.storage") }}</span>
           <span class="section-caret">{{ open.storage ? '−' : '+' }}</span>
         </button>
         <div v-show="open.storage" class="section-body">
       <div class="card tools-storage-card">
         <div class="card-header">
-          <span class="card-title">存储 & R2 费用</span>
-          <button class="wp-refresh" :disabled="storageLoading" @click="loadStorageStats">↻</button>
+          <span class="card-title">{{ t("tools.storage.title") }}</span>
+          <button class="wp-refresh" :disabled="storageLoading" @click="loadStorageStats"><Icon name="refresh" /></button>
         </div>
-        <div v-if="storageLoading" class="storage-loading">加载中…</div>
+        <div v-if="storageLoading" class="storage-loading">{{ t("tools.storage.loading") }}</div>
         <template v-else-if="storageStats">
           <table class="storage-table">
-            <thead><tr><th>存储源</th><th class="num-col">文件数</th><th class="num-col">占用空间</th></tr></thead>
+            <thead><tr><th>{{ t("tools.storage.colSource") }}</th><th class="num-col">{{ t("tools.storage.colFiles") }}</th><th class="num-col">{{ t("tools.storage.colBytes") }}</th></tr></thead>
             <tbody>
               <tr v-for="row in storageStats.breakdown" :key="row.source_type">
                 <td>{{ row.source_type.toUpperCase() }}</td>
@@ -2064,83 +2057,82 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
                 <td class="num-col">{{ fmtBytes(row.bytes) }}</td>
               </tr>
               <tr v-if="storageStats.r2CoverCount > 0">
-                <td>R2 封面</td>
+                <td>{{ t("tools.storage.r2Covers") }}</td>
                 <td class="num-col">{{ storageStats.r2CoverCount }}</td>
                 <td class="num-col">{{ fmtBytes(storageStats.r2CoverBytes) }}</td>
               </tr>
             </tbody>
             <tfoot>
               <tr>
-                <td><strong>合计</strong></td>
+                <td><strong>{{ t("tools.storage.total") }}</strong></td>
                 <td class="num-col"><strong>{{ (storageStats.breakdown.reduce((s, r) => s + r.count, 0) + storageStats.r2CoverCount).toLocaleString() }}</strong></td>
                 <td class="num-col"><strong>{{ fmtBytes(storageStats.breakdown.reduce((s, r) => s + r.bytes, 0) + storageStats.r2CoverBytes) }}</strong></td>
               </tr>
             </tfoot>
           </table>
           <div class="cost-rows">
-            <div class="cost-row"><span class="cost-label">R2 文件存储</span><span class="cost-value">{{ fmtBytes(r2Row.bytes) }}</span></div>
-            <div class="cost-row"><span class="cost-label">R2 封面存储</span><span class="cost-value">{{ fmtBytes(storageStats.r2CoverBytes ?? 0) }}</span></div>
-            <div class="cost-row"><span class="cost-label">R2 总用量</span><span class="cost-value" style="font-weight:600">{{ fmtBytes(r2TotalBytes) }}</span></div>
+            <div class="cost-row"><span class="cost-label">{{ t("tools.storage.r2Files") }}</span><span class="cost-value">{{ fmtBytes(r2Row.bytes) }}</span></div>
+            <div class="cost-row"><span class="cost-label">{{ t("tools.storage.r2CoversStorage") }}</span><span class="cost-value">{{ fmtBytes(storageStats.r2CoverBytes ?? 0) }}</span></div>
+            <div class="cost-row"><span class="cost-label">{{ t("tools.storage.r2Total") }}</span><span class="cost-value" style="font-weight:600">{{ fmtBytes(r2TotalBytes) }}</span></div>
             <div class="cost-row cost-row-input">
-              <label class="cost-label">免费额度分配</label>
+              <label class="cost-label">{{ t("tools.storage.freeAlloc") }}</label>
               <div class="free-alloc-input-row">
                 <input v-model.number="freeAllocInput" type="number" min="0" max="10" step="0.5" class="free-alloc-input" />
                 <span class="cost-unit">GB</span>
-                <button class="btn-sm btn-primary" :disabled="freeAllocSaving" @click="saveFreeAlloc">保存</button>
+                <button class="btn-sm btn-primary" :disabled="freeAllocSaving" @click="saveFreeAlloc">{{ t("tools.storage.save") }}</button>
               </div>
             </div>
-            <div class="cost-row"><span class="cost-label">计费用量</span><span class="cost-value">{{ billableGb <= 0 ? '0 GB（免费额内）' : `${billableGb.toFixed(3)} GB` }}</span></div>
-            <div class="cost-row cost-total-row"><span class="cost-label">预估月费</span><span class="cost-value cost-total">{{ monthlyCost <= 0 ? '$0.00' : `$${monthlyCost.toFixed(4)}` }}</span></div>
+            <div class="cost-row"><span class="cost-label">{{ t("tools.storage.billable") }}</span><span class="cost-value">{{ billableGb <= 0 ? t("tools.storage.freeWithin") : `${billableGb.toFixed(3)} GB` }}</span></div>
+            <div class="cost-row cost-total-row"><span class="cost-label">{{ t("tools.storage.monthlyCost") }}</span><span class="cost-value cost-total">{{ monthlyCost <= 0 ? '$0.00' : `$${monthlyCost.toFixed(4)}` }}</span></div>
           </div>
         </template>
-        <div v-else class="storage-loading muted">暂无数据</div>
+        <div v-else class="storage-loading muted">{{ t("tools.storage.noData") }}</div>
       </div>
         </div>
       </section>
 
-      <!-- ============ 孤儿歌曲清理 ============ -->
+      <!-- ============ Orphan song cleanup ============ -->
       <section class="settings-section card" :class="{ open: open.orphanSongs }">
         <button class="section-header" @click="toggleSection('orphanSongs')">
-          <span class="section-title">孤儿歌曲清理</span>
+          <span class="section-title">{{ t("tools.sections.orphanSongs") }}</span>
           <span class="section-caret">{{ open.orphanSongs ? '−' : '+' }}</span>
         </button>
         <div v-show="open.orphanSongs" class="section-body">
       <div class="card tools-orphan-card">
         <div class="card-header">
-          <span class="card-title">未匹配的孤儿歌曲</span>
-          <button class="wp-refresh" :disabled="orphanLoading" @click="loadOrphanSongs">↻</button>
+          <span class="card-title">{{ t("tools.orphan.title") }}</span>
+          <button class="wp-refresh" :disabled="orphanLoading" @click="loadOrphanSongs"><Icon name="refresh" /></button>
         </div>
         <p class="orphan-hint mono-label">
-          上传后一直卡在"未知艺术家 / Pending Uploads"、从未被正确识别标签的歌曲。
-          文件本身可能只是当时解析失败（可重新扫描），也可能完全没有可用标签（建议直接删除）。
+          {{ t("tools.orphan.hint") }}
         </p>
-        <div v-if="orphanLoading" class="storage-loading">加载中…</div>
-        <div v-else-if="orphanSongs.length === 0" class="storage-loading muted">没有发现孤儿歌曲</div>
+        <div v-if="orphanLoading" class="storage-loading">{{ t("tools.orphan.loading") }}</div>
+        <div v-else-if="orphanSongs.length === 0" class="storage-loading muted">{{ t("tools.orphan.none") }}</div>
         <template v-else>
           <div class="orphan-toolbar">
             <label class="wp-toggle-label">
               <input type="checkbox" :checked="orphanAllSelected" @change="toggleOrphanAll" />
-              <span>全选（{{ orphanSelected.length }}/{{ orphanSongs.length }}）</span>
+              <span>{{ t("tools.orphan.selectAll", { selected: orphanSelected.length, total: orphanSongs.length }) }}</span>
             </label>
             <button class="btn-secondary btn-sm" :disabled="!orphanSelected.length || orphanRescanBusy" @click="rescanSelectedOrphans">
-              {{ orphanRescanBusy ? "提交中…" : "重新扫描" }}
+              {{ orphanRescanBusy ? t("tools.orphan.rescanBusy") : t("tools.orphan.rescan") }}
             </button>
             <button class="btn-secondary btn-sm" :disabled="!orphanSelected.length || orphanDeleteBusy" @click="deleteSelectedOrphans">
-              {{ orphanDeleteBusy ? "删除中…" : "删除选中" }}
+              {{ orphanDeleteBusy ? t("tools.orphan.deleteBusy") : t("tools.orphan.delete") }}
             </button>
           </div>
           <table class="storage-table orphan-table">
-            <thead><tr><th></th><th>标题</th><th class="num-col">大小</th><th>状态</th><th>创建时间</th></tr></thead>
+            <thead><tr><th></th><th>{{ t("tools.orphan.colTitle") }}</th><th class="num-col">{{ t("tools.orphan.colSize") }}</th><th>{{ t("tools.orphan.colStatus") }}</th><th>{{ t("tools.orphan.colCreated") }}</th></tr></thead>
             <tbody>
               <tr v-for="s in orphanSongs" :key="s.masterId">
                 <td><input type="checkbox" :checked="orphanSelectedSet.has(s.masterId)" @change="toggleOrphanSelect(s.masterId)" /></td>
                 <td>{{ s.title }}<span v-if="s.suffix" class="muted"> .{{ s.suffix }}</span></td>
                 <td class="num-col">{{ fmtBytes(s.totalSize) }}</td>
                 <td>
-                  <span v-if="s.ghost" class="status-badge error">幽灵记录</span>
-                  <span v-else-if="s.missing" class="status-badge error">文件缺失</span>
-                  <span v-else-if="s.tagScanned === 0" class="status-badge info">待扫描</span>
-                  <span v-else class="status-badge muted">标签为空</span>
+                  <span v-if="s.ghost" class="status-badge error">{{ t("tools.orphan.ghost") }}</span>
+                  <span v-else-if="s.missing" class="status-badge error">{{ t("tools.orphan.missing") }}</span>
+                  <span v-else-if="s.tagScanned === 0" class="status-badge info">{{ t("tools.orphan.pending") }}</span>
+                  <span v-else class="status-badge muted">{{ t("tools.orphan.emptyTags") }}</span>
                 </td>
                 <td class="mono-label">{{ formatOrphanDate(s.createdAt) }}</td>
               </tr>
@@ -2386,3 +2378,4 @@ function cloneStatusClass(status: CloneProgress["status"]): string {
 .free-alloc-input { width: 60px; }
 .storage-loading { padding: 1rem; color: var(--color-text-muted); font-size: var(--fs-sm); }
 </style>
+)

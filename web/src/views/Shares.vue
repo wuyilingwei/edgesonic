@@ -4,6 +4,7 @@
 import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
+import Icon from "../components/Icon.vue";
 
 const { t } = useI18n();
 const { authFetch } = useAuth();
@@ -376,7 +377,7 @@ onMounted(load);
             </div>
           </div>
           <div v-if="form.targetLabel" class="picked-label">
-            <span class="mono-label">✓ {{ form.targetLabel }}</span>
+            <span class="mono-label"><Icon name="check" /> {{ form.targetLabel }}</span>
           </div>
         </div>
 

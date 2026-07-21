@@ -4,6 +4,7 @@
 import { ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
+import Icon from "./Icon.vue";
 
 const { t } = useI18n();
 const { isSuperAdmin, edgesonicFetch, edgesonicPost } = useAuth();
@@ -76,7 +77,7 @@ onMounted(load);
 <template>
   <div>
     <div v-if="!isSuperAdmin" class="empty-state">
-      <div class="empty-state-icon">⛔</div>
+      <div class="empty-state-icon"><Icon name="ban" /></div>
       <div>{{ t("settings.permissions.denied") }}</div>
     </div>
 

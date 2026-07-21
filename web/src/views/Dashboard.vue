@@ -5,6 +5,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 import { useWorkerPool } from "../stores/workerPool";
+import Icon from "../components/Icon.vue";
 
 const { t } = useI18n();
 const { isLoggedIn, username, isSuperAdmin, level, hasPerm, storageFetch, edgesonicFetch, edgesonicPost, handleAuthError } = useAuth();
@@ -371,7 +372,7 @@ onUnmounted(() => {
         v-if="cronStatus === 'empty'"
         class="cron-warning-card"
       >
-       <div class="cron-warning-icon">⚠</div>
+        <div class="cron-warning-icon"><Icon name="warn" /></div>
         <div class="cron-warning-body">
           <div class="cron-warning-title">{{ t("dashboard.cronWarning.title") }}</div>
           <p class="cron-warning-message">{{ t("dashboard.cronWarning.message") }}</p>

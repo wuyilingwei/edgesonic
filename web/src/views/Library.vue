@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, parseXmlInner, formatDuration } from "../api";
 import { usePlayerStore, type Track } from "../stores/player";
 import TagEditor from "../components/TagEditor.vue";
+import Icon from "../components/Icon.vue";
 import ScrapeButton from "../components/ScrapeButton.vue";
 import SongRowMenu from "../components/SongRowMenu.vue";
 import StarButton from "../components/StarButton.vue";
@@ -1065,7 +1066,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
     <!-- Library-wide search — always visible, independent of tabs/drilldown. -->
     <div v-if="!starredOnly" class="library-search">
       <input v-model="searchQuery" class="form-input search-input" :placeholder="t('library.searchPlaceholder')" />
-      <button v-if="searchQuery" class="search-clear" :title="t('common.close')" @click="clearSearch">✕</button>
+      <button v-if="searchQuery" class="search-clear" :title="t('common.close')" @click="clearSearch"><Icon name="cross" /></button>
     </div>
 
     <template v-if="!searchResults">
@@ -1173,7 +1174,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       <div v-for="al in albums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
         <div class="album-cover">
           <BudgetedImage v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" @error="al.coverArt = ''" />
-          <span v-else class="album-cover-placeholder">♪</span>
+          <span v-else class="album-cover-placeholder"><Icon name="note" /></span>
         </div>
         <div class="album-body">
           <div class="album-name">{{ al.name }}</div>
@@ -1219,7 +1220,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       </div>
       <div v-if="starredOnly ? starredLoading : loading" class="empty-state" style="grid-column: 1/-1">{{ t("common.loading") }}</div>
       <div v-else-if="!displayArtists.length && !error" class="empty-state" style="grid-column: 1/-1">
-        <div class="empty-state-icon">♪</div>
+        <div class="empty-state-icon"><Icon name="note" /></div>
         <div>{{ starredOnly ? t("library.noStarred") : t("library.noArtists") }}</div>
       </div>
     </div>
@@ -1229,7 +1230,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       <div v-for="al in displayAlbums" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
         <div class="album-cover">
           <BudgetedImage v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" @error="al.coverArt = ''" />
-          <span v-else class="album-cover-placeholder">♪</span>
+          <span v-else class="album-cover-placeholder"><Icon name="note" /></span>
         </div>
         <div class="album-body">
           <div class="album-name">{{ al.name }}</div>
@@ -1249,7 +1250,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
       </div>
       <div v-if="starredLoading" class="empty-state" style="grid-column: 1/-1">{{ t("common.loading") }}</div>
       <div v-else-if="!displayAlbums.length" class="empty-state" style="grid-column: 1/-1">
-        <div class="empty-state-icon">♡</div>
+        <div class="empty-state-icon"><Icon name="heart" /></div>
         <div>{{ t("library.noStarred") }}</div>
       </div>
     </div>
@@ -1302,7 +1303,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
         </div>
         <div v-if="starredLoading" class="empty-state">{{ t("common.loading") }}</div>
         <div v-else-if="!displaySongs.length" class="empty-state">
-          <div class="empty-state-icon">♡</div>
+          <div class="empty-state-icon"><Icon name="heart" /></div>
           <div>{{ t("library.noStarred") }}</div>
         </div>
       </div>
@@ -1319,7 +1320,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
           <div v-for="al in col" :key="al.id" class="card hoverable album-card" @click="openAlbum(al)">
             <div class="album-cover">
               <BudgetedImage v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" @error="al.coverArt = ''" />
-              <span v-else class="album-cover-placeholder">♪</span>
+              <span v-else class="album-cover-placeholder"><Icon name="note" /></span>
             </div>
             <div class="album-body">
               <div class="album-name">{{ al.name }}</div>
@@ -1514,7 +1515,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
             >
               <div class="album-cover">
                 <BudgetedImage v-if="al.coverArt" :src="coverArtUrl(al.coverArt, 256)" :alt="al.name" @error="al.coverArt = ''" />
-                <span v-else class="album-cover-placeholder">♪</span>
+                <span v-else class="album-cover-placeholder"><Icon name="note" /></span>
               </div>
               <div class="album-body">
                 <div class="album-name">{{ al.name }}</div>
@@ -1681,7 +1682,7 @@ onUnmounted(() => window.removeEventListener("click", onWindowClick));
               @click="addSongToPlaylist(p.id)"
             >
              <span class="add-playlist-name">{{ p.name }}</span>
-              <span class="mono-label">{{ p.songCount }} ♪</span>
+              <span class="mono-label">{{ p.songCount }} <Icon name="note" /></span>
             </div>
           </div>
           <button class="create-new-row" @click="beginCreateNew">{{ t("library.createNewPlaylist") }}</button>

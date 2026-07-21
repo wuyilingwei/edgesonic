@@ -7,6 +7,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth } from "./api";
 import PlayerBar from "./components/PlayerBar.vue";
 import UpdateBanner from "./components/UpdateBanner.vue";
+import Icon from "./components/Icon.vue";
 import { usePlayerStore } from "./stores/player";
 import { useWorkerPool } from "./stores/workerPool";
 import { useDemoMode } from "./stores/demoMode";
@@ -163,7 +164,7 @@ onBeforeUnmount(() => { bgCleanup?.(); bgCleanup = null; });
       role="alert"
       @click="dismissToast"
     >
-      <span aria-hidden="true">{{ activeToast.type === 'error' ? '!' : activeToast.type === 'success' ? '✓' : 'i' }}</span>
+      <span aria-hidden="true"><Icon :name="activeToast.type === 'error' ? 'cross' : activeToast.type === 'success' ? 'check' : 'info'" /></span>
       {{ activeToast.message }}
     </button>
   </Transition>

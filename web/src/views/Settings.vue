@@ -11,6 +11,7 @@ import { ensureBuiltinThemeLoaded } from "../themes/builtin";
 import { getTheme, registeredThemeIds, externalThemeIds, loadExternalTheme, unregisterExternalTheme } from "../themes/registry";
 import { audioCacheStats, clearAudioCache, audioCacheMaxMb, setAudioCacheMaxMb } from "../lib/audioCache";
 import PermissionsMatrix from "../components/PermissionsMatrix.vue";
+import Icon from "../components/Icon.vue";
 import { useWorkerPool } from "../stores/workerPool";
 
 const router = useRouter();
@@ -2424,7 +2425,7 @@ onMounted(() => {
           </div>
 
           <div v-else-if="!features.length" class="empty-state">
-            <div class="empty-state-icon">⚑</div>
+            <div class="empty-state-icon"><Icon name="flag" /></div>
             <div>{{ t("settings.common.noFeatures") }}</div>
           </div>
 

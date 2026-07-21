@@ -11,6 +11,7 @@ import ScrapeButton from "../components/ScrapeButton.vue";
 import type { ScrapeResult } from "../lib/scrape";
 import { useWorkerPool } from "../stores/workerPool";
 import { extractMetadata } from "../lib/metadata";
+import Icon from "../components/Icon.vue";
 
 const { t } = useI18n();
 const { authFetch, storageFetch, storagePost, tagFetch, uploadFile, crossCopy, writeTags, batchWriteTags, tidyFolder, restUrl, hasPerm, coverArtUrl, submitMetadata } = useAuth();
@@ -938,7 +939,7 @@ onMounted(async () => {
               :style="{ width: Math.max(0, uploadProgressList[i] ?? 0) + '%' }"
             ></div>
           </div>
-          <span class="upload-queue-pct">{{ uploadProgressList[i] === -1 ? '✕' : (uploadProgressList[i] ?? 0) + '%' }}</span>
+          <span class="upload-queue-pct"><template v-if="uploadProgressList[i] === -1"><Icon name="cross" /></template><template v-else>{{ (uploadProgressList[i] ?? 0) + '%' }}</template></span>
         </div>
         <div v-if="uploadBusy" class="upload-queue-overall">{{ uploadMsg }}</div>
       </div>
@@ -1009,7 +1010,7 @@ onMounted(async () => {
               :checked="selectedDirs.has(d.name)"
               @click.stop="toggleDirSelect(d)"
             />
-            <span class="entry-icon">📁</span>
+            <span class="entry-icon"><Icon name="folder" /></span>
             <span class="entry-name">{{ d.name }}</span>
           </div>
           <div v-for="f in files" :key="`f-${f.name}`" class="entry-row file-row" :class="{ 'row-renaming': renamingFile === f.name }">
@@ -1031,8 +1032,8 @@ onMounted(async () => {
                 @keydown.escape="cancelRename"
                 autofocus
               />
-              <button class="op-btn op-confirm" :disabled="opBusy" @click="confirmRename(f)">✓</button>
-              <button class="op-btn op-cancel" @click="cancelRename">✕</button>
+              <button class="op-btn op-confirm" :disabled="opBusy" @click="confirmRename(f)"><Icon name="check" /></button>
+              <button class="op-btn op-cancel" @click="cancelRename"><Icon name="cross" /></button>
             </template>
             <template v-else>
               <span class="entry-name">{{ f.name }}</span>
@@ -1043,7 +1044,7 @@ onMounted(async () => {
                 class="op-btn op-edit-tag"
                 :title="t('files.editTags')"
                 @click.stop="openTagEditor(f)"
-              >♪</button>
+              ><Icon name="note" /></button>
               <!-- Cross-source copy (all sources, canUpload) — 089/S4b, batched in 144 -->
               <button
                 v-if="canUpload"
@@ -1053,10 +1054,10 @@ onMounted(async () => {
               >⧉</button>
               <!-- R2-only operations -->
               <template v-if="isR2 && canUpload">
-                <button class="op-btn op-rename" :title="t('files.rename')" @click.stop="startRename(f)">✎</button>
+                <button class="op-btn op-rename" :title="t('files.rename')" @click.stop="startRename(f)"><Icon name="edit" /></button>
                 <button class="op-btn op-move" :title="t('files.moveTo')" @click.stop="openMoveModal(f, 'move')">→</button>
                 <button class="op-btn op-copy" :title="t('files.copyTo')" @click.stop="openMoveModal(f, 'copy')">⊕</button>
-                <button class="op-btn op-delete" :title="t('files.deleteFile')" :disabled="opBusy" @click.stop="openDeleteConfirm(f)">✕</button>
+                <button class="op-btn op-delete" :title="t('files.deleteFile')" :disabled="opBusy" @click.stop="openDeleteConfirm(f)"><Icon name="cross" /></button>
               </template>
             </template>
           </div>
@@ -1119,9 +1120,9 @@ onMounted(async () => {
           <div class="cross-queue-list">
             <div v-for="item in opQueue" :key="item.key" class="cross-queue-item">
               <span class="cross-queue-status" :class="`status-${item.status}`">
-                {{ item.status === "done" ? "✓" : item.status === "failed" ? "✕" : item.status === "running" ? "…" : "·" }}
+                <Icon :name="item.status === 'done' ? 'check' : item.status === 'failed' ? 'cross' : item.status === 'running' ? 'dot' : 'dot'" />
               </span>
-              <span class="cross-queue-name">{{ item.kind === "dir" ? `📁 ${item.name}` : item.name }}</span>
+              <span class="cross-queue-name">{{ item.kind === "dir" ? `${item.name}` : item.name }}<Icon v-if="item.kind === 'dir'" name="folder" /></span>
               <span v-if="item.error" class="cross-queue-error">{{ item.error }}</span>
             </div>
           </div>
@@ -1223,7 +1224,7 @@ onMounted(async () => {
           <div class="cross-queue-list">
             <div v-for="item in crossCopyQueue" :key="item.file.uri" class="cross-queue-item">
               <span class="cross-queue-status" :class="`status-${item.status}`">
-                {{ item.status === "done" ? "✓" : item.status === "failed" ? "✕" : item.status === "copying" ? "…" : "·" }}
+                <Icon :name="item.status === 'done' ? 'check' : item.status === 'failed' ? 'cross' : item.status === 'copying' ? 'dot' : 'dot'" />
               </span>
               <span class="cross-queue-name">{{ item.file.name }}</span>
               <span v-if="item.error" class="cross-queue-error">{{ item.error }}</span>

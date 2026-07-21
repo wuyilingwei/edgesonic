@@ -5,6 +5,7 @@
 import { ref, computed, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
+import Icon from "./Icon.vue";
 import {
   searchAll,
   submitResult,
@@ -151,7 +152,7 @@ async function applyResult(r: ScrapeResult) {
 <template>
   <div class="scrape-button-wrap">
     <button class="btn-secondary scrape-trigger" :disabled="busy" @click="openPanel">
-      <span class="scrape-icon">⌕</span>
+      <span class="scrape-icon"><Icon name="search" /></span>
       {{ t("scrape.button") }}
     </button>
 

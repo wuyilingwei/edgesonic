@@ -4,6 +4,7 @@
 import { ref } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth } from "../api";
+import Icon from "./Icon.vue";
 
 const props = defineProps<{
   songId: string;
@@ -55,12 +56,12 @@ async function toggleStar() {
 
 <template>
   <div class="row-menu-wrap" @click.stop>
-    <button class="row-menu-btn" :title="t('library.moreActions')" @click="emit('toggle')">⋮</button>
+    <button class="row-menu-btn" :title="t('library.moreActions')" @click="emit('toggle')"><Icon name="dot" /></button>
     <div v-if="open" class="row-menu">
-      <button class="row-menu-item row-menu-like" :disabled="starBusy" @click="toggleStar">★ {{ props.starred ? t("library.unlike") : t("library.like") }}</button>
-      <button v-if="props.isAdmin" class="row-menu-item" @click="pick('edit')">✎ {{ t("library.editSong") }}</button>
-      <button class="row-menu-item" @click="pick('share')">⤴ {{ t("library.share") }}</button>
-      <button class="row-menu-item" @click="pick('addPlaylist')">＋ {{ t("library.addToPlaylist") }}</button>
+      <button class="row-menu-item row-menu-like" :disabled="starBusy" @click="toggleStar"><Icon name="star" /> {{ props.starred ? t("library.unlike") : t("library.like") }}</button>
+      <button v-if="props.isAdmin" class="row-menu-item" @click="pick('edit')"><Icon name="edit" /> {{ t("library.editSong") }}</button>
+      <button class="row-menu-item" @click="pick('share')"><Icon name="up" /> {{ t("library.share") }}</button>
+      <button class="row-menu-item" @click="pick('addPlaylist')"><Icon name="check" /> {{ t("library.addToPlaylist") }}</button>
       <a class="row-menu-item" :href="downloadUrl(props.songId)" :download="props.title" @click="emit('close')">{{ t("library.download") }}</a>
     </div>
   </div>

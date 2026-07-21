@@ -5,6 +5,7 @@ import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs, formatDuration } from "../api";
 import { usePlayerStore, type Track } from "../stores/player";
+import Icon from "../components/Icon.vue";
 
 const { t } = useI18n();
 const { authFetch, coverArtUrl, username } = useAuth();
@@ -374,7 +375,7 @@ onMounted(loadPlaylists);
         >
          <div class="playlist-cover">
             <img v-if="p.coverArt" :src="coverArtUrl(p.coverArt, 256)" :alt="p.name" loading="lazy" />
-            <span v-else class="playlist-cover-placeholder">♫</span>
+            <span v-else class="playlist-cover-placeholder"><Icon name="music" /></span>
           </div>
           <div class="playlist-body">
             <div class="playlist-name">{{ p.name }}</div>
@@ -402,7 +403,7 @@ onMounted(loadPlaylists);
       <div class="detail-header">
         <div class="detail-cover">
           <img v-if="currentPlaylist.coverArt" :src="coverArtUrl(currentPlaylist.coverArt, 256)" :alt="currentPlaylist.name" />
-          <span v-else class="playlist-cover-placeholder">♫</span>
+          <span v-else class="playlist-cover-placeholder"><Icon name="music" /></span>
         </div>
         <div class="detail-meta">
           <div class="mono-label">{{ currentPlaylist.public ? t("playlists.public") : t("playlists.private") }}</div>
@@ -428,7 +429,7 @@ onMounted(loadPlaylists);
         <div>{{ t("common.loading") }}</div>
       </div>
       <div v-else-if="!entries.length" class="empty-state">
-        <div class="empty-state-icon">♪</div>
+        <div class="empty-state-icon"><Icon name="note" /></div>
         <div>{{ t("playlists.noSongs") }}</div>
       </div>
       <div v-else class="entry-table">
@@ -443,18 +444,18 @@ onMounted(loadPlaylists);
               :title="t('playlists.moveUp')"
               :disabled="i === 0"
               @click.stop="moveSong(i, -1)"
-            >↑</button>
+            ><Icon name="up" /></button>
             <button
               class="row-btn"
               :title="t('playlists.moveDown')"
               :disabled="i === entries.length - 1"
               @click.stop="moveSong(i, 1)"
-            >↓</button>
+            ><Icon name="down" /></button>
             <button
               class="row-btn danger"
               :title="t('playlists.removeSong')"
               @click.stop="removeSong(i)"
-            >✕</button>
+            ><Icon name="cross" /></button>
           </div>
         </div>
       </div>

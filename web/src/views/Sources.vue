@@ -6,6 +6,7 @@ import { useI18n } from "vue-i18n";
 import { useAuth, parseXmlAttrs } from "../api";
 import { mapConcurrent } from "../lib/concurrency";
 import { useWorkerPool } from "../stores/workerPool";
+import Icon from "../components/Icon.vue";
 
 const { t } = useI18n();
 const { isAdmin, isSuperAdmin, storageFetch, storagePost, crossCopy } = useAuth();
@@ -631,7 +632,7 @@ onUnmounted(() => {
           <span v-else-if="isAdmin && s.scanStatus === 'completed'">{{ statusLabel(s) }}</span>
           <template v-else-if="isAdmin && s.scanStatus === 'failed'">
             <span class="scan-pill scan-pill-failed">
-              <span class="scan-icon" aria-hidden="true">✗</span>
+              <span class="scan-icon" aria-hidden="true"><Icon name="cross" /></span>
               <span class="scan-pill-text">{{ s.scanError ? s.scanError : t("sources.scanStatus.failed") }}</span>
             </span>
           </template>
