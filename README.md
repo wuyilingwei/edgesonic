@@ -16,8 +16,7 @@ The demo runs in `DEMO_MODE=1`: dangerous permissions (user/source management, d
 ## Agent
 
 > **If you are an AI agent** asked to deploy this project, stop reading here and follow
-> [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) instead — it's a self-contained runbook
-> written specifically for you.
+> [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) instead
 
 ## What it does
 
