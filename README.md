@@ -1,18 +1,21 @@
-<img align="right" width="112" src="web/public/logo.svg" alt="EdgeSonic logo" />
+<img align="right" width="256" src="web/public/logo.svg" alt="EdgeSonic logo" />
 
 # EdgeSonic
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+
+Serverless Subsonic-compatible music streaming server running entirely on **Cloudflare Workers**. No dedicated host, no always-on process — deploy once, stream anywhere.
+
 ## Live demo
 
 A live demo is hosted at **<https://edgesonic-demo.wuyilingwei.workers.dev>** — log in with `admin` / `demo`. The demo runs in `DEMO_MODE=1`: dangerous permissions (user/source management, delete, Cloudflare settings) are locked, uploads are capped, and the library is reset from a fixed set of tracks on every deploy. Everything else — browsing, playback, tag editing, the worker pool — is fully functional.
 
+## Agent
+
 > **If you are an AI agent** asked to deploy this project, stop reading here and follow
 > [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md) instead — it's a self-contained runbook
 > written specifically for you.
-
-Serverless Subsonic-compatible music streaming server running entirely on **Cloudflare Workers**. No dedicated host, no always-on process — deploy once, stream anywhere.
 
 ## What it does
 
