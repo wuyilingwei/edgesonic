@@ -8,8 +8,9 @@
 //   - API paths (/rest/* /edgesonic/* /storage/* /tag/*) and
 //     /edgesonic/version: network-only (never cached).
 //   - Cross-origin (fonts, covers, etc.): opaque CORS, cache 1h, no revalidate.
+//   - Media / Range / streaming: never intercepted (see fetch handler).
 
-const SW_VERSION = "1";
+const SW_VERSION = "2";
 const PRECACHE = `edgesonic-shell-v${SW_VERSION}`;
 const RUNTIME = `edgesonic-runtime-v${SW_VERSION}`;
 const OPAQUE = `edgesonic-opaque-v${SW_VERSION}`;
@@ -64,24 +65,76 @@ function shouldNeverCache(url) {
   return false;
 }
 
+// Media and range requests must never touch the cache layer. /rest/stream
+// 302-redirects to a cross-origin R2 presign / WebDAV URL; the <audio> element
+// follows that redirect and issues Range requests against it. Wrapping any of
+// this in no-cors caching yields opaque, un-seekable responses (playback
+// stalls), pulls whole audio files into the cache, and saturates the
+// connection pool so JS chunks and navigations hang behind it. Detect by
+// request.destination (survives the redirect) and by the Range header.
+function isMediaRequest(req) {
+  const d = req.destination;
+  if (d === "audio" || d === "video" || d === "track") return true;
+  return req.headers.has("range");
+}
+
+// Cross-origin object-storage hosts serve large presigned blobs that must
+// never be cached opaquely, even for non-media (download) requests.
+function isStorageHost(hostname) {
+  return hostname.endsWith(".r2.cloudflarestorage.com");
+}
+
+// Content-hashed Vite assets are immutable — a new build ships new filenames —
+// so they can be served cache-first with no background revalidation, avoiding
+// a redundant network fetch for every asset on every load.
+function isImmutableAsset(url) {
+  return url.pathname.startsWith("/assets/");
+}
+
+const NAV_TIMEOUT_MS = 4000;
+
+function fetchWithTimeout(req, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout")), ms);
+    fetch(req).then(
+      (res) => {
+        clearTimeout(timer);
+        resolve(res);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 self.addEventListener("fetch", (event) => {
   const req = event.request;
   if (req.method !== "GET") return;
 
+  // Let the browser handle all media/streaming natively (default fetch).
+  if (isMediaRequest(req)) return;
+
   const url = new URL(req.url);
 
-  // Navigation: network-first with cache fallback to index.html.
+  // Navigation: network-first, but fall back to the cached shell when the
+  // network is merely slow (not only on error) so a saturated connection can
+  // never hang a reload.
   if (req.mode === "navigate") {
     event.respondWith(
       (async () => {
+        const cache = await caches.open(PRECACHE);
         try {
-          const fresh = await fetch(req);
-          const cache = await caches.open(PRECACHE);
+          const fresh = await fetchWithTimeout(req, NAV_TIMEOUT_MS);
           cache.put("./index.html", fresh.clone()).catch(() => {});
           return fresh;
         } catch {
-          const cache = await caches.open(PRECACHE);
-          return (await cache.match("./index.html")) || (await cache.match("./"));
+          return (
+            (await cache.match("./index.html")) ||
+            (await cache.match("./")) ||
+            Response.error()
+          );
         }
       })(),
     );
@@ -93,6 +146,8 @@ self.addEventListener("fetch", (event) => {
     // through the normal browser fetch — wrapping them in no-cors yields an
     // opaque response the page cannot read, silently breaking the feature.
     if (url.hostname === "api.github.com") return; // default fetch
+    // Object storage: large presigned blobs, never cache. Default fetch.
+    if (isStorageHost(url.hostname)) return;
     // Cross-origin: cache opaque responses briefly (fonts, images).
     event.respondWith(
       (async () => {
@@ -113,7 +168,22 @@ self.addEventListener("fetch", (event) => {
 
   if (shouldNeverCache(url)) return; // default fetch
 
-  // Same-origin static GET: stale-while-revalidate.
+  // Immutable hashed assets: cache-first, no background revalidation.
+  if (isImmutableAsset(url)) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(RUNTIME);
+        const cached = await cache.match(req);
+        if (cached) return cached;
+        const res = await fetch(req);
+        if (res && res.ok) cache.put(req, res.clone()).catch(() => {});
+        return res;
+      })(),
+    );
+    return;
+  }
+
+  // Other same-origin static GET: stale-while-revalidate.
   event.respondWith(
     (async () => {
       const cache = await caches.open(RUNTIME);
