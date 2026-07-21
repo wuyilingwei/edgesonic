@@ -1,18 +1,21 @@
-<img align="right" width="112" src="web/public/logo.svg" alt="EdgeSonic logo" />
+<img align="right" width="256" src="web/public/logo.svg" alt="EdgeSonic logo" />
 
 # EdgeSonic
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
+完全运行在 **Cloudflare Workers** 上的无服务器（Serverless）Subsonic 兼容音乐流媒体服务器。不需要独立主机，不需要常驻进程——部署一次，随处播放。
+
 ## 在线演示
 
-在线 demo 地址：**<https://edgesonic-demo.wuyilingwei.workers.dev>** —— 登录账号 `admin` / `demo`。该 demo 以 `DEMO_MODE=1` 运行：危险权限（用户/存储源管理、删除、Cloudflare 设置）已被锁定，上传有大小上限，媒体库会在每次部署时从固定曲目集重置。其余功能——浏览、播放、标签编辑、浏览器工作池——均完整可用。
+在线 demo 地址：**<https://edgesonic-demo.wuyilingwei.workers.dev>** —— 登录账号 `admin` / `demo`。
+
+该 demo 以 `DEMO_MODE=1` 运行：危险权限（用户/存储源管理、删除、Cloudflare 设置）已被锁定，上传有大小上限，媒体库会在每次部署时从固定曲目集重置。其余功能——浏览、播放、标签编辑、浏览器工作池——均完整可用。
+
+## 智能体
 
 > **如果你是一个 AI agent**，被要求部署本项目，请不要继续往下读，直接遵循
-> [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md)（该文档为纯英文，专门为 agent 编写的
-> 自包含部署手册）。
-
-完全运行在 **Cloudflare Workers** 上的无服务器（Serverless）Subsonic 兼容音乐流媒体服务器。不需要独立主机，不需要常驻进程——部署一次，随处播放。
+> [`docs/DEPLOY_BY_AGENT.md`](docs/DEPLOY_BY_AGENT.md)
 
 ## 它是什么
 
