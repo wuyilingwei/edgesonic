@@ -9,7 +9,9 @@ Serverless Subsonic-compatible music streaming server running entirely on **Clou
 
 ## Live demo
 
-A live demo is hosted at **<https://edgesonic-demo.wuyilingwei.workers.dev>** — log in with `admin` / `demo`. The demo runs in `DEMO_MODE=1`: dangerous permissions (user/source management, delete, Cloudflare settings) are locked, uploads are capped, and the library is reset from a fixed set of tracks on every deploy. Everything else — browsing, playback, tag editing, the worker pool — is fully functional.
+A live demo is hosted at **<https://edgesonic-demo.wuyilingwei.workers.dev>** — log in with `admin` / `demo`. 
+
+The demo runs in `DEMO_MODE=1`: dangerous permissions (user/source management, delete, Cloudflare settings) are locked, uploads are capped, and the library is reset from a fixed set of tracks on every deploy. Everything else — browsing, playback, tag editing, the worker pool — is fully functional.
 
 ## Agent
 
